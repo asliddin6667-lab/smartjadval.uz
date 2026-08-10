@@ -1,13 +1,35 @@
 import { useMemo, useState } from "react";
 import { DAYS, typeOfGroup } from "../utils/constants";
-import { generateSchedule, isTeachingSlot, classHasLunchAt, classesHaveLunchAt } from "../utils/scheduleGenerator";
+import {
+  generateSchedule, isTeachingSlot, classHasLunchAt, classesHaveLunchAt, compactSchedule,
+} from "../utils/scheduleGenerator";
 import { exportColoredSchedule } from "../utils/coloredScheduleExport";
+import {
+  collectCardEntries, unitOf, resolveMove, applyActions, softWarnings, checkPlace,
+  findAutoPartner, onlyBusyReasons, unitLabel, slotLabel,
+} from "../utils/moveResolver";
+import MoveResolveModal from "../components/MoveResolveModal";
+import TeacherGrid from "../components/TeacherGrid";
+import "../styles/scheduleGrid.css";
 
 const FALLBACK_PALETTE = [
   "#2563eb", "#16a34a", "#7c3aed", "#0891b2", "#f97316",
   "#059669", "#e11d48", "#d97706", "#4f46e5", "#0d9488",
   "#c2410c", "#64748b", "#be123c", "#9333ea", "#0284c7",
 ];
+
+const SWAP_CHIP = {
+  marginTop: 4,
+  display: "block",
+  fontSize: 10.5,
+  fontWeight: 800,
+  lineHeight: 1.25,
+  color: "#7c3aed",
+  background: "rgba(124,58,237,.12)",
+  border: "1px dashed rgba(124,58,237,.45)",
+  borderRadius: 7,
+  padding: "3px 6px",
+};
 
 function hashText(text = "") {
   return String(text).split("").reduce((sum, ch) => sum + ch.charCodeAt(0), 0);
@@ -67,16 +89,21 @@ export default function SchedulePage({
   setSchedule,
   toast,
 }) {
+  const [gridMode, setGridMode] = useState("class"); // "class" | "teacher"
   const [selectedClass, setSelectedClass] = useState("all");
   const [viewMode, setViewMode] = useState("table");
   const [collapsed, setCollapsed] = useState({});
   const [manualCell, setManualCell] = useState(null); // { day, slotId, classId }
-  const [manualForm, setManualForm] = useState({ subjectId: "", teacherId: "", roomId: "", altEnabled: false, altSubjectId: "", altTeacherId: "" });
-  const [resolveData, setResolveData] = useState(null); // { classId, subjectId, name, placements: [{day, slotId, teacherId}] }
+  const [manualForm, setManualForm] = useState({ subjectId: "", teacherId: "", roomId: "", altEnabled: false, altSubjectId: "", altTeacherId: "", lock: false });
+  const [resolveData, setResolveData] = useState(null); // { classId, subjectId, name, placements }
+  const [moveData, setMoveData] = useState(null);       // MoveResolveModal ma'lumoti
+  const [drag, setDrag] = useState(null);               // { day, slotId, classId, unit }
+  const [picked, setPicked] = useState(null);           // bosib tanlangan dars
+  const active = drag || picked;                        // hozir ko'chirilayotgan dars
   const [generating, setGenerating] = useState(false);
   const [genProgress, setGenProgress] = useState(0);
   const [genRound, setGenRound] = useState(0);
-  const [genDone, setGenDone] = useState(false); // tugagach ✓ ko'rsatiladi
+  const [genDone, setGenDone] = useState(false);
 
   const subjectMap = useMemo(() => new Map(subjects.map((s, i) => [s.id, { ...s, _colorIndex: i }])), [subjects]);
   const teacherMap = useMemo(() => new Map(teachers.map((t) => [t.id, t])), [teachers]);
@@ -93,6 +120,9 @@ export default function SchedulePage({
   const visibleClasses = selectedClass === "all"
     ? sortedClasses
     : sortedClasses.filter((c) => c.id === selectedClass);
+
+  // moveResolver uchun umumiy kontekst
+  const ctx = { schedule, classes, subjects, teachers, rooms, timeslots: sortedTimeslots, lunchGroups, classSubjects };
 
   function getName(map, id, fallback = "—") {
     return map.get(id)?.name || fallback;
@@ -156,6 +186,7 @@ export default function SchedulePage({
         }}
       >
         <div className="pretty-lesson-title">
+          {lesson.locked && <span title="Qulflangan">🔒 </span>}
           {detail.subjectName}
           {isAlt && <span className="pretty-alt-sep"> / {altName}</span>}
         </div>
@@ -197,17 +228,225 @@ export default function SchedulePage({
     );
   }
 
+  // ═══════════ DRAG & DROP (sinf setkasi) ═══════════
+
+  function srcOf(day, slotId, classId, card) {
+    const cell = schedule?.[day]?.[slotId] || [];
+    const entries = collectCardEntries(cell, card);
+    if (!entries.length) return null;
+    return { day, slotId, classId, unit: unitOf(entries) };
+  }
+
+  function dragStart(e, day, slotId, classId, card) {
+    const src = srcOf(day, slotId, classId, card);
+    if (!src) return;
+    // dataTransfer bo'sh bo'lsa ba'zi brauzerlar sudrashni boshlamaydi
+    try {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", `${day}__${slotId}`);
+    } catch { /* eski brauzerlar */ }
+    setPicked(null);
+    // DOM drag boshlanishida qayta chizilmasligi uchun keyingi kadrga suramiz
+    setTimeout(() => setDrag(src), 0);
+  }
+
+  // Bosib tanlash — sudrash ishlamaganda ishonchli muqobil
+  function togglePick(day, slotId, classId, card) {
+    if (!setSchedule) return;
+    const src = srcOf(day, slotId, classId, card);
+    if (!src) return;
+    if (picked && picked.day === day && picked.slotId === slotId
+      && picked.unit.entries[0] === src.unit.entries[0]) {
+      setPicked(null);
+      return;
+    }
+    setPicked(src);
+    toast?.("Dars tanlandi — endi qaysi katakka qo'yishni bosing", "success");
+  }
+
+  function isPickedCard(day, slotId, card) {
+    if (!picked || picked.day !== day || picked.slotId !== slotId) return false;
+    const cell = schedule?.[day]?.[slotId] || [];
+    const entries = collectCardEntries(cell, card);
+    return entries[0] === picked.unit.entries[0];
+  }
+
+  function clearActive() {
+    setDrag(null);
+    setPicked(null);
+  }
+
+  // Maqsad katak tahlili — 'self' | 'nt' | 'move' | 'swap' | 'no'
+  function targetInfo(day, slot, cls) {
+    if (!active) return null;
+    if (active.day === day && active.slotId === slot.id) return { kind: "self" };
+    if (!isTeachingSlot(slot)) return { kind: "nt" };
+    if (!slotAllowsClass(slot, cls.id)) return { kind: "no" };
+
+    const srcTs = sortedTimeslots.find((s) => s.id === active.slotId);
+    const cards = groupLessons(getClassLessons(day, slot.id, cls.id));
+    if (cards.length > 1) return { kind: "no", multi: true };
+
+    const cell = schedule?.[day]?.[slot.id] || [];
+
+    // 1) Shu sinfda dars turibdi — to'g'ridan-to'g'ri almashinuv
+    if (cards.length === 1) {
+      const partner = unitOf(collectCardEntries(cell, cards[0]));
+      if (partner.entries.some((e) => active.unit.entries.includes(e))) return { kind: "self" };
+      const a = checkPlace(ctx, active.unit, day, slot, new Set(partner.entries));
+      const b = checkPlace(ctx, partner, active.day, srcTs, new Set(active.unit.entries));
+      return (!a.length && !b.length) ? { kind: "swap", partner } : { kind: "no", partner };
+    }
+
+    // 2) Sinf uchun bo'sh — lekin ustoz/xona boshqa sinfda band bo'lishi mumkin
+    const errs = checkPlace(ctx, active.unit, day, slot, new Set());
+    if (!errs.length) return { kind: "move" };
+
+    if (onlyBusyReasons(errs)) {
+      const auto = findAutoPartner(ctx, active.unit, day, slot);
+      if (auto) {
+        const a = checkPlace(ctx, active.unit, day, slot, new Set(auto.entries));
+        const b = checkPlace(ctx, auto, active.day, srcTs, new Set(active.unit.entries));
+        if (!a.length && !b.length) return { kind: "swap", partner: auto, auto: true };
+        return { kind: "no", partner: auto };
+      }
+    }
+    return { kind: "no" };
+  }
+
+  // Ko'chirish paytida faqat manba sinf uchun bir marta hisoblanadi
+  const activeMap = useMemo(() => {
+    const map = new Map();
+    if (!active) return map;
+    const cls = classes.find((c) => c.id === active.classId);
+    if (!cls) return map;
+    DAYS.forEach((day) => {
+      sortedTimeslots.forEach((slot) => {
+        map.set(`${day}__${slot.id}`, targetInfo(day, slot, cls));
+      });
+    });
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, schedule, sortedTimeslots, classes]);
+
+  function commitMove(day, slot, cls) {
+    const src = active;
+    if (!src || !setSchedule) return;
+    if (src.day === day && src.slotId === slot.id) { clearActive(); return; }
+
+    if (src.classId !== cls.id) {
+      setMoveData({
+        mode: "blocked",
+        reasons: ["Darsni faqat o'z sinfi jadvalida ko'chiring."],
+        suggestions: [],
+      });
+      clearActive();
+      return;
+    }
+
+    const cards = groupLessons(getClassLessons(day, slot.id, cls.id));
+    if (cards.length > 1) {
+      setMoveData({
+        mode: "blocked",
+        reasons: ["Bu katakda bir nechta dars bor — avtomatik almashtirib bo'lmaydi. Avval birini o'chiring."],
+        suggestions: [],
+      });
+      clearActive();
+      return;
+    }
+
+    const cell = schedule?.[day]?.[slot.id] || [];
+    const partnerUnit = cards.length === 1 ? unitOf(collectCardEntries(cell, cards[0])) : null;
+
+    // autoSwap: maqsad katakni band qilib turgan dars avtomatik sherik bo'ladi
+    const res = resolveMove(ctx, src, { day, slotId: slot.id, partnerUnit, autoSwap: true });
+    const partner = res.partner || partnerUnit || null;
+    const lockedTouched = Boolean(src.unit.locked || partner?.locked);
+    const warnings = [
+      ...softWarnings(ctx, src.unit, day),
+      ...(res.mode === "swap" && partner ? softWarnings(ctx, partner, src.day) : []),
+    ];
+
+    if (res.ok && !lockedTouched && !warnings.length) {
+      setSchedule(applyActions(schedule, res.actions));
+      if (res.mode === "swap" && partner) {
+        toast?.(
+          `⇄ ${unitLabel(ctx, src.unit)} (${slotLabel(ctx, src.day, src.slotId)}) ↔ ` +
+          `${unitLabel(ctx, partner)} (${slotLabel(ctx, day, slot.id)}) — o'rin almashdi ✓`,
+          "success"
+        );
+      } else {
+        toast?.(`Dars ${slotLabel(ctx, day, slot.id)} ga ko'chirildi ✓`, "success");
+      }
+    } else if (res.ok) {
+      setMoveData({
+        mode: "confirm",
+        title: lockedTouched
+          ? "Qulflangan dars o'zgaradi"
+          : (res.mode === "swap" ? "Almashinuvni tasdiqlang" : "Ko'chirishni tasdiqlang"),
+        actions: res.actions,
+        warnings,
+      });
+    } else {
+      setMoveData({ ...res, warnings });
+    }
+    clearActive();
+  }
+
+  function applyMoveActions(actions) {
+    if (!setSchedule || !Array.isArray(actions)) return;
+    setSchedule(applyActions(schedule, actions));
+    setMoveData(null);
+    toast?.("O'zgarish qo'llandi ✓", "success");
+  }
+
+  // ═══════════ QULFLASH ═══════════
+
+  function toggleLock(day, slotId, card, value) {
+    if (!setSchedule) return;
+    const cell = schedule?.[day]?.[slotId] || [];
+    const entries = collectCardEntries(cell, card);
+    const next = { ...schedule, [day]: { ...(schedule?.[day] || {}) } };
+    next[day][slotId] = cell.map((l) =>
+      entries.includes(l) ? { ...l, locked: value, manual: value ? true : l.manual } : l
+    );
+    setSchedule(next);
+    toast?.(value ? "Dars qulflandi 🔒" : "Qulf ochildi 🔓", "success");
+  }
+
+  function lockedCount() {
+    let n = 0;
+    DAYS.forEach((d) => sortedTimeslots.forEach((ts) => {
+      (schedule?.[d]?.[ts.id] || []).forEach((l) => { if (l.locked) n += 1; });
+    }));
+    return n;
+  }
+
+  function unlockAll() {
+    if (!setSchedule) return;
+    const next = {};
+    DAYS.forEach((day) => {
+      next[day] = {};
+      sortedTimeslots.forEach((ts) => {
+        next[day][ts.id] = (schedule?.[day]?.[ts.id] || []).map((l) =>
+          l.locked ? { ...l, locked: false } : l
+        );
+      });
+    });
+    setSchedule(next);
+    toast?.("Barcha qulflar ochildi 🔓", "success");
+  }
+
+  // ═══════════ KATAK RENDERI ═══════════
+
   function renderCell(day, slot, cls) {
     const offDays = Array.isArray(cls?.offDays) ? cls.offDays : [];
     if (offDays.includes(day)) return <div className="pretty-empty-cell" style={{ color: "#b45309", fontWeight: 700 }}>Dam</div>;
-    // Bu vaqt sloti boshqa sinflarga biriktirilgan — bu sinf uchun ishlatilmaydi
     if (!slotAllowsClass(slot, cls.id)) return <div className="pretty-empty-cell">—</div>;
-    // Obed / Tanaffus turidagi vaqt — dars qo'yilmaydi
     if (!isTeachingSlot(slot)) {
       const label = slot.type === "lunch" ? "🍽️ Obed" : "Tanaffus";
       return <div className="pretty-empty-cell" style={{ color: "#6b7280", fontWeight: 700 }}>{label}</div>;
     }
-    // Shu sinf uchun obed/uyqu/san'at vaqti — dars qo'yilmaydi
     if (classHasLunchAt(slot, cls.id, lunchGroups, day)) {
       const lg = (lunchGroups || []).find(g =>
         (Array.isArray(g.classIds) ? g.classIds : []).includes(cls.id) &&
@@ -218,40 +457,58 @@ export default function SchedulePage({
       const tt = typeOfGroup(lg);
       return <div className="pretty-empty-cell" style={{ color: tt.color, fontWeight: 700 }}>{tt.icon} {tt.label}</div>;
     }
+
     const lessons = groupLessons(getClassLessons(day, slot.id, cls.id));
+
     if (!lessons.length) {
-      if (setSchedule) {
+      if (setSchedule && !picked) {
         return (
-          <button type="button" onClick={() => openManual(day, slot.id, cls.id)} title="Qo'lda dars qo'shish"
-            style={{ width: "100%", minHeight: 40, border: "1px dashed var(--card-border)", background: "transparent", borderRadius: 8, color: "var(--text-muted)", cursor: "pointer", fontSize: 18 }}>
-            ＋
-          </button>
+          <button type="button" className="schd-add"
+            onClick={(e) => { e.stopPropagation(); openManual(day, slot.id, cls.id); }}
+            title="Qo'lda dars qo'shish">＋</button>
         );
       }
       return <div className="pretty-empty-cell">—</div>;
     }
+
     return (
       <div className="pretty-cell-stack">
         {lessons.map((lesson, i) => (
-          <div key={i} style={{ position: "relative" }}>
+          <div
+            key={i}
+            className={`schd-card-wrap ${lesson.locked ? "schd-locked" : ""}`}
+            draggable={Boolean(setSchedule)}
+            style={isPickedCard(day, slot.id, lesson)
+              ? { outline: "2px solid #7c3aed", outlineOffset: "1px", borderRadius: 10, cursor: "grab" }
+              : (setSchedule ? { cursor: "grab" } : undefined)}
+            title="Sudrab ko'chiring yoki bosib tanlang"
+            onDragStart={(e) => dragStart(e, day, slot.id, cls.id, lesson)}
+            onDragEnd={() => setDrag(null)}
+            onClick={(e) => { e.stopPropagation(); togglePick(day, slot.id, cls.id, lesson); }}
+          >
             {setSchedule && (
-              <button type="button" title="O'chirish" onClick={() => removeLessonCard(day, slot.id, cls.id, lesson)}
-                style={{ position: "absolute", top: 2, right: 2, zIndex: 2, width: 20, height: 20, lineHeight: "18px", textAlign: "center", border: "none", borderRadius: 6, background: "rgba(220,38,38,.12)", color: "#dc2626", cursor: "pointer", fontWeight: 700 }}>
-                ✕
-              </button>
+              <div className="schd-tools">
+                <button type="button" title={lesson.locked ? "Qulfni ochish" : "Qulflash"}
+                  onClick={(e) => { e.stopPropagation(); toggleLock(day, slot.id, lesson, !lesson.locked); }}>
+                  {lesson.locked ? "🔒" : "🔓"}
+                </button>
+                <button type="button" className="schd-x" title="O'chirish"
+                  onClick={(e) => { e.stopPropagation(); removeLessonCard(day, slot.id, cls.id, lesson); }}>✕</button>
+              </div>
             )}
             {renderLessonCard(lesson)}
           </div>
         ))}
-        {setSchedule && (
-          <button type="button" onClick={() => openManual(day, slot.id, cls.id)} title="Yana dars qo'shish"
-            style={{ width: "100%", marginTop: 4, border: "1px dashed var(--card-border)", background: "transparent", borderRadius: 8, color: "var(--text-muted)", cursor: "pointer", fontSize: 14 }}>
-            ＋
-          </button>
+        {setSchedule && !picked && (
+          <button type="button" className="schd-add schd-add-sm"
+            onClick={(e) => { e.stopPropagation(); openManual(day, slot.id, cls.id); }}
+            title="Yana dars qo'shish">＋</button>
         )}
       </div>
     );
   }
+
+  // ═══════════ GENERATOR ═══════════
 
   function countPlacedUnits(sch) {
     let n = 0;
@@ -267,44 +524,103 @@ export default function SchedulePage({
     return n;
   }
 
+  // Sifat o'lchovi: oynalar (bo'sh oraliq darslar) soni — kam bo'lgani yaxshi
+  function countGaps(sch) {
+    let gaps = 0;
+    classes.forEach((cls) => {
+      const off = new Set(Array.isArray(cls.offDays) ? cls.offDays : []);
+      DAYS.forEach((day) => {
+        if (off.has(day)) return;
+        let free = 0;
+        let head = 0;
+        sortedTimeslots.forEach((ts) => {
+          if (!isTeachingSlot(ts)) return;
+          if (!slotAllowsClass(ts, cls.id)) return;
+          if (classHasLunchAt(ts, cls.id, lunchGroups, day)) return;
+          const busy = (sch?.[day]?.[ts.id] || []).some((l) => classIdsOf(l).includes(cls.id));
+          if (busy) head += free; else free += 1;
+        });
+        gaps += head;
+      });
+    });
+    return gaps;
+  }
+
+  // Faqat qulflangan darslarni saqlab qoladigan "urug'" jadval
+  function lockedSeed() {
+    const seed = {};
+    let has = false;
+    DAYS.forEach((day) => {
+      seed[day] = {};
+      sortedTimeslots.forEach((ts) => {
+        const keep = (schedule?.[day]?.[ts.id] || []).filter((l) => l && l.locked);
+        seed[day][ts.id] = keep.map((l) => ({ ...l, manual: true, locked: true }));
+        if (keep.length) has = true;
+      });
+    });
+    return has ? seed : null;
+  }
+
   async function handleGenerate() {
     if (!setSchedule || generating) return;
 
-    // Kerakli jami soat
     let requiredTotal = 0;
     classes.forEach((c) => (classSubjects?.[c.id] || []).forEach((a) => {
       requiredTotal += Number(a.weeklyHours || 0);
       if (a.swapEnabled && a.swapSubjectId) requiredTotal += Number(a.weeklyHours || 0);
     }));
 
+    const seed = lockedSeed();
+    const keptLocked = lockedCount();
+
     setGenerating(true);
     setGenProgress(0);
     setGenRound(0);
 
     try {
-      // Bitta bosishda juda ko'p kombinatsiya sinaladi. 100% bo'lsa to'xtaydi.
-      const MAX_ROUNDS = 25;
-      const TIME_CAP_MS = 25000;
+      // Ko'p bosqichli qidiruv: har bir urinishdan eng yaxshisi saqlanadi.
+      // Tanlov mezoni leksikografik — (1) joylangan soat, (2) oynalar soni.
+      const MAX_ROUNDS = 30;
+      const TIME_CAP_MS = 30000;
+      const STALL_LIMIT = 6;     // yaxshilanmasa erta to'xtash
       const start = Date.now();
+
       let best = null;
       let bestPlaced = -1;
+      let bestGaps = Infinity;
+      let stall = 0;
 
       for (let r = 0; r < MAX_ROUNDS; r++) {
-        // UI yangilanishi uchun event loop'ga yo'l beramiz
         // eslint-disable-next-line no-await-in-loop
-        await new Promise((res) => setTimeout(res, 15));
-        const cand = generateSchedule(classes, subjects, teachers, rooms, timeslots, classSubjects, lunchGroups, schedule);
+        await new Promise((res) => setTimeout(res, 12));
+
+        const cand = generateSchedule(
+          classes, subjects, teachers, rooms, timeslots, classSubjects, lunchGroups, seed
+        );
         const placed = countPlacedUnits(cand);
-        if (placed > bestPlaced) { bestPlaced = placed; best = cand; }
-        const pct = requiredTotal > 0 ? Math.min(100, Math.round((bestPlaced / requiredTotal) * 100)) : 100;
-        setGenProgress(pct);
+        const gaps = countGaps(cand);
+
+        const better = placed > bestPlaced || (placed === bestPlaced && gaps < bestGaps);
+        if (better) {
+          bestPlaced = placed;
+          bestGaps = gaps;
+          best = cand;
+          stall = 0;
+        } else {
+          stall += 1;
+        }
+
+        setGenProgress(requiredTotal > 0 ? Math.min(100, Math.round((bestPlaced / requiredTotal) * 100)) : 100);
         setGenRound(r + 1);
-        if (requiredTotal > 0 && placed >= requiredTotal) break; // 100%
+
+        if (requiredTotal > 0 && bestPlaced >= requiredTotal && bestGaps === 0) break;
+        if (stall >= STALL_LIMIT && requiredTotal > 0 && bestPlaced >= requiredTotal) break;
         if (Date.now() - start > TIME_CAP_MS) break;
       }
 
-      // Qolgan soatlarni darslarni almashtirib (ko'chirib) to'ldiramiz — biriktirilgan ustoz bilan
       let finalSch = best || {};
+
+      // Tushmagan soatlarni ko'chirish/almashtirish orqali to'ldirish
       if (requiredTotal > 0 && bestPlaced < requiredTotal) {
         const res = fillRemaining(finalSch, false);
         if (res.placed > 0) {
@@ -313,15 +629,27 @@ export default function SchedulePage({
         }
       }
 
-      setSchedule(finalSch);
-      if (requiredTotal === 0 || bestPlaced >= requiredTotal) {
-        toast?.("Dars jadvali 100% tuzildi ✓", "success");
-      } else {
-        toast?.(`Jadval tuzildi — ${requiredTotal - bestPlaced} soat tushmadi (pastdagi tavsiyalarga qarang)`, "warning");
+      // Yakuniy zichlash — "ora kunda" sozlamasi saqlanadi (classSubjects 5-argument)
+      try {
+        const compacted = compactSchedule(classes, timeslots, lunchGroups, finalSch, classSubjects);
+        if (countPlacedUnits(compacted) >= bestPlaced && countGaps(compacted) <= countGaps(finalSch)) {
+          finalSch = compacted;
+        }
+      } catch {
+        /* zichlash ixtiyoriy — xato bo'lsa jadval o'z holicha qoladi */
       }
-      // Tugadi: yashil ✓ belgisi qisqa ko'rsatiladi
+
+      setSchedule(finalSch);
+
+      const lockNote = keptLocked > 0 ? ` · ${keptLocked} ta qulflangan dars saqlandi 🔒` : "";
+      if (requiredTotal === 0 || bestPlaced >= requiredTotal) {
+        toast?.(`Dars jadvali 100% tuzildi ✓${lockNote}`, "success");
+      } else {
+        toast?.(`Jadval tuzildi — ${requiredTotal - bestPlaced} soat tushmadi${lockNote}`, "warning");
+      }
+
       setGenDone(true);
-      await new Promise((res) => setTimeout(res, 1200));
+      await new Promise((res) => setTimeout(res, 1100));
     } finally {
       setGenerating(false);
       setGenDone(false);
@@ -337,7 +665,6 @@ export default function SchedulePage({
     });
   }
 
-  // Sinfning shu fan bo'yicha qo'yilgan soatlari (kun×slot bo'yicha)
   function placedHours(classId, subjectId) {
     let count = 0;
     DAYS.forEach((day) => {
@@ -361,7 +688,6 @@ export default function SchedulePage({
     return req;
   }
 
-  // Sinf uchun tushmagan (yetishmayotgan) soatlar ro'yxati
   function missingForClass(classId) {
     const list = classSubjects?.[classId] || [];
     const subjectIds = new Set();
@@ -380,7 +706,6 @@ export default function SchedulePage({
     return result.sort((a, b) => b.missing - a.missing);
   }
 
-  // Ustoz/xona shu vaqtda band-bandligini aniqlash (ogohlantirish uchun)
   function conflictsAt(day, slotId, classId, teacherId, roomId) {
     const cell = schedule?.[day]?.[slotId];
     const warns = [];
@@ -390,6 +715,10 @@ export default function SchedulePage({
       if (tConf) {
         const where = classIdsOf(tConf).map((id) => classes.find((c) => c.id === id)?.name).filter(Boolean).join(", ");
         warns.push(`⚠️ Ustoz bu vaqtda band (parallel): ${getName(teacherMap, teacherId)} → ${where || "boshqa sinf"}`);
+      }
+      const t = teacherMap.get(teacherId);
+      if (Array.isArray(t?.offDays) && t.offDays.includes(day)) {
+        warns.push(`⛔ ${t.name}: ${day} — ustozning dam olish kuni, dars qo'yib bo'lmaydi`);
       }
     }
     if (roomId) {
@@ -404,13 +733,11 @@ export default function SchedulePage({
   function assignedTeacher(classId, subjectId) {
     const list = classSubjects?.[classId] || [];
     const a = list.find((x) => x.subjectId === subjectId);
-    // Daraja guruhli bo'lsa oddiy ustoz ishlatilmaydi
     if (a?.levelGroupEnabled && a?.levelGroups?.length) return "";
     if (a?.teacherId) return a.teacherId;
     return "";
   }
 
-  // Fan shu sinf uchun daraja guruhli bo'lsa: guruhlar + ishtirokchi sinflar
   function levelGroupInfo(classId, subjectId) {
     const a = (classSubjects?.[classId] || []).find((x) => x.subjectId === subjectId);
     if (!a || !a.levelGroupEnabled || !(a.levelGroups?.length)) return null;
@@ -425,11 +752,14 @@ export default function SchedulePage({
   }
 
   function openManual(day, slotId, classId, presetSubjectId = "") {
-    setManualForm({ subjectId: presetSubjectId, teacherId: presetSubjectId ? assignedTeacher(classId, presetSubjectId) : "", roomId: "", altEnabled: false, altSubjectId: "", altTeacherId: "" });
+    setManualForm({
+      subjectId: presetSubjectId,
+      teacherId: presetSubjectId ? assignedTeacher(classId, presetSubjectId) : "",
+      roomId: "", altEnabled: false, altSubjectId: "", altTeacherId: "", lock: false,
+    });
     setManualCell({ day, slotId, classId });
   }
 
-  // Daraja guruhi ustozlarining bandligi (ogohlantirish uchun)
   function groupConflictsAt(day, slotId, classIds, groups) {
     const cell = schedule?.[day]?.[slotId];
     const warns = [];
@@ -441,13 +771,17 @@ export default function SchedulePage({
         const where = classIdsOf(conf).map((id) => classes.find((c) => c.id === id)?.name).filter(Boolean).join(", ");
         warns.push(`⚠️ ${getName(teacherMap, g.teacherId)} bu vaqtda band (parallel): ${where || "boshqa sinf"}`);
       }
+      const t = teacherMap.get(g.teacherId);
+      if (Array.isArray(t?.offDays) && t.offDays.includes(day)) {
+        warns.push(`⛔ ${t.name}: ${day} — dam olish kuni`);
+      }
     });
     const classHas = (classIds || []).some((cid) => cell.some((l) => classIdsOf(l).includes(cid)));
     if (classHas) warns.push("ℹ️ Tanlangan sinf(lar)da shu vaqtda dars bor.");
     return warns;
   }
 
-  // ——— Tashxis va yechim tavsiyalari (100% tushmaganda) ———
+  // ——— Tashxis va yechim tavsiyalari ———
 
   function globalMissing() {
     const bySubject = {};
@@ -506,14 +840,12 @@ export default function SchedulePage({
     return warns;
   }
 
-  // ——— Avtomatik hal qilish: bo'sh (shu fan) ustozini topib, tasdiq so'rab joylashtirish ———
   function findResolutionsFor(classId, subjectId, count) {
     const subjTeachers = teachersForSubject(subjectId);
     if (!subjTeachers.length) return [];
     const cls = classes.find((c) => c.id === classId);
     const classOff = new Set(Array.isArray(cls?.offDays) ? cls.offDays : []);
     const assigned = assignedTeacher(classId, subjectId);
-    // Faqat biriktirilgan ustoz bilan
     const ordered = subjTeachers.filter((t) => t.id === assigned);
     if (!ordered.length) return [];
 
@@ -525,20 +857,17 @@ export default function SchedulePage({
       for (const ts of sortedTimeslots) {
         if (result.length >= count) return result;
         if (!isTeachingSlot(ts)) continue;
-        if (!slotAllowsClass(ts, classId)) continue; // slot bu sinfga biriktirilmagan
-        if (classHasLunchAt(ts, classId, lunchGroups, day)) continue; // obed guruhiga qo'ymaymiz
+        if (!slotAllowsClass(ts, classId)) continue;
+        if (classHasLunchAt(ts, classId, lunchGroups, day)) continue;
         const slotKey = `${day}__${ts.id}`;
         if (usedClassSlot.has(slotKey)) continue;
         const cell = schedule?.[day]?.[ts.id] || [];
-        // sinf shu vaqtda bo'sh bo'lishi kerak
         if (cell.some((l) => classIdsOf(l).includes(classId))) continue;
-        // shu fanning bo'sh ustozini topamiz
         for (const t of ordered) {
           const tOff = new Set(Array.isArray(t.offDays) ? t.offDays : []);
           if (tOff.has(day)) continue;
-          if (cell.some((l) => l.teacherId === t.id)) continue; // ustoz shu slotda band (jadvalda)
-          if (usedTeacherSlot.has(`${t.id}__${slotKey}`)) continue; // shu hal qilishda band
-          // maks. soat
+          if (cell.some((l) => l.teacherId === t.id)) continue;
+          if (usedTeacherSlot.has(`${t.id}__${slotKey}`)) continue;
           const teacherTotal = teacherClassCountHours(t.id);
           if (teacherTotal + 1 > Number(t.maxWeeklyHours || 40)) continue;
           result.push({ day, slotId: ts.id, teacherId: t.id });
@@ -551,7 +880,6 @@ export default function SchedulePage({
     return result;
   }
 
-  // Ustozning jadvaldagi joriy soati (maks. soatni tekshirish uchun)
   function teacherClassCountHours(teacherId) {
     let n = 0;
     DAYS.forEach((day) => {
@@ -579,15 +907,15 @@ export default function SchedulePage({
     placements.forEach(({ day, slotId, teacherId }) => {
       next[day] = { ...(next[day] || {}) };
       next[day][slotId] = [...(next[day][slotId] || []), {
-        subjectId, classId, classIds: [classId], teacherId: teacherId || "", roomId: "", manual: true,
+        subjectId, classId, classIds: [classId], teacherId: teacherId || "", roomId: "",
+        manual: true, locked: true,
       }];
     });
     setSchedule(next);
     setResolveData(null);
-    toast?.(`${placements.length} ta dars joylashtirildi ✓`, "success");
+    toast?.(`${placements.length} ta dars joylashtirildi va qulflandi 🔒`, "success");
   }
 
-  // Berilgan jadvalda tushmagan soatlarni bo'sh ustozlar bilan to'ldiradi
   function fillRemaining(base, markManual = true) {
     const teachingSlots = sortedTimeslots.filter(isTeachingSlot);
     const next = {};
@@ -625,7 +953,9 @@ export default function SchedulePage({
       return null;
     };
 
-    const isMovable = (l) => l && !l.manual && !l.groupPart && !l.groupKey && !l.levelGroupEnabled && !l.swap && classIdsOf(l).length === 1;
+    // Qulflangan dars HECH QACHON ko'chirilmaydi
+    const isMovable = (l) => l && !l.locked && !l.manual && !l.groupPart && !l.groupKey
+      && !l.levelGroupEnabled && !l.swap && classIdsOf(l).length === 1;
     const teacherOffHas = (tid, day) => {
       const tt = teachers.find((x) => x.id === tid);
       return tt && Array.isArray(tt.offDays) && tt.offDays.includes(day);
@@ -650,8 +980,6 @@ export default function SchedulePage({
       }
       return null;
     };
-    // Blokerni ko'chirish uchun uy topadi; to'g'ridan-to'g'ri bo'lmasa,
-    // yana bitta darsni ko'chirib joy ochadi (2-bosqich)
     const homeWithEvict = (l, exDay, exTs) => {
       const direct = findHomeForLesson(l, exDay, exTs);
       if (direct) return direct;
@@ -680,7 +1008,6 @@ export default function SchedulePage({
       }
       return null;
     };
-    // Darsni ko'chirib joy bo'shatadi (biriktirilgan ustoz t uchun)
     const rearrangePlace = (cid, t, classOff) => {
       if ((tLoad[t.id] || 0) + 1 > Number(t.maxWeeklyHours || 40)) return null;
       const tOff = new Set(Array.isArray(t.offDays) ? t.offDays : []);
@@ -690,7 +1017,7 @@ export default function SchedulePage({
           if (!slotAllowsClass(ts, cid)) continue;
           if (classesHaveLunchAt(ts, [cid], lunchGroups, day)) continue;
           const cell = next[day][ts.id];
-          if (cell.some((l) => l.teacherId === t.id)) continue; // ustoz band
+          if (cell.some((l) => l.teacherId === t.id)) continue;
           const blocker = cell.find((l) => classIdsOf(l).includes(cid));
           if (!blocker || !isMovable(blocker)) continue;
           const home = homeWithEvict(blocker, day, ts.id);
@@ -719,7 +1046,7 @@ export default function SchedulePage({
           if (have >= need) return;
           const assigned = assignedTeacher(cls.id, sid);
           const t = assigned ? teachers.find((x) => x.id === assigned) : null;
-          if (!t || !teachersForSubject(sid).some((x) => x.id === assigned)) return; // biriktirilgan ustoz
+          if (!t || !teachersForSubject(sid).some((x) => x.id === assigned)) return;
           const teacherList = [t];
           let guard = 0;
           while (have < need && guard < 80) {
@@ -734,12 +1061,11 @@ export default function SchedulePage({
           }
         });
       });
-      if (placed === before) break; // yaxshilanmadi
+      if (placed === before) break;
     }
     return { schedule: next, placed };
   }
 
-  // Barcha sinflardagi tushmagan soatlarni BITTA bosishda hal qilish
   function resolveAll() {
     if (!setSchedule) return;
     const { schedule: filled, placed } = fillRemaining(schedule);
@@ -755,7 +1081,6 @@ export default function SchedulePage({
     if (!setSchedule || !manualCell) return;
     const { day, slotId, classId } = manualCell;
     if (!manualForm.subjectId) { toast?.("Fan tanlang", "warning"); return; }
-    // Cheklov: faqat ortib qolgan (tushmagan) soatgacha qo'shish mumkin
     const remain = requiredHours(classId, manualForm.subjectId) - placedHours(classId, manualForm.subjectId);
     if (remain <= 0) {
       toast?.("Bu fan soatlari to'liq qo'yilgan — ortiqcha qo'shib bo'lmaydi", "warning");
@@ -764,11 +1089,11 @@ export default function SchedulePage({
 
     const next = { ...schedule, [day]: { ...(schedule?.[day] || {}) } };
     const cell = next[day][slotId] || [];
+    const lock = Boolean(manualForm.lock);
 
     const lgi = levelGroupInfo(classId, manualForm.subjectId);
     if (lgi) {
-      // Daraja guruhli fan — har guruh o'z ustozi bilan, barcha ishtirokchi sinflarga
-      const groupLessons = lgi.groups.map((g) => ({
+      const groupItems = lgi.groups.map((g) => ({
         subjectId: manualForm.subjectId,
         classId: lgi.classIds[0],
         classIds: lgi.classIds,
@@ -777,8 +1102,9 @@ export default function SchedulePage({
         groupPart: g.name,
         levelGroupEnabled: true,
         manual: true,
+        locked: lock,
       }));
-      next[day][slotId] = [...cell, ...groupLessons];
+      next[day][slotId] = [...cell, ...groupItems];
     } else {
       next[day][slotId] = [...cell, {
         subjectId: manualForm.subjectId,
@@ -787,6 +1113,7 @@ export default function SchedulePage({
         teacherId: manualForm.teacherId || "",
         roomId: manualForm.roomId || "",
         manual: true,
+        locked: lock,
         ...(manualForm.altEnabled && manualForm.altSubjectId ? {
           alternating: true,
           altSubjectId: manualForm.altSubjectId,
@@ -796,7 +1123,7 @@ export default function SchedulePage({
     }
     setSchedule(next);
     setManualCell(null);
-    toast?.(manualForm.altEnabled && manualForm.altSubjectId ? "Almashinuvchi dars qo'shildi ✓" : "Dars qo'lda qo'shildi ✓", "success");
+    toast?.(lock ? "Dars qo'shildi va qulflandi 🔒" : "Dars qo'lda qo'shildi ✓", "success");
   }
 
   function removeLessonCard(day, slotId, classId, cardLesson) {
@@ -812,14 +1139,15 @@ export default function SchedulePage({
 
   function handleClear() {
     if (!setSchedule) return;
-    if (!confirm("Dars jadvalini tozalashni xohlaysizmi?")) return;
+    const locked = lockedCount();
+    const msg = locked > 0
+      ? `Dars jadvalini tozalaysizmi? ${locked} ta qulflangan dars ham o'chadi.`
+      : "Dars jadvalini tozalashni xohlaysizmi?";
+    if (!confirm(msg)) return;
     setSchedule({});
     toast?.("Dars jadvali tozalandi", "success");
   }
 
-  // Excel eksporti — umumiy rangli jadval moduli (coloredScheduleExport.js).
-  // Format: bo'sh soat qatorlari chiqmaydi, kunlar rangli qator bilan ajratiladi,
-  // kun nomlari katta shriftda, har fan o'z rangida.
   async function exportExcel() {
     const exportClasses = visibleClasses.length ? visibleClasses : sortedClasses;
     await exportColoredSchedule({
@@ -834,12 +1162,14 @@ export default function SchedulePage({
     });
   }
 
+  const lockedTotal = setSchedule ? lockedCount() : 0;
+
   return (
     <div className="pretty-schedule-page">
       <div className="pretty-topbar">
         <div>
           <h1>Dars jadvali</h1>
-          <p>Jadval sinflar kesimida ko‘rsatiladi. Har bir fan o‘z rangida chiqadi.</p>
+          <p>Sinf yoki ustoz setkasida ishlang. Darsni tortib ko‘chiring, kerak bo‘lsa 🔒 qulflang.</p>
         </div>
       </div>
 
@@ -888,28 +1218,45 @@ export default function SchedulePage({
 
         <div className="sch-toolbar-row">
           <div className="sch-field">
-            <span className="sch-field-label">Sinf tanlang</span>
-            <div className="sch-select-wrap">
-              <span className="sch-select-icon">🏫</span>
-              <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)}>
-                <option value="all">Barcha sinflar</option>
-                {sortedClasses.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
+            <span className="sch-field-label">Setka</span>
+            <div className="schd-mode">
+              <button type="button" className={gridMode === "class" ? "active" : ""} onClick={() => setGridMode("class")}>📚 Sinf setkasi</button>
+              <button type="button" className={gridMode === "teacher" ? "active" : ""} onClick={() => setGridMode("teacher")}>👨‍🏫 Ustoz setkasi</button>
             </div>
           </div>
 
-          <div className="sch-field">
-            <span className="sch-field-label">Ko‘rinish</span>
-            <div className="sch-segment">
-              <button className={viewMode === "table" ? "active" : ""} onClick={() => setViewMode("table")} type="button">▦ Jadval</button>
-              <button className={viewMode === "compact" ? "active" : ""} onClick={() => setViewMode("compact")} type="button">▤ Karta</button>
-            </div>
-          </div>
+          {gridMode === "class" && (
+            <>
+              <div className="sch-field">
+                <span className="sch-field-label">Sinf tanlang</span>
+                <div className="sch-select-wrap">
+                  <span className="sch-select-icon">🏫</span>
+                  <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)}>
+                    <option value="all">Barcha sinflar</option>
+                    {sortedClasses.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div className="sch-field">
+                <span className="sch-field-label">Ko‘rinish</span>
+                <div className="sch-segment">
+                  <button className={viewMode === "table" ? "active" : ""} onClick={() => setViewMode("table")} type="button">▦ Jadval</button>
+                  <button className={viewMode === "compact" ? "active" : ""} onClick={() => setViewMode("compact")} type="button">▤ Karta</button>
+                </div>
+              </div>
+            </>
+          )}
 
           <div className="sch-actions">
             {setSchedule && (
               <button className="sch-btn sch-btn-hero" onClick={handleGenerate} type="button" disabled={generating}>
                 {generating ? "⏳ Bajarilyapti…" : "⚡ Avtomatik jadval"}
+              </button>
+            )}
+            {setSchedule && lockedTotal > 0 && (
+              <button className="sch-btn sch-btn-soft-blue" onClick={unlockAll} type="button" title="Barcha qulflarni ochish">
+                🔓 Qulflar ({lockedTotal})
               </button>
             )}
             <button className="sch-btn sch-btn-soft-green" onClick={exportExcel} type="button">📥 Excel</button>
@@ -918,6 +1265,19 @@ export default function SchedulePage({
             {setSchedule && <button className="sch-btn sch-btn-soft-red" onClick={handleClear} type="button">🗑 Tozalash</button>}
           </div>
         </div>
+
+        {picked && (
+          <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "rgba(124,58,237,.10)", border: "1px solid rgba(124,58,237,.35)", borderRadius: 10, padding: "8px 12px", color: "#5b21b6", fontSize: 13, fontWeight: 600 }}>
+            <span>✋ <b>{unitLabel(ctx, picked.unit)}</b> ({slotLabel(ctx, picked.day, picked.slotId)}) tanlandi — endi qo'yiladigan katakni bosing.</span>
+            <button type="button" className="btn btn-sm btn-secondary" onClick={() => setPicked(null)}>Bekor qilish</button>
+          </div>
+        )}
+
+        {setSchedule && lockedTotal > 0 && (
+          <div style={{ marginTop: 10, fontSize: 12.5, color: "var(--text-secondary)" }}>
+            🔒 <b>{lockedTotal}</b> ta dars qulflangan — «⚡ Avtomatik jadval» bosilganda ular joyidan qimirlamaydi.
+          </div>
+        )}
 
         {generating && (
           <div className="gen-overlay">
@@ -937,134 +1297,190 @@ export default function SchedulePage({
         )}
       </div>
 
-      {!visibleClasses.length && (
-        <div className="card empty-state">
-          <div className="empty-state__icon">📚</div>
-          <p className="empty-state__message">Hali sinflar qo‘shilmagan.</p>
-        </div>
+      {gridMode === "teacher" ? (
+        <TeacherGrid
+          classes={classes}
+          subjects={subjects}
+          teachers={teachers}
+          rooms={rooms}
+          timeslots={timeslots}
+          lunchGroups={lunchGroups}
+          schedule={schedule}
+          classSubjects={classSubjects}
+          setSchedule={setSchedule}
+          toast={toast}
+          onResolve={setMoveData}
+        />
+      ) : (
+        <>
+          {!visibleClasses.length && (
+            <div className="card empty-state">
+              <div className="empty-state__icon">📚</div>
+              <p className="empty-state__message">Hali sinflar qo‘shilmagan.</p>
+            </div>
+          )}
+
+          {setSchedule && (() => {
+            const gm = globalMissing();
+            const caps = capacityWarnings();
+            if (!gm.length && !caps.length) {
+              if (!visibleClasses.length) return null;
+              const anyLessons = DAYS.some((d) => sortedTimeslots.some((s) => (schedule?.[d]?.[s.id] || []).length));
+              if (!anyLessons) return null;
+              return (
+                <div style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 12, padding: "10px 14px", marginBottom: 14, color: "#065f46", fontWeight: 600 }}>
+                  ✅ Barcha fan soatlari to'liq joylashtirildi (100%).
+                </div>
+              );
+            }
+            const totalMissing = gm.reduce((s, x) => s + x.total, 0);
+            return (
+              <div style={{ background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 6 }}>
+                  <div style={{ fontWeight: 800, fontSize: 16, color: "#9a3412" }}>
+                    ⚠️ {totalMissing} soat to'liq joylashmadi — yechim tavsiyalari
+                  </div>
+                  <button type="button" className="btn btn-success" onClick={resolveAll}>
+                    🔧 Hammasini bir bosishda hal qilish
+                  </button>
+                </div>
+
+                {caps.length > 0 && (
+                  <div style={{ background: "#fff", border: "1px solid #fecaca", borderRadius: 10, padding: 10, marginBottom: 10 }}>
+                    <div style={{ fontWeight: 700, color: "#b91c1c", marginBottom: 4 }}>Sig'im yetishmasligi:</div>
+                    {caps.map((w, i) => <div key={i} style={{ fontSize: 13, color: "#7f1d1d", marginTop: i ? 3 : 0 }}>• {w}</div>)}
+                  </div>
+                )}
+
+                {gm.map((m) => (
+                  <div key={m.subjectId} style={{ background: "#fff", border: "1px solid #fed7aa", borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                    <div style={{ fontWeight: 700, color: "#9a3412" }}>
+                      {m.name}: {m.total} soat tushmadi <span style={{ fontWeight: 400, color: "#a16207" }}>({m.classes.slice(0, 6).join(", ")}{m.classes.length > 6 ? "…" : ""})</span>
+                    </div>
+                    <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+                      {suggestionsFor(m.subjectId).map((s, i) => (
+                        <div key={i} style={{ fontSize: 13, color: "#7c2d12" }}>{s}</div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+
+                <div style={{ fontSize: 12, color: "#9a3412", marginTop: 4 }}>
+                  Sozlagandan so'ng «⚡ Avtomatik jadval»ni qayta bosing. Yoki bo'sh katakdagi <b>＋</b> orqali qo'lda qo'shing.
+                </div>
+              </div>
+            );
+          })()}
+
+          {visibleClasses.map((cls) => {
+            const isCollapsed = collapsed[cls.id];
+            const missing = setSchedule ? missingForClass(cls.id) : [];
+            return (
+              <section key={cls.id} className="pretty-class-section">
+                <div className="pretty-class-header">
+                  <h2>👥 {cls.name} sinf</h2>
+                  <button
+                    className="pretty-collapse"
+                    type="button"
+                    onClick={() => setCollapsed((prev) => ({ ...prev, [cls.id]: !prev[cls.id] }))}
+                  >
+                    {isCollapsed ? "⌄" : "⌃"}
+                  </button>
+                </div>
+
+                {!isCollapsed && missing.length > 0 && (
+                  <div style={{ background: "#fef3c7", border: "1px solid #fde68a", borderRadius: 10, padding: "10px 12px", margin: "0 0 10px" }}>
+                    <div style={{ fontWeight: 700, color: "#92400e", marginBottom: 4 }}>⚠️ Bu sinfda tushmagan soatlar bor:</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {missing.map((m) => (
+                        <span key={m.subjectId} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#fff", border: "1px solid #fcd34d", borderRadius: 8, padding: "3px 8px", fontSize: 13, color: "#92400e" }}>
+                          {m.name}: <b>{m.missing}</b> soat yetishmayapti ({m.got}/{m.need})
+                          {setSchedule && (
+                            <button type="button" onClick={() => proposeResolution(cls.id, m.subjectId, m.name, m.missing)}
+                              className="btn btn-sm btn-primary" style={{ padding: "2px 8px", fontSize: 12 }}>
+                              🔧 Hal qilish
+                            </button>
+                          )}
+                        </span>
+                      ))}
+                    </div>
+                    <div style={{ fontSize: 12, color: "#92400e", marginTop: 6 }}>«🔧 Hal qilish» bo'sh ustozni topib joylashtiradi. Yoki bo'sh katakdagi <b>＋</b> orqali qo'lda qo'shing.</div>
+                  </div>
+                )}
+
+                {!isCollapsed && (
+                  <div className={`pretty-table-card ${viewMode === "compact" ? "compact" : ""}`}>
+                    <div className="pretty-table-scroll">
+                      <table className="pretty-schedule-table">
+                        <thead>
+                          <tr>
+                            <th>Vaqt / Dars</th>
+                            {DAYS.map((day) => <th key={day}>{day}</th>)}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sortedTimeslots.filter((slot) => slotAllowsClass(slot, cls.id)).map((slot) => (
+                            <tr key={slot.id}>
+                              <td className="pretty-time-cell">
+                                <strong>{isTeachingSlot(slot) ? `${slot.lessonNumber || ""}-dars` : (slot.title || (slot.type === "lunch" ? "Obed" : "Tanaffus"))}</strong>
+                                <span>{slot.startTime || ""} - {slot.endTime || ""}</span>
+                              </td>
+                              {DAYS.map((day) => {
+                                const info = active
+                                  ? (active.classId === cls.id
+                                    ? (activeMap.get(`${day}__${slot.id}`) || null)
+                                    : { kind: "cross" })
+                                  : null;
+                                const kind = info?.kind || null;
+                                const dropCls = (kind === "move" || kind === "swap")
+                                  ? "schd-drop-ok"
+                                  : ((kind === "no" || kind === "nt" || kind === "cross") ? "schd-drop-no" : "");
+                                return (
+                                  <td
+                                    key={day}
+                                    className={`pretty-day-cell ${dropCls}`}
+                                    style={{
+                                      ...(kind === "swap" ? { outline: "2px dashed rgba(124,58,237,.55)", outlineOffset: "-3px" } : null),
+                                      ...(picked && kind && kind !== "self" && kind !== "cross" ? { cursor: "pointer" } : null),
+                                    }}
+                                    onDragOver={(e) => { if (drag && kind && kind !== "self" && kind !== "cross") e.preventDefault(); }}
+                                    onDrop={(e) => { e.preventDefault(); if (drag) commitMove(day, slot, cls); }}
+                                    onClick={() => { if (picked && kind && kind !== "self" && kind !== "cross") commitMove(day, slot, cls); }}
+                                  >
+                                    {renderCell(day, slot, cls)}
+                                    {kind === "swap" && info?.partner && (
+                                      <span style={SWAP_CHIP}>
+                                        ⇄ {unitLabel(ctx, info.partner)} bilan almashadi
+                                        {info.auto ? " (avtomatik)" : ""}
+                                      </span>
+                                    )}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </section>
+            );
+          })}
+        </>
       )}
 
-      {setSchedule && (() => {
-        const gm = globalMissing();
-        const caps = capacityWarnings();
-        if (!gm.length && !caps.length) {
-          // hammasi tushgan bo'lsa qisqa tasdiq
-          if (!visibleClasses.length) return null;
-          const anyLessons = DAYS.some((d) => sortedTimeslots.some((s) => (schedule?.[d]?.[s.id] || []).length));
-          if (!anyLessons) return null;
-          return (
-            <div style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 12, padding: "10px 14px", marginBottom: 14, color: "#065f46", fontWeight: 600 }}>
-              ✅ Barcha fan soatlari to'liq joylashtirildi (100%).
-            </div>
-          );
-        }
-        const totalMissing = gm.reduce((s, x) => s + x.total, 0);
-        return (
-          <div style={{ background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 12, padding: 16, marginBottom: 16 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 6 }}>
-              <div style={{ fontWeight: 800, fontSize: 16, color: "#9a3412" }}>
-                ⚠️ {totalMissing} soat to'liq joylashmadi — yechim tavsiyalari
-              </div>
-              <button type="button" className="btn btn-success" onClick={resolveAll}>
-                🔧 Hammasini bir bosishda hal qilish
-              </button>
-            </div>
-
-            {caps.length > 0 && (
-              <div style={{ background: "#fff", border: "1px solid #fecaca", borderRadius: 10, padding: 10, marginBottom: 10 }}>
-                <div style={{ fontWeight: 700, color: "#b91c1c", marginBottom: 4 }}>Sig'im yetishmasligi:</div>
-                {caps.map((w, i) => <div key={i} style={{ fontSize: 13, color: "#7f1d1d", marginTop: i ? 3 : 0 }}>• {w}</div>)}
-              </div>
-            )}
-
-            {gm.map((m) => (
-              <div key={m.subjectId} style={{ background: "#fff", border: "1px solid #fed7aa", borderRadius: 10, padding: 12, marginBottom: 8 }}>
-                <div style={{ fontWeight: 700, color: "#9a3412" }}>
-                  {m.name}: {m.total} soat tushmadi <span style={{ fontWeight: 400, color: "#a16207" }}>({m.classes.slice(0, 6).join(", ")}{m.classes.length > 6 ? "…" : ""})</span>
-                </div>
-                <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
-                  {suggestionsFor(m.subjectId).map((s, i) => (
-                    <div key={i} style={{ fontSize: 13, color: "#7c2d12" }}>{s}</div>
-                  ))}
-                </div>
-              </div>
-            ))}
-
-            <div style={{ fontSize: 12, color: "#9a3412", marginTop: 4 }}>
-              Sozlagandan so'ng «⚡ Avtomatik jadval»ni qayta bosing. Yoki bo'sh katakdagi <b>＋</b> orqali qo'lda qo'shing.
-            </div>
-          </div>
-        );
-      })()}
-
-      {visibleClasses.map((cls) => {
-        const isCollapsed = collapsed[cls.id];
-        const missing = setSchedule ? missingForClass(cls.id) : [];
-        return (
-          <section key={cls.id} className="pretty-class-section">
-            <div className="pretty-class-header">
-              <h2>👥 {cls.name} sinf</h2>
-              <button
-                className="pretty-collapse"
-                type="button"
-                onClick={() => setCollapsed((prev) => ({ ...prev, [cls.id]: !prev[cls.id] }))}
-              >
-                {isCollapsed ? "⌄" : "⌃"}
-              </button>
-            </div>
-
-            {!isCollapsed && missing.length > 0 && (
-              <div style={{ background: "#fef3c7", border: "1px solid #fde68a", borderRadius: 10, padding: "10px 12px", margin: "0 0 10px" }}>
-                <div style={{ fontWeight: 700, color: "#92400e", marginBottom: 4 }}>⚠️ Bu sinfda tushmagan soatlar bor:</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                  {missing.map((m) => (
-                    <span key={m.subjectId} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#fff", border: "1px solid #fcd34d", borderRadius: 8, padding: "3px 8px", fontSize: 13, color: "#92400e" }}>
-                      {m.name}: <b>{m.missing}</b> soat yetishmayapti ({m.got}/{m.need})
-                      {setSchedule && (
-                        <button type="button" onClick={() => proposeResolution(cls.id, m.subjectId, m.name, m.missing)}
-                          className="btn btn-sm btn-primary" style={{ padding: "2px 8px", fontSize: 12 }}>
-                          🔧 Hal qilish
-                        </button>
-                      )}
-                    </span>
-                  ))}
-                </div>
-                <div style={{ fontSize: 12, color: "#92400e", marginTop: 6 }}>«🔧 Hal qilish» bo'sh ustozni topib joylashtiradi. Yoki bo'sh katakdagi <b>＋</b> orqali qo'lda qo'shing.</div>
-              </div>
-            )}
-
-            {!isCollapsed && (
-              <div className={`pretty-table-card ${viewMode === "compact" ? "compact" : ""}`}>
-                <div className="pretty-table-scroll">
-                  <table className="pretty-schedule-table">
-                    <thead>
-                      <tr>
-                        <th>Vaqt / Dars</th>
-                        {DAYS.map((day) => <th key={day}>{day}</th>)}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sortedTimeslots.filter((slot) => slotAllowsClass(slot, cls.id)).map((slot) => (
-                        <tr key={slot.id}>
-                          <td className="pretty-time-cell">
-                            <strong>{isTeachingSlot(slot) ? `${slot.lessonNumber || ""}-dars` : (slot.title || (slot.type === "lunch" ? "Obed" : "Tanaffus"))}</strong>
-                            <span>{slot.startTime || ""} - {slot.endTime || ""}</span>
-                          </td>
-                          {DAYS.map((day) => (
-                            <td key={day} className="pretty-day-cell">
-                              {renderCell(day, slot, cls)}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-          </section>
-        );
-      })}
+      {moveData && (
+        <MoveResolveModal
+          data={moveData}
+          timeslots={sortedTimeslots}
+          classes={classes}
+          subjects={subjects}
+          teachers={teachers}
+          onApply={applyMoveActions}
+          onClose={() => setMoveData(null)}
+        />
+      )}
 
       {manualCell && (() => {
         const { day, slotId, classId } = manualCell;
@@ -1072,15 +1488,16 @@ export default function SchedulePage({
         const cls = classes.find((c) => c.id === classId);
         const warns = conflictsAt(day, slotId, classId, manualForm.teacherId, manualForm.roomId);
         const subjTeachers = manualForm.subjectId ? teachersForSubject(manualForm.subjectId) : [];
-        const remainingSubjects = missingForClass(classId); // faqat ortib qolgan soatli fanlar
+        const remainingSubjects = missingForClass(classId);
         const lgi = manualForm.subjectId ? levelGroupInfo(classId, manualForm.subjectId) : null;
         const effectiveWarns = lgi ? groupConflictsAt(day, slotId, lgi.classIds, lgi.groups) : warns;
+        const hasBlocker = effectiveWarns.some((w) => w.startsWith("⛔"));
         const hasParallel = effectiveWarns.some((w) => w.startsWith("⚠️"));
         return (
           <div onClick={() => setManualCell(null)}
             style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
             <div onClick={(e) => e.stopPropagation()}
-              style={{ background: "var(--card-bg, #fff)", borderRadius: 14, padding: 20, width: "100%", maxWidth: 460, boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
+              style={{ background: "var(--card-bg, #fff)", borderRadius: 14, padding: 20, width: "100%", maxWidth: 460, maxHeight: "88vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
               <h3 style={{ margin: "0 0 4px" }}>Qo'lda dars qo'shish</h3>
               <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 14 }}>
                 {cls?.name} · {day} · {slot?.lessonNumber}-dars
@@ -1133,7 +1550,6 @@ export default function SchedulePage({
                         {rooms.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
                       </select>
 
-                      {/* Hafta almashinuvi (juft/toq) — butun sinf, sinf bo'linmaydi */}
                       <div style={{ marginTop: 14, padding: 12, background: "rgba(124,58,237,.06)", border: "1px solid rgba(124,58,237,.2)", borderRadius: 10 }}>
                         <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 14, fontWeight: 600, color: "#6d28d9" }}>
                           <input type="checkbox" checked={manualForm.altEnabled}
@@ -1169,10 +1585,16 @@ export default function SchedulePage({
                     </>
                   )}
 
+                  <label className="tgr-check">
+                    <input type="checkbox" checked={manualForm.lock}
+                      onChange={(e) => setManualForm({ ...manualForm, lock: e.target.checked })} />
+                    🔒 Qulflab qo'yish — avtomatik jadval tuzilganda bu dars o'zgarmaydi
+                  </label>
+
                   {effectiveWarns.length > 0 && (
                     <div style={{ marginTop: 12, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 10 }}>
                       {effectiveWarns.map((w, i) => (
-                        <div key={i} style={{ fontSize: 13, color: w.startsWith("⚠️") ? "#b91c1c" : "#92400e", marginTop: i ? 4 : 0 }}>{w}</div>
+                        <div key={i} style={{ fontSize: 13, color: w.startsWith("ℹ️") ? "#92400e" : "#b91c1c", marginTop: i ? 4 : 0 }}>{w}</div>
                       ))}
                     </div>
                   )}
@@ -1182,8 +1604,8 @@ export default function SchedulePage({
               <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 18 }}>
                 <button className="btn btn-secondary" type="button" onClick={() => setManualCell(null)}>Yopish</button>
                 {remainingSubjects.length > 0 && (
-                  <button className="btn btn-primary" type="button" disabled={!manualForm.subjectId} onClick={addManualLesson}>
-                    {hasParallel ? "Baribir qo'shish" : "Qo'shish"}
+                  <button className="btn btn-primary" type="button" disabled={!manualForm.subjectId || hasBlocker} onClick={addManualLesson}>
+                    {hasBlocker ? "Qo'yib bo'lmaydi" : (hasParallel ? "Baribir qo'shish" : "Qo'shish")}
                   </button>
                 )}
               </div>
@@ -1214,7 +1636,7 @@ export default function SchedulePage({
                 })}
               </div>
               <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 14 }}>
-                Bu darslar bo'sh ustoz bilan qo'yiladi va qulflanadi (qayta avtomatik tuzsangiz ham buzilmaydi).
+                Bu darslar bo'sh ustoz bilan qo'yiladi va qulflanadi 🔒 (qayta avtomatik tuzsangiz ham buzilmaydi).
               </div>
               <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
                 <button className="btn btn-secondary" type="button" onClick={() => setResolveData(null)}>Bekor qilish</button>
