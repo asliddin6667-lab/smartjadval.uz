@@ -1,18 +1,18 @@
-# Edujadval v2.0 Demo School Pack
+# smartjadval v2.0 Demo School Pack
 
-Bu paket `edujadval_v1_12_parallel_lessons` loyihasiga demo maktab ma'lumotlarini qo'shadi.
+Bu paket `smartjadval_v1_12_parallel_lessons` loyihasiga demo maktab ma'lumotlarini qo'shadi.
 
 ## Kirish
 
 Super Admin:
-- Email: admin@edujadval.uz
+- Email: admin@smartjadval.uz
 - Parol: admin12345
 
 To'ldirilgan demo maktab:
-- Email: demo@edujadval.uz
+- Email: demo@smartjadval.uz
 - Parol: demo12345
 
-`demo@edujadval.uz` bilan kirganda, agar localStorage bo'sh bo'lsa, ma'lumotlar avtomatik yuklanadi.
+`demo@smartjadval.uz` bilan kirganda, agar localStorage bo'sh bo'lsa, ma'lumotlar avtomatik yuklanadi.
 
 ## Qo'shilgan ma'lumotlar
 

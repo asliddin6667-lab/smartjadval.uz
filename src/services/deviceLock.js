@@ -1,12 +1,12 @@
 // ============================================================
-// EDUJADVAL.UZ — Qurilma qulflash xizmati (device lock)
+// smartjadval.UZ — Qurilma qulflash xizmati (device lock)
 // Qoida: 1 profil = 1 qurilma.
 // Qurilma serverda (Supabase) ro'yxatga olinadi, shu sababli
 // localStorage'ni boshqa kompyuterga ko'chirish ish bermaydi.
 // ============================================================
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 
-const DEVICE_ID_KEY = 'edujadval_device_id';
+const DEVICE_ID_KEY = 'smartjadval_device_id';
 
 // --- Qurilmaning tasodifiy ID'sini olish (bo'lmasa yaratish) ---
 export function getDeviceUuid() {

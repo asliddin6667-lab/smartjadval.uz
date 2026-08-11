@@ -1,16 +1,16 @@
 export function loadData(key, fallback = []) {
   try {
-    const raw = localStorage.getItem(`edujadval_${key}`);
+    const raw = localStorage.getItem(`smartjadval_${key}`);
     return raw ? JSON.parse(raw) : fallback;
   } catch { return fallback; }
 }
 
 export function saveData(key, value) {
-  localStorage.setItem(`edujadval_${key}`, JSON.stringify(value));
+  localStorage.setItem(`smartjadval_${key}`, JSON.stringify(value));
 }
 
 export function removeData(key) {
-  localStorage.removeItem(`edujadval_${key}`);
+  localStorage.removeItem(`smartjadval_${key}`);
 }
 
 export function loadUserData(userId, key, fallback = []) {

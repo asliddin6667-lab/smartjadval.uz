@@ -917,7 +917,7 @@
   line-height: 1.6;
 }
 
-/* ===== Edujadval v1.13: rangli sinflar kesimidagi dars jadvali ===== */
+/* ===== smartjadval v1.13: rangli sinflar kesimidagi dars jadvali ===== */
 .pretty-schedule-page {
   padding: 28px 32px 48px;
   background: linear-gradient(180deg, #f8fbff 0%, #f3f6fb 100%);
@@ -1279,7 +1279,7 @@
   color: #64748b;
 }
 
-/* Edujadval.uz */
+/* smartjadval.uz */
 .logo-title {
   font-size: 34px;
   font-weight: 900;
@@ -1598,7 +1598,7 @@
   font-size: 12px;
 }
 /* =========================================================
-   EDUJADVAL V2 POLISH FIXES — sidebar, spacing, buttons
+   smartjadval V2 POLISH FIXES — sidebar, spacing, buttons
    ========================================================= */
 :root {
   --sidebar-bg: #070b1a;
@@ -2513,4 +2513,140 @@ body.dark-mode ::-webkit-scrollbar-thumb:hover { background: #3a4568; }
 /* ——— Mobil (max-width 900px): footer yashiringan, faqat ikonkalar ——— */
 @media (max-width: 900px) {
   .sidebar-toggle-label { display: none; }
+}
+
+/* =====================================================================
+   TUNGI REJIM V2 — DARS JADVALI (pretty-*) sahifasi Dashboard uslubida
+   Chuqur qora fon + binafsha nur, shisha-qora kartalar, fan rangli
+   chiziqlar. Bu blok faylning ENG OXIRIDA turishi shart — yuqoridagi
+   och (light) ranglarni bosib o'tadi.
+   ===================================================================== */
+
+/* ——— Sahifa foni: Dashboard'dagi kabi ——— */
+body.dark-mode .pretty-schedule-page {
+  background:
+    radial-gradient(circle at 35% -10%, rgba(99,102,241,.16), transparent 34%),
+    linear-gradient(180deg, #0a0c12, #0d1018 45%, #0a0c12 100%) !important;
+}
+
+/* ——— Sarlavha va tavsif ——— */
+body.dark-mode .pretty-topbar h1 { color: #e8edf5; }
+body.dark-mode .pretty-topbar p { color: #8a94a8; }
+
+body.dark-mode .pretty-icon-btn {
+  background: #131722;
+  border-color: #232a3d;
+  color: #d5dbe8;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+}
+
+/* ——— Yuqori panel (toolbar) ——— */
+body.dark-mode .pretty-toolbar {
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+}
+body.dark-mode .pretty-control label { color: #aeb8cc !important; }
+
+/* ——— Fan legend pill'lari ——— */
+body.dark-mode .pretty-subject-pill {
+  background: #131722;
+  border-color: #232a3d;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+body.dark-mode .pretty-subject-pill.muted {
+  background: #1a2030;
+  color: #8a94a8;
+}
+
+/* ——— Sinf sarlavhasi va yig'ish tugmasi ——— */
+body.dark-mode .pretty-class-header h2 { color: #e8edf5; }
+body.dark-mode .pretty-collapse {
+  background: #131722;
+  border-color: #232a3d;
+  color: #e8edf5;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+}
+
+/* ——— Jadval kartasi ——— */
+body.dark-mode .pretty-table-card {
+  background: #131722 !important;
+  border-color: #232a3d !important;
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.45) !important;
+}
+
+/* ——— Jadval sarlavha qatori (kun nomlari) ——— */
+body.dark-mode .pretty-schedule-table th {
+  background: linear-gradient(180deg, #151a28 0%, #0f131f 100%);
+  color: #d5dbe8;
+  border-right-color: rgba(148, 163, 184, 0.14);
+}
+
+/* ——— Jadval kataklari ——— */
+body.dark-mode .pretty-schedule-table td {
+  background: #131722;
+  border-right-color: #232a3d;
+  border-bottom-color: #232a3d;
+}
+
+/* ——— Vaqt ustuni ——— */
+body.dark-mode .pretty-time-cell {
+  background: #1a2030 !important;
+  color: #aeb8cc;
+}
+body.dark-mode .pretty-time-cell strong { color: #8b9cf9; }
+body.dark-mode .pretty-time-cell span { color: #77839c; }
+
+/* ——— Dars kartalari: qora shisha + fan rangli chap chiziq ——— */
+body.dark-mode .pretty-lesson-card {
+  background: linear-gradient(135deg, rgba(38, 44, 66, 0.92), rgba(22, 27, 40, 0.96));
+  border-color: rgba(148, 163, 184, 0.18);
+  box-shadow: inset 3px 0 0 var(--lesson-color), 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+body.dark-mode .pretty-lesson-title {
+  filter: brightness(1.45) saturate(1.1);
+}
+body.dark-mode .pretty-lesson-meta { color: #aeb8cc; }
+body.dark-mode .pretty-group-line { color: #aeb8cc; }
+body.dark-mode .pretty-group-line span { filter: brightness(1.45); }
+body.dark-mode .pretty-group-line em { color: #77839c; }
+body.dark-mode .pretty-parallel-chip {
+  background: rgba(99, 102, 241, 0.16);
+  filter: brightness(1.3);
+}
+
+/* ——— Eski schedule-table (Ustoz setkasi shu klassni ishlatsa) ——— */
+body.dark-mode .schedule-table td { border-color: #232a3d; }
+body.dark-mode .schedule-table .time-col {
+  background: #1a2030;
+  color: #aeb8cc;
+}
+body.dark-mode .empty-cell:hover {
+  background: rgba(99, 102, 241, 0.14);
+  color: #8b9cf9;
+}
+
+/* ——— Ogohlantirish bannerlari (ko'rsatma matni va h.k.) ——— */
+body.dark-mode .alert-info {
+  background: rgba(99, 102, 241, 0.12);
+  border-color: rgba(99, 102, 241, 0.3);
+  color: #b9c3ff;
+}
+body.dark-mode .alert-warning {
+  background: rgba(245, 158, 11, 0.10);
+  border-color: rgba(245, 158, 11, 0.3);
+  color: #fbd38d;
+}
+body.dark-mode .alert-success {
+  background: rgba(34, 197, 94, 0.10);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: #86efac;
+}
+
+/* ——— Chop etishda tun rejimi ranglari qo'llanmasin ——— */
+@media print {
+  body.dark-mode .pretty-schedule-page { background: #fff !important; }
+  body.dark-mode .pretty-table-card { background: #fff !important; }
+  body.dark-mode .pretty-schedule-table td { background: #fff; }
+  body.dark-mode .pretty-lesson-card {
+    background: linear-gradient(135deg, var(--lesson-bg), rgba(255, 255, 255, 0.90));
+  }
 }

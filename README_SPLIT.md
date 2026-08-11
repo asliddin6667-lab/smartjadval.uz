@@ -1,4 +1,4 @@
-# Edujadval split files
+# smartjadval split files
 
 App.jsx katta fayldan modullarga bo'lindi.
 

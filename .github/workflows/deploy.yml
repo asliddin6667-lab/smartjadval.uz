@@ -1,4 +1,4 @@
-name: Deploy Edujadval
+name: Deploy smartjadval
 
 on:
   push:

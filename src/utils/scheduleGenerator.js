@@ -369,6 +369,23 @@ function attemptSchedule(
       }
     });
   });
+  // ——— ASOSIY FAN uchun soat o'rni (rank) ———
+  // Har bir sinf-kun uchun kataklarning "nechanchi dars" ekani hisoblanadi:
+  // obed va smena bloklari tashlab ketiladi. 2-smena sinflari uchun rank
+  // o'z smenasining BOSHIDAN sanaladi — global lessonNumber'dan emas.
+  // rank 0 = 1-soat, rank 1 = 2-soat, rank 2 = 3-soat va hokazo.
+  const slotRank = new Int16Array(C * DT).fill(-1);
+  for (let ci = 0; ci < C; ci++) {
+    for (let d = 0; d < D; d++) {
+      const base = ci * DT + d * T;
+      let r = 0;
+      for (let k = 0; k < T; k++) {
+        if (lunchGrid[base + k] || slotClassBlock[base + k]) continue;
+        slotRank[base + k] = r;
+        r += 1;
+      }
+    }
+  }
   const classGrid = new Uint8Array(C * DT);
   const teacherGrid = new Uint8Array(TT * DT);
   const roomGridMap = new Map();
@@ -644,7 +661,9 @@ function attemptSchedule(
     const multiTeacher = tids.length >= 2 ? tids.length * 12 : 0;
     // Ora kunda darslar erta joylashtirilsa, kunlarni uzoqlashtirish osonroq
     const spaced = r.spacedDays ? 7 : 0;
-    return maxTeacherLoad + (r.blockSize || 1) * 2 + teacherOff + classOff + multiClass + multiTeacher + spaced;
+    // Asosiy fanlar navbatda oldinroq — erta soatlar hali bo'shligida joylashadi
+    const core = r.isCore ? 6 : 0;
+    return maxTeacherLoad + (r.blockSize || 1) * 2 + teacherOff + classOff + multiClass + multiTeacher + spaced + core;
   }
   function isValidRequest(req) {
     const reqTeacherIds = (req.teacherIds || [req.teacherId]).filter(Boolean);
@@ -682,6 +701,8 @@ function attemptSchedule(
     req.sIdx = sIdxOf.get(req.subjectId) ?? -1;
     req.swapSIdx = req.swapSubjectId ? (sIdxOf.get(req.swapSubjectId) ?? -1) : -1;
     req.roomArrs = req.rids.map((rid) => roomGrid(rid));
+    // Asosiy fanlar navbatda ustunlik oladi — erta soatlar hali bo'shligida joylashadi
+    if (req.isCore) req.priority = (req.priority || 0) + 12;
     pending.push(req);
   }
   function buildDomain(req) {
@@ -949,10 +970,25 @@ function attemptSchedule(
     }
     let teacherPenalty = 0;
     for (const ti of req.tIdxs) { teacherPenalty += teacherLoadArr[ti] + teacherDailyArr[ti * D + d]; }
-    const coreEarlyPenalty = req.isCore ? i * 60 : 0;
+    // ——— ASOSIY FAN (1-daraja): erta soatlarga kuchli tortish ———
+    // Asosiy fan uchun soat qancha kech bo'lsa, jarima shuncha katta;
+    // 3-soatdan (rank 2) keyin jarima keskin oshadi. Oddiy fan 1–3 soatlarni
+    // egallasa yengil jarima — o'sha joylar asosiylarga qolsin. Bu YUMSHOQ
+    // shart: iloji bo'lmasa jadval baribir to'liq quriladi.
+    let corePenalty = 0;
+    for (const ci of req.cIdxs) {
+      const r = slotRank[ci * DT + d * T + i];
+      if (r < 0) continue;
+      if (req.isCore) {
+        corePenalty += r * CORE_EARLY_W;
+        if (r > 2) corePenalty += (r - 2) * CORE_LATE_W;
+      } else if (r < 3) {
+        corePenalty += (3 - r) * NONCORE_EARLY_W;
+      }
+    }
     const spacedPen = spacedPenalty(req, d);
     const randomPenalty = rng() * 5;
-    return compactPenalty + repeatPenalty + classLoadPenalty + teacherPenalty + spreadPenalty + coreEarlyPenalty + adjacencyPenalty + dayCapPenalty + spacedPen + randomPenalty;
+    return compactPenalty + repeatPenalty + classLoadPenalty + teacherPenalty + spreadPenalty + corePenalty + adjacencyPenalty + dayCapPenalty + spacedPen + randomPenalty;
   }
   function bestCandidate(req, withForwardCheck) {
     let best = null;
@@ -967,6 +1003,11 @@ function attemptSchedule(
   }
   const DAYCAP_W = 800;
   const SPACED_W = 900;
+  // ——— ASOSIY FAN og'irliklari ———
+  const CORE_EARLY_W = 420;   // asosiy fan: har bir keyingi soat uchun jarima
+  const CORE_LATE_W = 2200;   // asosiy fan 3-soatdan keyin — keskin qo'shimcha jarima
+  const NONCORE_EARLY_W = 80; // oddiy fan 1–3 soatlarda tursa — yengil jarima
+  const CORE_C_W = 420;       // zichlashda asosiy fan tartibini saqlash og'irligi
   const EJECT_DEFAULT = { maxDepth: 3, blockersRoot: 3, blockersDeep: 2, tryRoot: 14, tryDeep: 6 };
   const EJECT_INTENSE = { maxDepth: 4, blockersRoot: 5, blockersDeep: 3, tryRoot: 28, tryDeep: 10 };
   function collectBlockers(req, d, i, frozen, maxBlockers) {
@@ -1300,6 +1341,21 @@ function attemptSchedule(
     return c;
   }
 
+  // ——— ASOSIY FAN (zichlashda): tartib buzilmasin ———
+  // Zichlash harakatlari asosiy fanni kechroq soatga surib yubormasligi uchun
+  // har bir nomzod o'ringa rank-asosli jarima qo'shiladi. Oynalar (gap)
+  // baribir birinchi o'rinda — leksikografik taqqoslash saqlanadi.
+  function coreCostAt(req, dd, ii) {
+    let c = 0;
+    for (const ci of req.cIdxs) {
+      const r = slotRank[ci * DT + dd * T + ii];
+      if (r < 0) continue;
+      if (req.isCore) c += r * CORE_C_W;
+      else if (r < 3) c += (3 - r) * 30;
+    }
+    return c;
+  }
+
   function compactPass(budgetMs) {
     if (!placements.length) return 0;
     const stop = Date.now() + Math.max(120, budgetMs);
@@ -1309,7 +1365,9 @@ function attemptSchedule(
     while (moved > 0 && round < 12 && Date.now() < stop) {
       round += 1;
       moved = 0;
-      const list = shuffle(placements.filter((p) => !p.locked), rng);
+      // Avval ASOSIY fanlar ko'chiriladi — erta bo'sh joylarni ular egallasin
+      const shuffled = shuffle(placements.filter((p) => !p.locked), rng);
+      const list = [...shuffled.filter((p) => p.req.isCore), ...shuffled.filter((p) => !p.req.isCore)];
       for (const p of list) {
         if (Date.now() > stop) break;
         const req = p.req;
@@ -1317,7 +1375,7 @@ function attemptSchedule(
         if (!req.domain || req.domain.length < 2) continue;
         const oldD = p.d;
         const oldI = p.startIdx;
-        const baseCost = compactCost(req.cIdxs) + repeatCostAt(req, oldD, oldD) + spacedCostAt(req, oldD, oldD);
+        const baseCost = compactCost(req.cIdxs) + repeatCostAt(req, oldD, oldD) + spacedCostAt(req, oldD, oldD) + coreCostAt(req, oldD, oldI);
         const baseGap = _lastGap;
         markBits(req, oldD, oldI, 0);
         let bestD = -1;
@@ -1328,7 +1386,7 @@ function attemptSchedule(
           if (cand.d === oldD && cand.i === oldI) continue;
           if (!fitsAt(req, cand.d, cand.i)) continue;
           markBits(req, cand.d, cand.i, 1);
-          let c = compactCost(req.cIdxs) + repeatCostAt(req, cand.d, oldD) + spacedCostAt(req, cand.d, oldD);
+          let c = compactCost(req.cIdxs) + repeatCostAt(req, cand.d, oldD) + spacedCostAt(req, cand.d, oldD) + coreCostAt(req, cand.d, cand.i);
           const g = _lastGap;
           markBits(req, cand.d, cand.i, 0);
           if (req.blockSize === 1 && adjacentSame(cand.d, cand.i, 1, req)) c += ADJ_W;
@@ -1385,7 +1443,8 @@ function attemptSchedule(
     for (const ci of rp.cIdxs) if (!seen.has(ci)) { seen.add(ci); union.push(ci); }
     for (const ci of rq.cIdxs) if (!seen.has(ci)) { seen.add(ci); union.push(ci); }
     const base = compactCost(union) + repeatCostAt(rp, pd, pd) + repeatCostAt(rq, qd, qd)
-      + spacedCostAt(rp, pd, pd) + spacedCostAt(rq, qd, qd);
+      + spacedCostAt(rp, pd, pd) + spacedCostAt(rq, qd, qd)
+      + coreCostAt(rp, pd, pi) + coreCostAt(rq, qd, qi);
     const baseGap = _lastGap;
     let afterGap = Infinity;
     markBits(rp, pd, pi, 0);
@@ -1398,7 +1457,8 @@ function attemptSchedule(
         markBits(rq, pd, pi, 1);
         okFit = true;
         after = compactCost(union) + repeatCostAt(rp, qd, pd) + repeatCostAt(rq, pd, qd)
-          + spacedCostAt(rp, qd, pd) + spacedCostAt(rq, pd, qd);
+          + spacedCostAt(rp, qd, pd) + spacedCostAt(rq, pd, qd)
+          + coreCostAt(rp, qd, qi) + coreCostAt(rq, pd, pi);
         afterGap = _lastGap;
         markBits(rq, pd, pi, 0);
       }
@@ -1434,6 +1494,324 @@ function attemptSchedule(
       }
     }
     return n;
+  }
+
+  // ——— ASOSIY FAN TARTIBI (2-daraja): kun ichida "pufakcha" almashtirish ———
+  // Bitta sinf-kunda oddiy fan oldinroq, asosiy fan keyinroq tursa — ikkalasi
+  // o'rin almashtiriladi. Faqat barcha qattiq cheklovlar (ustoz/xona/sinf
+  // bandligi, smena, obed, dam kuni) bajarilsa VA oynalar ko'paymasa qabul
+  // qilinadi. Guruh/parallel darslar ham qamrab olinadi — almashinuv barcha
+  // ishtirokchi sinflar uchun mumkin bo'lsagina o'tadi.
+  function tryCoreSwap(p, q) {
+    const rp = p.req;
+    const rq = q.req;
+    if (rp === rq) return false;
+    if (!p.active || !q.active || rp.placedRef !== p || rq.placedRef !== q) return false;
+    if (!rp.domain || !rq.domain) return false;
+    if (rp.blockSize !== rq.blockSize) return false;
+    const pd = p.d, pi = p.startIdx, qd = q.d, qi = q.startIdx;
+    if (!inDomain(rp, qd, qi) || !inDomain(rq, pd, pi)) return false;
+    const uni = unionIdx(rp.cIdxs, rq.cIdxs);
+    compactCost(uni);
+    const gapBefore = _lastGap;
+    markBits(rp, pd, pi, 0);
+    markBits(rq, qd, qi, 0);
+    let ok = false;
+    if (fitsAt(rp, qd, qi)) {
+      markBits(rp, qd, qi, 1);
+      if (fitsAt(rq, pd, pi)) {
+        markBits(rq, pd, pi, 1);
+        compactCost(uni);
+        ok = _lastGap <= gapBefore;
+        markBits(rq, pd, pi, 0);
+      }
+      markBits(rp, qd, qi, 0);
+    }
+    markBits(rp, pd, pi, 1);
+    markBits(rq, qd, qi, 1);
+    if (!ok) return false;
+    unplace(p);
+    unplace(q);
+    place(rp, qd, qi);
+    place(rq, pd, pi);
+    return true;
+  }
+
+  // Oddiy swap imkonsiz bo'lsa (masalan, ustoz boshqa sinfda band):
+  // oddiy fan BOSHQA katakka (boshqa kunga ham) ko'chiriladi, asosiy fan
+  // uning bo'shagan erta o'rniga tushadi. Oynalar ko'paymasligi va balans
+  // sezilarli buzilmasligi sharti bilan qabul qilinadi.
+  function tryCoreEvict(p, q) {
+    const rp = p.req;
+    const rq = q.req;
+    if (rp === rq) return false;
+    if (!p.active || !q.active || rp.placedRef !== p || rq.placedRef !== q) return false;
+    if (!rp.domain || !rq.domain) return false;
+    const pd = p.d, pi = p.startIdx, qd = q.d, qi = q.startIdx;
+    if (!inDomain(rq, pd, pi)) return false;
+    const uni = unionIdx(rp.cIdxs, rq.cIdxs);
+    const costBefore = compactCost(uni) + repeatCostAt(rp, pd, pd) + spacedCostAt(rp, pd, pd);
+    const gapBefore = _lastGap;
+    for (const cand of rp.domain) {
+      if (cand.d === pd && cand.i === pi) continue;
+      markBits(rp, pd, pi, 0);
+      markBits(rq, qd, qi, 0);
+      let ok = false;
+      if (fitsAt(rq, pd, pi)) {
+        markBits(rq, pd, pi, 1);
+        if (fitsAt(rp, cand.d, cand.i)) {
+          markBits(rp, cand.d, cand.i, 1);
+          const costAfter = compactCost(uni) + repeatCostAt(rp, cand.d, pd) + spacedCostAt(rp, cand.d, pd);
+          const gapAfter = _lastGap;
+          ok = gapAfter <= gapBefore && costAfter <= costBefore + BAL_W;
+          markBits(rp, cand.d, cand.i, 0);
+        }
+        markBits(rq, pd, pi, 0);
+      }
+      markBits(rp, pd, pi, 1);
+      markBits(rq, qd, qi, 1);
+      if (ok) {
+        unplace(p);
+        unplace(q);
+        place(rq, pd, pi);
+        place(rp, cand.d, cand.i);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // ——— KEMPE ZANJIRI: bog'langan sinflarda ikki soatni birga almashtirish ———
+  // Bitta sinfda swap imkonsiz bo'lsa (ustoz o'sha payt boshqa sinfda band),
+  // ikkala sinfning ham shu ikki soatdagi darslari BIRGA almashtiriladi.
+  // Umumiy resurs (ustoz/xona/sinf) orqali bog'langan barcha darslar zanjirga
+  // qo'shiladi; zanjir yopilsa — almashinuv hech bir cheklovni buzmaydi.
+  function resOfReq(req) {
+    const r = [];
+    for (const t of req.tids) r.push("T" + t);
+    for (const x of req.rids) r.push("R" + x);
+    for (const c of req.classIds) r.push("C" + c);
+    return r;
+  }
+  function resOfLesson(l) {
+    const r = [];
+    if (l.teacherId) r.push("T" + l.teacherId);
+    if (l.altTeacherId) r.push("T" + l.altTeacherId);
+    if (l.roomId) r.push("R" + l.roomId);
+    classIdsOf(l).forEach((c) => { if (c) r.push("C" + c); });
+    return r;
+  }
+  function tryChainSlotSwap(seedA, seedB) {
+    if (!seedA.active || !seedB.active) return false;
+    if (seedA.req.placedRef !== seedA || seedB.req.placedRef !== seedB) return false;
+    if (seedA.req.blockSize !== 1 || seedB.req.blockSize !== 1) return false;
+    const d = seedA.d;
+    if (seedB.d !== d) return false;
+    const i = seedA.startIdx;
+    const j = seedB.startIdx;
+    if (i === j) return false;
+    const day = DAYS[d];
+    // Ikkala slotdagi placementlar va resurslar xaritasi
+    const gather = (idx) => {
+      const map = new Map();
+      for (const l of schedule[day][teachingTs[idx].id]) {
+        const p = entryToPlacement.get(l);
+        if (!p) return null;
+        if (p.locked) {
+          for (const r of resOfLesson(l)) map.set(r, "LOCKED");
+          continue;
+        }
+        for (const r of resOfReq(p.req)) map.set(r, p);
+      }
+      return map;
+    };
+    const gi = gather(i);
+    const gj = gather(j);
+    if (!gi || !gj) return false;
+    // Yopilish (closure): umumiy resursli darslar zanjirga qo'shiladi
+    const chain = new Set([seedA, seedB]);
+    const queue = [seedA, seedB];
+    while (queue.length) {
+      const p = queue.pop();
+      if (!p.active || p.req.placedRef !== p) return false;
+      if (p.req.blockSize !== 1) return false;
+      if (chain.size > 12) return false; // haddan katta zanjir — foydasi kam
+      const there = p.startIdx === i ? gj : gi;
+      for (const r of resOfReq(p.req)) {
+        const q = there.get(r);
+        if (q === "LOCKED") return false;
+        if (q && !chain.has(q)) { chain.add(q); queue.push(q); }
+      }
+    }
+    // Har bir zanjir a'zosi qarama-qarshi slotda joylasha olishi kerak
+    for (const p of chain) {
+      const target = p.startIdx === i ? j : i;
+      if (!p.req.domain || !inDomain(p.req, d, target)) return false;
+    }
+    // Narx (oldin): oyna soni va asosiy fan tartibi
+    let uni = [];
+    for (const p of chain) uni = unionIdx(uni, p.req.cIdxs);
+    compactCost(uni);
+    const gapBefore = _lastGap;
+    let coreBefore = 0;
+    for (const p of chain) coreBefore += coreCostAt(p.req, d, p.startIdx);
+    // Bajarish (muvaffaqiyatsiz bo'lsa to'liq rollback)
+    const saved = [...chain].map((p) => ({ req: p.req, fromI: p.startIdx }));
+    for (const p of [...chain]) unplace(p);
+    let ok = true;
+    for (const m of saved) {
+      const target = m.fromI === i ? j : i;
+      if (!fitsAt(m.req, d, target)) { ok = false; break; }
+      place(m.req, d, target);
+    }
+    if (ok) {
+      compactCost(uni);
+      let coreAfter = 0;
+      for (const m of saved) {
+        const pr = m.req.placedRef;
+        coreAfter += coreCostAt(m.req, pr.d, pr.startIdx);
+      }
+      if (_lastGap > gapBefore || coreAfter >= coreBefore) ok = false;
+    }
+    if (!ok) {
+      for (const m of saved) { const cur = m.req.placedRef; if (cur && cur.active) unplace(cur); }
+      for (const m of saved) place(m.req, d, m.fromI);
+      return false;
+    }
+    return true;
+  }
+
+  // Zanjirli chapga surish: oddiy fan kundan olib tashlanadi, undan keyingi
+  // barcha darslar bittadan chapga suriladi (asosiylar erta soatlarga tushadi),
+  // olib tashlangan dars esa bo'shagan oxirgi o'ringa yoki boshqa mos katakka
+  // qo'yiladi. Barcha bandliklar tekshiriladi; muvaffaqiyatsiz bo'lsa —
+  // hammasi to'liq orqaga qaytariladi (rollback).
+  function tryCoreShift(list, x, d) {
+    const a = list[x];
+    const ra = a.req;
+    if (!a.active || ra.placedRef !== a || !ra.domain) return false;
+    if (ra.blockSize !== 1) return false;
+    for (let y = x + 1; y < list.length; y++) {
+      const p = list[y];
+      if (p.req.blockSize !== 1) return false;
+      if (!p.active || p.req.placedRef !== p || !p.req.domain) return false;
+    }
+    const reqs = [ra];
+    for (let y = x + 1; y < list.length; y++) reqs.push(list[y].req);
+    let uni = [];
+    for (const r of reqs) uni = unionIdx(uni, r.cIdxs);
+    const costBefore = compactCost(uni)
+      + repeatCostAt(ra, a.d, a.d) + spacedCostAt(ra, a.d, a.d);
+    const gapBefore = _lastGap;
+    let coreBefore = coreCostAt(ra, a.d, a.startIdx);
+    for (let y = x + 1; y < list.length; y++) {
+      coreBefore += coreCostAt(list[y].req, list[y].d, list[y].startIdx);
+    }
+    const moves = reqs.map((r) => ({ req: r, fromD: r.placedRef.d, fromI: r.placedRef.startIdx }));
+    const undo = () => {
+      for (const m of moves) { const cur = m.req.placedRef; if (cur && cur.active) unplace(cur); }
+      for (const m of moves) { place(m.req, m.fromD, m.fromI); }
+    };
+    unplace(a);
+    let ok = true;
+    let hole = moves[0].fromI;
+    for (let y = 1; y < moves.length; y++) {
+      const r = moves[y].req;
+      const from = moves[y].fromI;
+      if (!inDomain(r, d, hole)) { ok = false; break; }
+      unplace(r.placedRef);
+      if (!fitsAt(r, d, hole)) { ok = false; break; }
+      place(r, d, hole);
+      hole = from;
+    }
+    if (ok) {
+      // a uchun yangi o'rin: avval shu kunning bo'shagan oxiri, keyin boshqalar
+      const cands = [...ra.domain].sort((c1, c2) => {
+        const s1 = (c1.d === d ? 0 : 1) * 1000 + c1.i;
+        const s2 = (c2.d === d ? 0 : 1) * 1000 + c2.i;
+        return s1 - s2;
+      });
+      let placedA = false;
+      for (const cand of cands) {
+        if (!fitsAt(ra, cand.d, cand.i)) continue;
+        place(ra, cand.d, cand.i);
+        const costAfter = compactCost(uni)
+          + repeatCostAt(ra, cand.d, cand.d) + spacedCostAt(ra, cand.d, cand.d);
+        const gapAfter = _lastGap;
+        let coreAfter = coreCostAt(ra, cand.d, cand.i);
+        for (let y = 1; y < moves.length; y++) {
+          const pr = moves[y].req.placedRef;
+          coreAfter += coreCostAt(moves[y].req, pr.d, pr.startIdx);
+        }
+        if (gapAfter <= gapBefore && costAfter <= costBefore + BAL_W && coreAfter < coreBefore) {
+          placedA = true;
+          break;
+        }
+        unplace(ra.placedRef);
+      }
+      if (!placedA) ok = false;
+    }
+    if (!ok) { undo(); return false; }
+    return true;
+  }
+
+  function coreOrderPass(budgetMs) {
+    const stop = Date.now() + Math.max(150, budgetMs);
+    let total = 0;
+    for (let round = 0; round < 8; round++) {
+      if (Date.now() > stop) break;
+      let swapped = 0;
+      for (let ci = 0; ci < C; ci++) {
+        for (let d = 0; d < D; d++) {
+          if (Date.now() > stop) break;
+          let guard = 0;
+          let again = true;
+          while (again && guard < 10) {
+            guard += 1;
+            again = false;
+            // Shu sinf-kun darslari, soat tartibida
+            const list = [];
+            for (const p of placements) {
+              if (!p.active || p.locked || p.d !== d) continue;
+              if (p.req.placedRef !== p) continue;
+              if (!p.req.cIdxs.includes(ci)) continue;
+              list.push(p);
+            }
+            list.sort((a, b) => a.startIdx - b.startIdx);
+            outer:
+            for (let x = 0; x < list.length; x++) {
+              const a = list[x];
+              if (a.req.isCore) continue;
+              let coreLater = false;
+              for (let y = x + 1; y < list.length; y++) {
+                if (list[y].req.isCore) { coreLater = true; break; }
+              }
+              if (!coreLater) continue;
+              // 1-strategiya: juft almashtirish; 2-strategiya: evict
+              for (let y = x + 1; y < list.length; y++) {
+                const b = list[y];
+                if (!b.req.isCore) continue;
+                if (tryCoreSwap(a, b) || tryCoreEvict(a, b) || tryChainSlotSwap(a, b)) {
+                  swapped += 1;
+                  total += 1;
+                  again = true;
+                  break outer;
+                }
+              }
+              // 3-strategiya: zanjirli chapga surish
+              if (tryCoreShift(list, x, d)) {
+                swapped += 1;
+                total += 1;
+                again = true;
+                break outer;
+              }
+            }
+          }
+        }
+      }
+      if (!swapped) break;
+    }
+    return total;
   }
 
   function classDeviation(ci) {
@@ -1575,6 +1953,15 @@ function attemptSchedule(
     }
     // Yakuniy zichlash — oyna qolmasligi kafolatlanadi
     compactPass(Math.max(400, left()));
+    // ——— YAKUNIY QADAM: asosiy fanlar kun boshiga (1–3 soatlarga) tartiblanadi ———
+    // Zichlash bilan navbatlashtiriladi: har tartiblashdan keyin kichik zichlash
+    // yangi imkoniyatlar ochadi, so'ng tartiblash yana urinadi.
+    for (let k = 0; k < 3; k++) {
+      const moved = coreOrderPass(Math.max(250, left()));
+      if (!moved) break;
+      compactPass(Math.max(150, Math.min(step, left())));
+    }
+    coreOrderPass(Math.max(250, left()));
   }
 
   let soft = 0;
@@ -1669,7 +2056,8 @@ function buildValidationReport(ctx) {
 // darslar kun boshiga tortiladi, oynalar yopiladi, yuk kunlar bo'yicha tenglashadi.
 // Hech qanday dars o'chmaydi va yangi dars qo'shilmaydi — faqat o'rni almashadi.
 // Qo'lda qo'yilgan (manual) darslar joyidan qimirlamaydi.
-// classSubjects ixtiyoriy — berilsa, "ora kunda" fanlarining kun oralig'i saqlanadi.
+// classSubjects ixtiyoriy — berilsa, "ora kunda" fanlarining kun oralig'i saqlanadi
+// va "asosiy fan"lar kun boshidagi (1–3) soatlarga tartiblanadi.
 export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], schedule = {}, classSubjects = {}) {
   const D = DAYS.length;
   const allTs = [...timeslots].sort((a, b) => Number(a.lessonNumber) - Number(b.lessonNumber));
@@ -1685,11 +2073,13 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
     nextConsecutive[i] = allIdxById.get(teachingTs[i + 1].id) === allIdxById.get(teachingTs[i].id) + 1;
   }
 
-  // "Ora kunda" yoqilgan sinf+fan juftliklari
+  // "Ora kunda" va "Asosiy fan" yoqilgan sinf+fan juftliklari
   const spacedSet = new Set();
+  const coreSet = new Set();
   Object.entries(classSubjects || {}).forEach(([cid, list]) => {
     (Array.isArray(list) ? list : []).forEach((a) => {
       if (a && a.spacedDays && a.subjectId) spacedSet.add(`${cid}|${a.subjectId}`);
+      if (a && a.isCore && a.subjectId) coreSet.add(`${cid}|${a.subjectId}`);
     });
   });
 
@@ -1707,6 +2097,21 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
       });
     });
   });
+
+  // Soat o'rni (rank): sinf-kun ichida nechanchi dars ekani.
+  // 2-smena sinflari uchun rank o'z smenasi boshidan sanaladi.
+  const slotRank = new Int16Array(C * DT).fill(-1);
+  for (let ci = 0; ci < C; ci++) {
+    for (let d = 0; d < D; d++) {
+      const base = ci * DT + d * T;
+      let r = 0;
+      for (let k = 0; k < T; k++) {
+        if (blocked[base + k]) continue;
+        slotRank[base + k] = r;
+        r += 1;
+      }
+    }
+  }
 
   // ——— Darslarni "birlik"larga ajratamiz ———
   const units = [];
@@ -1757,10 +2162,12 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
         const rSet = new Set();
         let locked = false;
         let spaced = false;
+        let core = false;
         for (const l of entries) {
           classIdsOf(l).forEach((cid) => {
             cSet.add(cid);
             if (spacedSet.has(`${cid}|${l.subjectId}`)) spaced = true;
+            if (coreSet.has(`${cid}|${l.subjectId}`)) core = true;
           });
           if (l.teacherId) tSet.add(l.teacherId);
           if (l.altTeacherId) tSet.add(l.altTeacherId);
@@ -1770,7 +2177,7 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
         const cIdxs = [...cSet].map((cid) => cIdxOf.get(cid)).filter((x) => x !== undefined);
         if (!cIdxs.length) locked = true;
         units.push({
-          d, i, len, locked, entries, spaced,
+          d, i, len, locked, entries, spaced, core,
           parts: parts.map((x) => x.entries),
           cIdxs, tids: [...tSet], rids: [...rSet],
           subjectId: entries[0]?.subjectId || "",
@@ -1837,6 +2244,7 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
   const BAL_W = 900;
   const REPEAT_W = 45;
   const SPACED_W = 600;
+  const CORE_W = 220;
 
   // Kunlik me'yor: sinfning haftalik soati ish kunlariga teng bo'linadi
   // (24 soat / 6 kun => kuniga aynan 4 ta).
@@ -1909,8 +2317,21 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
     }
     return c;
   };
+  // Asosiy fan: kech soatlarga surilmasin; oddiy fan 1–3 soatlarni band qilmasin
+  const coreAt = (u, d, i) => {
+    let c = 0;
+    for (const ci of u.cIdxs) {
+      const r = slotRank[ci * DT + d * T + i];
+      if (r < 0) continue;
+      if (u.core) c += r * CORE_W;
+      else if (r < 3) c += (3 - r) * 30;
+    }
+    return c;
+  };
 
-  const movable = units.filter((u) => !u.locked && u.domain.length > 1);
+  const movableAll = units.filter((u) => !u.locked && u.domain.length > 1);
+  // Avval ASOSIY fanlar ko'chiriladi — erta bo'sh joylarni ular egallasin
+  const movable = [...movableAll.filter((u) => u.core), ...movableAll.filter((u) => !u.core)];
   const stop = Date.now() + 2500;
   for (let round = 0; round < 12 && Date.now() < stop; round++) {
     let moved = 0;
@@ -1918,7 +2339,7 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
       if (Date.now() > stop) break;
       const oldD = u.d;
       const oldI = u.i;
-      const base = costOf(u.cIdxs) + repeatAt(u, oldD, oldD) + spacedAt(u, oldD, oldD);
+      const base = costOf(u.cIdxs) + repeatAt(u, oldD, oldD) + spacedAt(u, oldD, oldD) + coreAt(u, oldD, oldI);
       const baseGap = _gap;
       setBits(u, oldD, oldI, 0);
       let bd = -1;
@@ -1929,7 +2350,7 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
         if (cand.d === oldD && cand.i === oldI) continue;
         if (!fits(u, cand.d, cand.i)) continue;
         setBits(u, cand.d, cand.i, 1);
-        const c = costOf(u.cIdxs) + repeatAt(u, cand.d, oldD) + spacedAt(u, cand.d, oldD);
+        const c = costOf(u.cIdxs) + repeatAt(u, cand.d, oldD) + spacedAt(u, cand.d, oldD) + coreAt(u, cand.d, cand.i);
         const g = _gap;
         setBits(u, cand.d, cand.i, 0);
         if (g < bg || (g === bg && c < bc)) { bg = g; bc = c; bd = cand.d; bi = cand.i; }
@@ -1946,6 +2367,124 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
       }
     }
     if (!moved) break;
+  }
+
+  // ——— ASOSIY FANLAR TARTIBI (pufakcha almashtirish) ———
+  // Bitta sinf-kunda oddiy fan oldinroq, asosiy fan keyinroq tursa — ikkalasi
+  // o'rin almashtiriladi. Barcha cheklovlar tekshiriladi va oynalar ko'paymaydi.
+  const unionArr = (a, b) => {
+    const seen = new Set(a);
+    const res = [...a];
+    for (const x of b) if (!seen.has(x)) { seen.add(x); res.push(x); }
+    return res;
+  };
+  const coreStop = Date.now() + 900;
+  for (let round = 0; round < 8 && Date.now() < coreStop; round++) {
+    let swapped = 0;
+    for (let ci = 0; ci < C; ci++) {
+      for (let d = 0; d < D; d++) {
+        if (Date.now() > coreStop) break;
+        let guard = 0;
+        let again = true;
+        while (again && guard < 10) {
+          guard += 1;
+          again = false;
+          const list = units
+            .filter((u) => !u.locked && u.d === d && u.cIdxs.includes(ci))
+            .sort((a, b) => a.i - b.i);
+          outer:
+          for (let x = 0; x < list.length; x++) {
+            const a = list[x];
+            if (a.core) continue;
+            for (let y = x + 1; y < list.length; y++) {
+              const b = list[y];
+              if (!b.core || a.len !== b.len) continue;
+              const uni = unionArr(a.cIdxs, b.cIdxs);
+              costOf(uni);
+              const gap0 = _gap;
+              const ad = a.d, ai = a.i, bd2 = b.d, bi2 = b.i;
+              setBits(a, ad, ai, 0);
+              setBits(b, bd2, bi2, 0);
+              let ok = false;
+              if (fits(a, bd2, bi2)) {
+                setBits(a, bd2, bi2, 1);
+                if (fits(b, ad, ai)) {
+                  setBits(b, ad, ai, 1);
+                  costOf(uni);
+                  ok = _gap <= gap0;
+                  if (!ok) {
+                    setBits(b, ad, ai, 0);
+                    setBits(a, bd2, bi2, 0);
+                  }
+                } else {
+                  setBits(a, bd2, bi2, 0);
+                }
+              }
+              if (ok) {
+                bumpSubj(a, ad, -1);
+                bumpSubj(a, bd2, +1);
+                bumpSubj(b, bd2, -1);
+                bumpSubj(b, ad, +1);
+                a.d = bd2;
+                a.i = bi2;
+                b.d = ad;
+                b.i = ai;
+                swapped += 1;
+                again = true;
+                break outer;
+              }
+              setBits(a, ad, ai, 1);
+              setBits(b, bd2, bi2, 1);
+              // Swap imkonsiz — oddiy fanni boshqa katakka (boshqa kunga ham)
+              // ko'chirib (evict), asosiy fanni bo'shagan erta o'ringa qo'yamiz.
+              // Shartlar: barcha bandliklar bajarilsin, oynalar ko'paymasin,
+              // balans chetlanishi ko'pi bilan bitta pog'ona (BAL_W) yomonlashsin.
+              const evBefore = costOf(uni) + repeatAt(a, ad, ad) + spacedAt(a, ad, ad);
+              const evGap = _gap;
+              let evicted = false;
+              for (const cand of a.domain) {
+                if (cand.d === ad && cand.i === ai) continue;
+                setBits(a, ad, ai, 0);
+                setBits(b, bd2, bi2, 0);
+                let ok2 = false;
+                if (fits(b, ad, ai)) {
+                  setBits(b, ad, ai, 1);
+                  if (fits(a, cand.d, cand.i)) {
+                    setBits(a, cand.d, cand.i, 1);
+                    const evAfter = costOf(uni) + repeatAt(a, cand.d, ad) + spacedAt(a, cand.d, ad);
+                    ok2 = _gap <= evGap && evAfter <= evBefore + BAL_W;
+                    if (!ok2) {
+                      setBits(a, cand.d, cand.i, 0);
+                      setBits(b, ad, ai, 0);
+                    }
+                  } else {
+                    setBits(b, ad, ai, 0);
+                  }
+                }
+                if (ok2) {
+                  bumpSubj(a, ad, -1);
+                  bumpSubj(a, cand.d, +1);
+                  a.d = cand.d;
+                  a.i = cand.i;
+                  b.d = ad;
+                  b.i = ai;
+                  evicted = true;
+                  break;
+                }
+                setBits(a, ad, ai, 1);
+                setBits(b, bd2, bi2, 1);
+              }
+              if (evicted) {
+                swapped += 1;
+                again = true;
+                break outer;
+              }
+            }
+          }
+        }
+      }
+    }
+    if (!swapped) break;
   }
 
   // ——— Yangi jadvalni yig'amiz ———
@@ -1996,7 +2535,11 @@ export function generateSchedule(...args) {
     const improved = !best || res.placed > best.placed;
     if (!best || res.placed > best.placed || (res.placed === best.placed && res.soft < best.soft)) best = res;
     noImprove = improved ? 0 : noImprove + 1;
-    if (res.attempted > 0 && res.placed >= res.attempted && res.report?.remainingTotal === 0) break;
+    // Mukammal natija ham tez chiqqan bo'lsa — yana bitta urinish qilinadi,
+    // ikkisidan soft (jumladan, asosiy fan tartibi) yaxshirog'i tanlanadi.
+    if (res.attempted > 0 && res.placed >= res.attempted && res.report?.remainingTotal === 0) {
+      if (attempt >= 2 || Date.now() - start > TIME_BUDGET_MS * 0.45) break;
+    }
     if (res.attempted === 0) break;
   }
   if (best) {

@@ -1175,37 +1175,42 @@ export default function SchedulePage({
 
       <div className="sch-toolbar card">
         <style>{`
-          .sch-toolbar{padding:14px 16px;border-radius:18px;margin-bottom:16px;}
+          .sch-toolbar{padding:16px 18px;border-radius:20px;margin-bottom:16px;border:1px solid rgba(226,232,240,.9);box-shadow:0 10px 34px rgba(15,23,42,.07);}
           .pretty-alt-sep{opacity:.72;font-weight:600;}
           .pretty-alt-chip{margin-top:5px;font-size:11px;font-weight:700;color:#7c3aed;background:rgba(124,58,237,.1);border:1px solid rgba(124,58,237,.25);border-radius:7px;padding:3px 8px;display:inline-block;line-height:1.3;}
           [data-theme="dark"] .pretty-alt-chip{color:#c4b5fd;background:rgba(124,58,237,.2);}
-          .sch-toolbar-row{display:flex;align-items:stretch;gap:12px;flex-wrap:wrap;}
+          .sch-toolbar-row{display:flex;align-items:stretch;gap:14px;flex-wrap:wrap;}
           .sch-field{display:flex;flex-direction:column;gap:6px;}
-          .sch-field-label{font-size:12px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;color:var(--text-muted,#94a3b8);padding-left:2px;}
-          .sch-select-wrap{position:relative;display:flex;align-items:center;height:46px;min-width:250px;background:var(--card-bg,#fff);border:1.5px solid var(--card-border,#e2e8f0);border-radius:13px;transition:border-color .18s, box-shadow .18s;}
+          .sch-field-label{font-size:11.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--text-muted,#94a3b8);padding-left:2px;}
+          .sch-select-wrap{position:relative;display:flex;align-items:center;height:46px;min-width:250px;background:var(--card-bg,#fff);border:1.5px solid var(--card-border,#e2e8f0);border-radius:14px;transition:border-color .18s, box-shadow .18s;}
           .sch-select-wrap:hover{border-color:rgba(99,102,241,.55);}
           .sch-select-wrap:focus-within{border-color:#6366f1;box-shadow:0 0 0 4px rgba(99,102,241,.14);}
           .sch-select-wrap .sch-select-icon{position:absolute;left:13px;font-size:17px;pointer-events:none;}
           .sch-select-wrap select{appearance:none;-webkit-appearance:none;width:100%;height:100%;border:none;outline:none;background:transparent;font-size:15px;font-weight:700;color:var(--text-primary,#1e293b);padding:0 38px 0 40px;cursor:pointer;}
           .sch-select-wrap::after{content:"";position:absolute;right:15px;width:9px;height:9px;border-right:2.5px solid var(--text-muted,#94a3b8);border-bottom:2.5px solid var(--text-muted,#94a3b8);transform:rotate(45deg) translateY(-2px);pointer-events:none;}
-          .sch-segment{display:flex;align-items:center;height:46px;padding:4px;gap:4px;background:var(--bg-secondary,#f1f5f9);border:1.5px solid var(--card-border,#e2e8f0);border-radius:13px;}
-          .sch-segment button{height:100%;border:none;border-radius:10px;padding:0 16px;font-size:13.5px;font-weight:700;background:transparent;color:var(--text-secondary,#64748b);cursor:pointer;transition:all .18s;white-space:nowrap;}
+          .sch-segment{display:flex;align-items:center;height:46px;padding:4px;gap:4px;background:var(--bg-secondary,#f1f5f9);border:1.5px solid var(--card-border,#e2e8f0);border-radius:14px;}
+          .sch-segment button{height:100%;border:none;border-radius:11px;padding:0 16px;font-size:13.5px;font-weight:700;background:transparent;color:var(--text-secondary,#64748b);cursor:pointer;transition:all .18s;white-space:nowrap;}
           .sch-segment button:hover{color:var(--text-primary,#1e293b);}
           .sch-segment button.active{background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;box-shadow:0 4px 12px rgba(99,102,241,.35);}
-          .sch-actions{display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap;margin-left:auto;}
-          .sch-btn{display:inline-flex;align-items:center;gap:7px;height:46px;padding:0 18px;border-radius:13px;border:1.5px solid transparent;font-size:14px;font-weight:700;cursor:pointer;transition:transform .15s, box-shadow .15s, filter .15s;white-space:nowrap;}
-          .sch-btn:hover{transform:translateY(-1px);filter:brightness(1.05);}
-          .sch-btn:active{transform:translateY(0);}
-          .sch-btn:disabled{opacity:.6;cursor:not-allowed;transform:none;}
-          .sch-btn-hero{background:linear-gradient(135deg,#16a34a,#059669);color:#fff;box-shadow:0 6px 16px rgba(22,163,74,.32);}
-          .sch-btn-soft-green{background:rgba(22,163,74,.10);border-color:rgba(22,163,74,.28);color:#15803d;}
-          .sch-btn-soft-blue{background:rgba(37,99,235,.10);border-color:rgba(37,99,235,.28);color:#1d4ed8;}
-          .sch-btn-soft-gray{background:var(--bg-secondary,#f1f5f9);border-color:var(--card-border,#e2e8f0);color:var(--text-secondary,#475569);}
-          .sch-btn-soft-red{background:rgba(220,38,38,.08);border-color:rgba(220,38,38,.28);color:#dc2626;}
-          .sch-btn-soft-red:hover{background:rgba(220,38,38,.14);}
-          [data-theme="dark"] .sch-btn-soft-green{color:#4ade80;}
-          [data-theme="dark"] .sch-btn-soft-blue{color:#93c5fd;}
-          [data-theme="dark"] .sch-btn-soft-red{color:#fca5a5;}
+          .sch-actions{display:flex;align-items:flex-end;gap:9px;flex-wrap:wrap;margin-left:auto;}
+          .sch-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:46px;padding:0 19px;border-radius:14px;border:1.5px solid transparent;font-size:14px;font-weight:750;font-family:inherit;cursor:pointer;transition:transform .18s ease, box-shadow .18s ease, background .18s ease, border-color .18s ease;white-space:nowrap;}
+          .sch-btn:hover{transform:translateY(-2px);}
+          .sch-btn:active{transform:translateY(0) scale(.98);}
+          .sch-btn:disabled{opacity:.6;cursor:not-allowed;transform:none;box-shadow:none;}
+          .sch-btn-hero{background:linear-gradient(135deg,#10b981 0%,#059669 55%,#047857 100%);color:#fff;box-shadow:0 8px 20px rgba(5,150,105,.32), inset 0 1px 0 rgba(255,255,255,.28);}
+          .sch-btn-hero:hover{box-shadow:0 12px 28px rgba(5,150,105,.42), inset 0 1px 0 rgba(255,255,255,.28);}
+          .sch-btn-soft-green{background:var(--card-bg,#fff);border-color:rgba(22,163,74,.3);color:#15803d;box-shadow:0 2px 8px rgba(15,23,42,.05);}
+          .sch-btn-soft-green:hover{background:rgba(22,163,74,.08);border-color:rgba(22,163,74,.5);box-shadow:0 8px 18px rgba(22,163,74,.16);}
+          .sch-btn-soft-blue{background:var(--card-bg,#fff);border-color:rgba(37,99,235,.3);color:#1d4ed8;box-shadow:0 2px 8px rgba(15,23,42,.05);}
+          .sch-btn-soft-blue:hover{background:rgba(37,99,235,.08);border-color:rgba(37,99,235,.5);box-shadow:0 8px 18px rgba(37,99,235,.16);}
+          .sch-btn-soft-gray{background:var(--card-bg,#fff);border-color:var(--card-border,#e2e8f0);color:var(--text-secondary,#475569);box-shadow:0 2px 8px rgba(15,23,42,.05);}
+          .sch-btn-soft-gray:hover{background:var(--bg-secondary,#f1f5f9);border-color:#c7d2e2;box-shadow:0 8px 18px rgba(15,23,42,.10);}
+          .sch-btn-soft-red{background:var(--card-bg,#fff);border-color:rgba(220,38,38,.3);color:#dc2626;box-shadow:0 2px 8px rgba(15,23,42,.05);}
+          .sch-btn-soft-red:hover{background:rgba(220,38,38,.08);border-color:rgba(220,38,38,.5);box-shadow:0 8px 18px rgba(220,38,38,.16);}
+          [data-theme="dark"] .sch-btn-soft-green{background:transparent;color:#4ade80;}
+          [data-theme="dark"] .sch-btn-soft-blue{background:transparent;color:#93c5fd;}
+          [data-theme="dark"] .sch-btn-soft-gray{background:transparent;}
+          [data-theme="dark"] .sch-btn-soft-red{background:transparent;color:#fca5a5;}
           @media (max-width: 900px){
             .sch-actions{margin-left:0;width:100%;}
             .sch-btn{flex:1;justify-content:center;padding:0 12px;}
@@ -1260,7 +1265,6 @@ export default function SchedulePage({
               </button>
             )}
             <button className="sch-btn sch-btn-soft-green" onClick={exportExcel} type="button">📥 Excel</button>
-            <button className="sch-btn sch-btn-soft-blue" onClick={() => window.print()} type="button">📄 PDF</button>
             <button className="sch-btn sch-btn-soft-gray" onClick={() => window.print()} type="button">🖨 Chop etish</button>
             {setSchedule && <button className="sch-btn sch-btn-soft-red" onClick={handleClear} type="button">🗑 Tozalash</button>}
           </div>

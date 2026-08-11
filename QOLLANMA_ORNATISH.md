@@ -1,4 +1,4 @@
-# EDUJADVAL — TO'LIQ O'RNATISH QO'LLANMASI
+# smartjadval — TO'LIQ O'RNATISH QO'LLANMASI
 
 Bu zip ichida BARCHA o'zgarishlar jamlangan:
 - Domen sozlamalari (base '/', CNAME, SEO)
@@ -29,11 +29,11 @@ Bu zip ichida BARCHA o'zgarishlar jamlangan:
 3. Saytdan chiqib, qayta kiring
 
 ### 4. Demo hisob
-1. Saytda demo@edujadval.uz bilan ro'yxatdan o'ting
+1. Saytda demo@smartjadval.uz bilan ro'yxatdan o'ting
 2. SQL:
 
    update public.profiles set sub_status = 'active', sub_expires_at = null
-   where email = 'demo@edujadval.uz';
+   where email = 'demo@smartjadval.uz';
 
 ### 5. Sinov
 - Incognito'da test-mijoz oching

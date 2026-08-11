@@ -181,7 +181,7 @@ export default function App() {
       let loadedSchedule = loadUserData(currentUser.id, "schedule", {});
 
       // Demo foydalanuvchida ma'lumot bo'lmasa, platforma to'ldirilgan holda ochiladi.
-      if (currentUser.email === "demo@edujadval.uz" && !loadedClasses.length) {
+      if (currentUser.email === "demo@smartjadval.uz" && !loadedClasses.length) {
         const demo = buildDemoSchoolData();
         loadedSettings = demo.settings;
         loadedClasses = demo.classes;
@@ -239,7 +239,7 @@ export default function App() {
   // ——— BULUTGA YUBORISH (debounce bilan) ———
   useEffect(() => {
     if (!userId || !dataReady || isDistrictAdmin) return;
-    if (currentUser?.email === "demo@edujadval.uz") return; // demo bulutga yozilmaydi
+    if (currentUser?.email === "demo@smartjadval.uz") return; // demo bulutga yozilmaydi
     schedulePush(userId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [

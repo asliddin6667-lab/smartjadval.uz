@@ -1,5 +1,5 @@
 // =====================================================================
-//  EDUJADVAL — districtExcelService.js
+//  smartjadval — districtExcelService.js
 //
 //  Tuman admini yuklagan Excel ma'lumotlari (ustozlar, soat setkasi,
 //  dars jadvali) uchun Supabase CRUD.

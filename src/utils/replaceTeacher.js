@@ -1,15 +1,24 @@
 import { DAYS } from "./constants";
 
 // =====================================================================
-//  EDUJADVAL — O'QITUVCHINI ALMASHTIRISH (minimal-buzilish qayta rejalash)
+//  smartjadval — O'QITUVCHINI ALMASHTIRISH (bo'sh katak qoldirmaydigan usul)
 //
 //  Maqsad: ketgan o'qituvchining darslarini yangi o'qituvchiga o'tkazish,
-//  BUTUN JADVALNI QAYTA TUZMASDAN. Har bir dars uchun eng kam siljish
-//  qidiriladi:
-//    1-daraja (0 siljish): yangi ustoz o'sha joyda bo'sh → faqat nom almashadi
-//    2-daraja (1 siljish): band → o'sha darsni yangi ustoz bo'sh joyiga surish
-//    3-daraja (2 siljish): u ham band → bitta to'siq darsni chetga surib joy ochish
-//  Boshqa ustoz/sinflar jadvaliga faqat 3-darajada, majburiyatдан tegiladi.
+//  BUTUN JADVALNI QAYTA TUZMASDAN va sinf jadvalida BO'SH KATAK
+//  QOLDIRMASDAN. Har bir dars uchun:
+//
+//    1-daraja (joyida): yangi ustoz o'sha soatda bo'sh → faqat nom almashadi.
+//       Hech narsa surilmaydi, katak o'z joyida qoladi.
+//
+//    2-daraja (SWAP / o'rin almashuv): yangi ustoz o'sha soatda band →
+//       dars bo'sh joyga KO'CHIRILMAYDI (bu eski katakni bo'sh qoldirar edi).
+//       Buning o'rniga o'sha sinfning BOSHQA DARSI bilan o'rin almashtiriladi:
+//         - maqsad dars yangi ustoz bo'sh bo'lgan soatga o'tadi,
+//         - u yerdagi dars (boshqa ustozniki) esa bo'shagan katakka keladi.
+//       Natijada ikkala katak ham to'la qoladi — jadvalda teshik yo'q.
+//
+//    Ikkalasi ham iloji bo'lmasa — dars eski ustoz nomida joyida qoladi va
+//    ogohlantirish beriladi (jadval buzilmaydi, katak bo'shamaydi).
 //
 //  Tashqi API: mavjud `schedule` obyektini oladi, o'zgartirilgan nusxa va
 //  o'zgarishlar jurnalini qaytaradi. scheduleGenerator formatiga to'liq mos.
@@ -32,6 +41,13 @@ function getTeacherSubjectIds(teacher) {
     : teacher.subjectId
     ? [teacher.subjectId]
     : [];
+}
+
+// Ikki sinf ro'yxati bir xil to'plammi (guruh darslari buzilmasligi uchun)
+function sameClassSet(a, b) {
+  if (a.length !== b.length) return false;
+  const s = new Set(a);
+  return b.every((x) => s.has(x));
 }
 
 // schedule ni chuqur nusxalash (asl jadval buzilmasin)
@@ -73,8 +89,8 @@ export function replaceTeacher({
 }) {
   const result = {
     schedule: cloneSchedule(schedule),
-    changes: [],       // [{classId, subjectId, kind, from, to}]
-    movedOthers: [],   // 3-darajada surilgan boshqa darslar
+    changes: [],       // [{classIds, subjectId, kind: "inPlace"|"swapped", from, to}]
+    movedOthers: [],   // swap sherigi — eski katakka kelgan boshqa ustoz darslari
     failed: [],        // ko'chirib bo'lmagan darslar
     summary: null,
   };
@@ -104,24 +120,22 @@ export function replaceTeacher({
   const T = teachingTs.length;
   const teachIdxById = new Map(teachingTs.map((ts, i) => [ts.id, i]));
 
-  // yonma-yon slotlarmi (blok darslar uzilmasligi uchun)
-  const allIdxById = new Map(allSortedTs.map((ts, i) => [ts.id, i]));
-  const nextConsecutive = new Array(Math.max(0, T - 1)).fill(false);
-  for (let i = 0; i < T - 1; i++) {
-    nextConsecutive[i] =
-      allIdxById.get(teachingTs[i + 1].id) === allIdxById.get(teachingTs[i].id) + 1;
-  }
-
   const newTeacherSubjects = new Set(getTeacherSubjectIds(newTeacher));
   const newTeacherMax = Number(newTeacher.maxWeeklyHours || 40);
   const newTeacherOff = new Set(Array.isArray(newTeacher.offDays) ? newTeacher.offDays : []);
+
+  const teacherById = new Map(teachers.map((t) => [t.id, t]));
+  function teacherOffDays(tid) {
+    const t = teacherById.get(tid);
+    return new Set(Array.isArray(t?.offDays) ? t.offDays : []);
+  }
 
   const classOff = {};
   classes.forEach((c) => {
     classOff[c.id] = new Set(Array.isArray(c.offDays) ? c.offDays : []);
   });
 
-  // ——— Obed bloklangan slotlar: `${day}|${classId}|${tsId}` ———
+  // ——— Obed bloklangan slotlar ———
   function classHasLunchAt(ts, classId, day) {
     return (lunchGroups || []).some((group) => {
       const cids = Array.isArray(group.classIds) ? group.classIds : [];
@@ -139,11 +153,10 @@ export function replaceTeacher({
   }
 
   // ——— Joriy bandlik holatini jadvaldan qurish ———
-  // occTeacher/occRoom/occClass: `${day}|${tsId}` → Set(id)
   const occTeacher = new Map();
   const occRoom = new Map();
   const occClass = new Map();
-  const teacherWeekLoad = new Map(); // teacherId → jami soat
+  const teacherWeekLoad = new Map();
 
   function grab(map, key) {
     let s = map.get(key);
@@ -167,7 +180,6 @@ export function replaceTeacher({
   }
 
   // ——— Ketgan ustozning ko'chiriladigan darslarini yig'ish ———
-  // Har biri: { day, tsId, lesson, classIds, subjectId }
   const targets = [];
   const onlySet = onlyClassSubjectIds
     ? new Set(onlyClassSubjectIds.map((x) => `${x.classId}__${x.subjectId}`))
@@ -178,7 +190,6 @@ export function replaceTeacher({
       const cell = sch[day]?.[ts.id] || [];
       for (const l of cell) {
         if (l.teacherId !== oldTeacherId) continue;
-        // faqat tanlangan sinf/fanlar (agar berilgan bo'lsa)
         if (onlySet) {
           const match = classIdsOf(l).some((cid) => onlySet.has(`${cid}__${l.subjectId}`));
           if (!match) continue;
@@ -192,13 +203,11 @@ export function replaceTeacher({
     result.summary = {
       ok: true,
       message: "Ketgan o'qituvchining ko'chiriladigan darsi topilmadi",
-      totalLessons: 0, inPlace: 0, moved: 0, ejected: 0, failed: 0,
+      totalLessons: 0, inPlace: 0, swapped: 0, failed: 0,
     };
     return result;
   }
 
-  // Yangi ustoz bu fanlarni o'qiy oladimi — ogohlantirish (bloklamaymiz,
-  // lekin xabar beramiz)
   const subjectsCovered = new Set(targets.map((t) => t.subjectId));
   const uncoveredSubjects = [...subjectsCovered].filter((sid) => !newTeacherSubjects.has(sid));
 
@@ -213,80 +222,53 @@ export function replaceTeacher({
     return false;
   }
 
-  // Yangi ustoz shu (day, tsId) da band emasmi + dam kuni emasmi
-  function newTeacherFree(day, tsId, ignoreLesson = null) {
-    if (newTeacherOff.has(day)) return false;
-    const key = `${day}|${tsId}`;
-    const set = occTeacher.get(key);
-    if (!set) return true;
-    if (!set.has(newTeacherId)) return true;
-    // agar band bo'lsa, ehtimol o'sha bandlik aynan biz ko'chirayotgan
-    // darsdan (ignoreLesson) — bunda hisobga olmaymiz
-    if (ignoreLesson) {
-      const cell = sch[day]?.[tsId] || [];
-      const others = cell.filter(
-        (l) => l !== ignoreLesson && l.teacherId === newTeacherId
-      );
-      return others.length === 0;
-    }
-    return false;
+  // Hujayra bo'yicha aniq tekshiruvlar (ignore — hisobga olinmaydigan darslar)
+  function teacherFreeInCell(day, tsId, teacherId, ignore = []) {
+    if (!teacherId) return true;
+    const cell = sch[day]?.[tsId] || [];
+    return !cell.some((l) => !ignore.includes(l) && l.teacherId === teacherId);
+  }
+  function roomFreeInCell(day, tsId, roomId, ignore = []) {
+    if (!roomId) return true;
+    const cell = sch[day]?.[tsId] || [];
+    return !cell.some((l) => !ignore.includes(l) && l.roomId === roomId);
+  }
+  function classesFreeInCell(day, tsId, classIds, ignore = []) {
+    const cell = sch[day]?.[tsId] || [];
+    return !cell.some(
+      (l) => !ignore.includes(l) && classIdsOf(l).some((cid) => classIds.includes(cid))
+    );
   }
 
-  // Berilgan darsni (uning sinflari va xonasi bilan) shu (day, tsId) ga
-  // yangi ustoz bilan qo'yish mumkinmi (sinf/xona/ustoz bandligi)
-  function canPlaceHere(day, tsId, classIds, roomId, ignoreLesson = null) {
+  // 1-daraja: shu joyning o'zida yangi ustoz bilan qoldirish mumkinmi
+  function canStayInPlace(day, tsId, classIds, roomId, lesson) {
+    if (newTeacherOff.has(day)) return false;
     if (slotBlockedForClasses(day, tsId, classIds)) return false;
-    if (!newTeacherFree(day, tsId, ignoreLesson)) return false;
-    const key = `${day}|${tsId}`;
-    // sinf band emasmi (ignoreLesson dan tashqari)
-    const cSet = occClass.get(key);
-    if (cSet) {
-      for (const cid of classIds) {
-        if (cSet.has(cid)) {
-          // shu sinf bandligi ignoreLesson dan bo'lishi mumkin
-          const cell = sch[day]?.[tsId] || [];
-          const other = cell.some(
-            (l) => l !== ignoreLesson && classIdsOf(l).includes(cid)
-          );
-          if (other) return false;
-        }
-      }
-    }
-    // xona band emasmi
-    if (roomId) {
-      const rSet = occRoom.get(key);
-      if (rSet && rSet.has(roomId)) {
-        const cell = sch[day]?.[tsId] || [];
-        const other = cell.some((l) => l !== ignoreLesson && l.roomId === roomId);
-        if (other) return false;
-      }
-    }
+    if (!teacherFreeInCell(day, tsId, newTeacherId, [lesson])) return false;
+    if (!classesFreeInCell(day, tsId, classIds, [lesson])) return false;
+    if (!roomFreeInCell(day, tsId, roomId, [lesson])) return false;
     return true;
   }
 
-  // Bandlik indekslaridan darsni olib tashlash
+  // Bandlik indekslaridan darsni olib tashlash (cell'dan detach qilishdan OLDIN chaqiriladi)
   function removeFromOcc(day, tsId, lesson) {
     const key = `${day}|${tsId}`;
+    const cell = sch[day]?.[tsId] || [];
     if (lesson.teacherId) {
-      // faqat shu hujayrada boshqa dars shu ustozni ishlatmasa Set'dan olamiz
-      const cell = sch[day]?.[tsId] || [];
       const stillTeacher = cell.some((l) => l !== lesson && l.teacherId === lesson.teacherId);
       if (!stillTeacher) occTeacher.get(key)?.delete(lesson.teacherId);
       teacherWeekLoad.set(lesson.teacherId, Math.max(0, (teacherWeekLoad.get(lesson.teacherId) || 0) - 1));
     }
     if (lesson.roomId) {
-      const cell = sch[day]?.[tsId] || [];
       const stillRoom = cell.some((l) => l !== lesson && l.roomId === lesson.roomId);
       if (!stillRoom) occRoom.get(key)?.delete(lesson.roomId);
     }
     classIdsOf(lesson).forEach((cid) => {
-      const cell = sch[day]?.[tsId] || [];
       const stillClass = cell.some((l) => l !== lesson && classIdsOf(l).includes(cid));
       if (!stillClass) occClass.get(key)?.delete(cid);
     });
   }
 
-  // Bandlik indekslariga dars qo'shish
   function addToOcc(day, tsId, lesson) {
     const key = `${day}|${tsId}`;
     if (lesson.teacherId) {
@@ -297,7 +279,6 @@ export function replaceTeacher({
     classIdsOf(lesson).forEach((cid) => grab(occClass, key).add(cid));
   }
 
-  // Darsni jadval hujayrasidan olib tashlash (obyekt havolasi bo'yicha)
   function detachLesson(day, tsId, lesson) {
     const cell = sch[day]?.[tsId];
     if (!cell) return;
@@ -305,32 +286,75 @@ export function replaceTeacher({
     if (idx >= 0) cell.splice(idx, 1);
   }
 
-  // Darsni jadval hujayrasiga qo'yish
   function attachLesson(day, tsId, lesson) {
     if (!sch[day]) sch[day] = {};
     if (!sch[day][tsId]) sch[day][tsId] = [];
     sch[day][tsId].push(lesson);
   }
 
-  // Yangi ustozning haftalik limiti oshmaydimi (ketgan ustoz o'rniga
-  // kelayotgani uchun, ketganning yuki chiqarilgan bo'ladi)
   function newLoadOk(extra = 1) {
     return (teacherWeekLoad.get(newTeacherId) || 0) + extra <= newTeacherMax;
   }
 
-  // ——— Har bir maqsad darsni ko'chirish ———
-  let inPlace = 0, moved = 0, ejected = 0;
+  // ——— 2-daraja: SWAP sherigini qidirish ———
+  // Sinfning boshqa (boshqa ustozdagi) darsini topamiz:
+  //   maqsad dars → sherik turgan joyga (yangi ustoz u yerda bo'sh),
+  //   sherik dars → maqsadning eski katagiga (sherik ustozi u yerda bo'sh).
+  // Ikkala katak ham to'la qoladi — jadvalda teshik yo'q.
+  function findSwapPartner(origDay, origTsId, lesson, classIds, roomId) {
+    const origDayIdx = DAYS.indexOf(origDay);
+    // Avval o'sha kun, keyin yaqin kunlar (kun ichidagi tuzilma saqlansin)
+    const dayOrder = [...DAYS].sort((a, b) => (
+      Math.abs(DAYS.indexOf(a) - origDayIdx) - Math.abs(DAYS.indexOf(b) - origDayIdx)
+    ));
+
+    for (const day2 of dayOrder) {
+      if (newTeacherOff.has(day2)) continue;
+      for (let i = 0; i < T; i++) {
+        const ts2 = teachingTs[i];
+        if (day2 === origDay && ts2.id === origTsId) continue;
+        if (slotBlockedForClasses(day2, ts2.id, classIds)) continue;
+
+        const cell = sch[day2]?.[ts2.id] || [];
+        for (const partner of cell) {
+          if (partner === lesson) continue;
+          // ketgan ustozning boshqa darsi bilan almashish ma'nosiz (u ham ko'chadi)
+          if (partner.teacherId === oldTeacherId) continue;
+          // guruh darslari buzilmasligi uchun sinf to'plami aynan bir xil bo'lsin
+          const pClasses = classIdsOf(partner);
+          if (!sameClassSet(pClasses, classIds)) continue;
+
+          // — Maqsad dars sherik joyiga sig'adimi (sherik ketadi deb hisoblaymiz) —
+          if (!teacherFreeInCell(day2, ts2.id, newTeacherId, [partner])) continue;
+          if (!classesFreeInCell(day2, ts2.id, classIds, [partner])) continue;
+          if (!roomFreeInCell(day2, ts2.id, roomId, [partner])) continue;
+          if (!newLoadOk(1)) continue;
+
+          // — Sherik dars eski katakka sig'adimi (maqsad ketadi deb hisoblaymiz) —
+          const pOff = teacherOffDays(partner.teacherId);
+          if (pOff.has(origDay)) continue;
+          if (!teacherFreeInCell(origDay, origTsId, partner.teacherId, [lesson])) continue;
+          if (!classesFreeInCell(origDay, origTsId, pClasses, [lesson])) continue;
+          if (!roomFreeInCell(origDay, origTsId, partner.roomId || "", [lesson])) continue;
+
+          return { partner, day: day2, tsId: ts2.id };
+        }
+      }
+    }
+    return null;
+  }
+
+  // ——— Har bir maqsad darsni qayta ishlash ———
+  let inPlace = 0, swapped = 0;
 
   for (const target of targets) {
     const { day, tsId, lesson } = target;
     const classIds = classIdsOf(lesson);
     const roomId = lesson.roomId || "";
 
-    // Avval bu darsni eski ustoz bandligidan chiqaramiz (o'zi ko'chadi)
-    removeFromOcc(day, tsId, lesson);
-
     // === 1-DARAJA: o'z joyida qoldirish (faqat ustoz nomi almashadi) ===
-    if (canPlaceHere(day, tsId, classIds, roomId, lesson) && newLoadOk(1)) {
+    if (canStayInPlace(day, tsId, classIds, roomId, lesson) && newLoadOk(1)) {
+      removeFromOcc(day, tsId, lesson);
       lesson.teacherId = newTeacherId;
       addToOcc(day, tsId, lesson);
       inPlace += 1;
@@ -341,175 +365,55 @@ export function replaceTeacher({
       continue;
     }
 
-    // === 2-DARAJA: shu darsni yangi ustoz bo'sh bo'lgan boshqa joyga surish ===
-    // Eng kam "begonalik": o'sha kunni afzal ko'ramiz, keyin qo'shni kunlar
-    const candidate = findBestFreeSlot(day, tsId, classIds, roomId, lesson);
-    if (candidate) {
-      detachLesson(day, tsId, lesson);
-      lesson.teacherId = newTeacherId;
-      attachLesson(candidate.day, candidate.tsId, lesson);
-      addToOcc(candidate.day, candidate.tsId, lesson);
-      moved += 1;
-      result.changes.push({
-        classIds, subjectId: lesson.subjectId, kind: "moved",
-        from: { day, tsId }, to: { day: candidate.day, tsId: candidate.tsId },
-      });
-      continue;
-    }
+    // === 2-DARAJA: sinfning boshqa darsi bilan O'RIN ALMASHUV (swap) ===
+    const swap = findSwapPartner(day, tsId, lesson, classIds, roomId);
+    if (swap) {
+      const { partner, day: d2, tsId: t2 } = swap;
 
-    // === 3-DARAJA: bitta to'siq darsni chetga surib, joy ochish (ejection) ===
-    const ejectPlan = tryEject(day, tsId, classIds, roomId, lesson);
-    if (ejectPlan) {
-      // to'siqni ko'chiramiz
-      const { blocker, blockerTo, targetDay, targetTsId } = ejectPlan;
-      // blocker'ni eski joyidan olib, yangi joyiga
-      removeFromOcc(blocker.day, blocker.tsId, blocker.lesson);
-      detachLesson(blocker.day, blocker.tsId, blocker.lesson);
-      attachLesson(blockerTo.day, blockerTo.tsId, blocker.lesson);
-      addToOcc(blockerTo.day, blockerTo.tsId, blocker.lesson);
+      // Ikkala darsni ham indekslardan va kataklardan chiqaramiz
+      removeFromOcc(day, tsId, lesson);
+      removeFromOcc(d2, t2, partner);
+      detachLesson(day, tsId, lesson);
+      detachLesson(d2, t2, partner);
+
+      // Maqsad dars → sherik joyiga, yangi ustoz bilan
+      lesson.teacherId = newTeacherId;
+      attachLesson(d2, t2, lesson);
+      addToOcc(d2, t2, lesson);
+
+      // Sherik dars → bo'shagan eski katakka (teshik yopiladi)
+      attachLesson(day, tsId, partner);
+      addToOcc(day, tsId, partner);
+
+      swapped += 1;
+      result.changes.push({
+        classIds, subjectId: lesson.subjectId, kind: "swapped",
+        from: { day, tsId }, to: { day: d2, tsId: t2 },
+      });
       result.movedOthers.push({
-        teacherId: blocker.lesson.teacherId,
-        classIds: classIdsOf(blocker.lesson),
-        subjectId: blocker.lesson.subjectId,
-        from: { day: blocker.day, tsId: blocker.tsId },
-        to: { day: blockerTo.day, tsId: blockerTo.tsId },
-      });
-      // endi maqsad darsni ochilgan joyga
-      detachLesson(day, tsId, lesson);
-      lesson.teacherId = newTeacherId;
-      attachLesson(targetDay, targetTsId, lesson);
-      addToOcc(targetDay, targetTsId, lesson);
-      ejected += 1;
-      result.changes.push({
-        classIds, subjectId: lesson.subjectId, kind: "ejected",
-        from: { day, tsId }, to: { day: targetDay, tsId: targetTsId },
+        teacherId: partner.teacherId,
+        classIds: classIdsOf(partner),
+        subjectId: partner.subjectId,
+        from: { day: d2, tsId: t2 },
+        to: { day, tsId },
       });
       continue;
     }
 
-    // === Ko'chirib bo'lmadi ===
-    // darsni eski holicha qaytaramiz (ustoz hali ham eski — ogohlantirish beriladi)
-    addToOcc(day, tsId, lesson);
+    // === Iloji bo'lmadi ===
+    // Dars joyida, eski ustoz nomida qoladi — katak bo'shamaydi, jadval buzilmaydi
     result.failed.push({
       classIds, subjectId: lesson.subjectId, at: { day, tsId },
     });
-  }
-
-  // ——— 2-daraja qidiruv: eng yaqin bo'sh joy ———
-  function findBestFreeSlot(origDay, origTsId, classIds, roomId, ignoreLesson) {
-    const origDayIdx = DAYS.indexOf(origDay);
-    // kunlarni "yaqinlik" bo'yicha tartiblaymiz (avval o'sha kun, keyin qo'shnilar)
-    const dayOrder = [...DAYS].sort((a, b) => {
-      return Math.abs(DAYS.indexOf(a) - origDayIdx) - Math.abs(DAYS.indexOf(b) - origDayIdx);
-    });
-    for (const day of dayOrder) {
-      for (let i = 0; i < T; i++) {
-        const ts = teachingTs[i];
-        if (day === origDay && ts.id === origTsId) continue; // o'sha joy allaqachon sinaldi
-        if (canPlaceHere(day, ts.id, classIds, roomId, ignoreLesson) && newLoadOk(1)) {
-          return { day, tsId: ts.id };
-        }
-      }
-    }
-    return null;
-  }
-
-  // ——— 3-daraja: to'siqni surib, joy ochish ———
-  // Maqsad darsni qo'yish uchun bitta band slotни tanlaymiz, undagi
-  // to'siq darsni (boshqa ustozniki) boshqa bo'sh joyga suramiz.
-  function tryEject(origDay, origTsId, classIds, roomId, ignoreLesson) {
-    const origDayIdx = DAYS.indexOf(origDay);
-    const dayOrder = [...DAYS].sort((a, b) => {
-      return Math.abs(DAYS.indexOf(a) - origDayIdx) - Math.abs(DAYS.indexOf(b) - origDayIdx);
-    });
-
-    for (const day of dayOrder) {
-      if (newTeacherOff.has(day)) continue;
-      for (let i = 0; i < T; i++) {
-        const ts = teachingTs[i];
-        // bu joy sinf/obed jihatidan mumkinmi (faqat to'siq ustoz/xonани e'tiborsiz)
-        if (slotBlockedForClasses(day, ts.id, classIds)) continue;
-        if (!newTeacherFree(day, ts.id, ignoreLesson)) continue;
-
-        // shu joyda maqsad sinflarni band qilayotgan bitta dars bormi?
-        const cell = sch[day]?.[ts.id] || [];
-        const conflicting = cell.filter(
-          (l) => l !== ignoreLesson &&
-            (classIdsOf(l).some((cid) => classIds.includes(cid)) ||
-              (roomId && l.roomId === roomId))
-        );
-        // faqat bitta to'siq bo'lsa ko'chirishga arziydi (minimal buzilish)
-        if (conflicting.length !== 1) continue;
-        const blocker = conflicting[0];
-        // ketgan ustozning boshqa darsini emas, mustaqil darsni suramiz
-        if (blocker.teacherId === oldTeacherId) continue;
-
-        // bu to'siqni boshqa bo'sh joyga ko'chira olamizmi?
-        const blockerClassIds = classIdsOf(blocker);
-        const blockerTeacher = teachers.find((t) => t.id === blocker.teacherId);
-        const blockerOff = new Set(Array.isArray(blockerTeacher?.offDays) ? blockerTeacher.offDays : []);
-
-        const spot = findFreeSlotForBlocker(blocker, blockerClassIds, blockerOff, day, ts.id);
-        if (spot) {
-          return {
-            blocker: { lesson: blocker, day, tsId: ts.id },
-            blockerTo: spot,
-            targetDay: day,
-            targetTsId: ts.id,
-          };
-        }
-      }
-    }
-    return null;
-  }
-
-  // to'siq dars uchun bo'sh joy (uning o'z ustozi/sinfi/xonasi bandligiga qarab)
-  function findFreeSlotForBlocker(blocker, blockerClassIds, blockerOff, avoidDay, avoidTsId) {
-    const roomId = blocker.roomId || "";
-    const teacherId = blocker.teacherId;
-    for (const day of DAYS) {
-      if (blockerOff.has(day)) continue;
-      for (let i = 0; i < T; i++) {
-        const ts = teachingTs[i];
-        if (day === avoidDay && ts.id === avoidTsId) continue;
-        if (slotBlockedForClasses(day, ts.id, blockerClassIds)) continue;
-        const key = `${day}|${ts.id}`;
-        // ustoz band emasmi
-        if (teacherId && occTeacher.get(key)?.has(teacherId)) {
-          const cell = sch[day]?.[ts.id] || [];
-          if (cell.some((l) => l !== blocker && l.teacherId === teacherId)) continue;
-        }
-        // sinf band emasmi
-        let classBusy = false;
-        const cSet = occClass.get(key);
-        if (cSet) {
-          for (const cid of blockerClassIds) {
-            if (cSet.has(cid)) {
-              const cell = sch[day]?.[ts.id] || [];
-              if (cell.some((l) => l !== blocker && classIdsOf(l).includes(cid))) { classBusy = true; break; }
-            }
-          }
-        }
-        if (classBusy) continue;
-        // xona band emasmi
-        if (roomId && occRoom.get(key)?.has(roomId)) {
-          const cell = sch[day]?.[ts.id] || [];
-          if (cell.some((l) => l !== blocker && l.roomId === roomId)) continue;
-        }
-        return { day, tsId: ts.id };
-      }
-    }
-    return null;
   }
 
   result.summary = {
     ok: result.failed.length === 0,
     totalLessons: targets.length,
     inPlace,
-    moved,
-    ejected,
+    swapped,
     failed: result.failed.length,
-    uncoveredSubjects, // yangi ustoz biriktirilmagan fanlar (ogohlantirish)
+    uncoveredSubjects,
     oldTeacherName: oldTeacher?.name || oldTeacherId,
     newTeacherName: newTeacher?.name || newTeacherId,
   };

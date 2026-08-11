@@ -1,4 +1,4 @@
-# Edujadval v1.12 — Parallel darslar
+# smartjadval v1.12 — Parallel darslar
 
 Qo'shildi:
 

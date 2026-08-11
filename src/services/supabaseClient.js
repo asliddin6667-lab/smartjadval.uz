@@ -1,5 +1,5 @@
 // ============================================================
-// EDUJADVAL.UZ — Supabase klienti (sozlangan)
+// smartjadval.UZ — Supabase klienti (sozlangan)
 // ============================================================
 import { createClient } from '@supabase/supabase-js';
 
@@ -22,7 +22,7 @@ export const SUPABASE_FN_URL = SUPABASE_URL + '/functions/v1';
 export const ANON_KEY = SUPABASE_ANON_KEY;
 
 // Parol tiklash havolasi qaytadigan manzil.
-// GitHub Pages'da BASE_URL = '/edujadval/', domen ulangach '/' —
+// GitHub Pages'da BASE_URL = '/smartjadval/', domen ulangach '/' —
 // avtomatik moslashadi, qo'lda o'zgartirish shart emas.
 export function getResetRedirectUrl() {
   return window.location.origin + import.meta.env.BASE_URL + '?mode=reset';

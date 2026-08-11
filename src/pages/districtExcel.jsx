@@ -1133,7 +1133,7 @@ export function exportSchoolExcel(schoolName, data, opts = {}) {
   const declaredLabel = opts.declaredLabel || "Excel soati";
   const wb = XS.utils.book_new();
   const name = String(schoolName || "Maktab");
-  const stamp = `Edujadval · Tuman hisoboti · ${todayStr()}`;
+  const stamp = `smartjadval · Tuman hisoboti · ${todayStr()}`;
   let sheets = 0;
 
   // ---------- 1-varaq: Dars jadvali ----------
@@ -1321,7 +1321,7 @@ export function ReportsPage({ schools }) {
   // Tuman kesimidagi jamlanma hisobot — rangli, stilli Excel
   function exportReport() {
     const wb = XS.utils.book_new();
-    const stamp = `Edujadval · Tuman jamlanma hisoboti · ${todayStr()}`;
+    const stamp = `smartjadval · Tuman jamlanma hisoboti · ${todayStr()}`;
 
     const body1 = agg.perSchool.map((r) => [
       r.name, r.teachers, r.classes, r.hours, r.jadvalRows,

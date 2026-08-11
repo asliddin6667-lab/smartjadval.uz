@@ -1,5 +1,5 @@
 // =====================================================================
-//  EDUJADVAL.UZ — TUMAN (DISTRICT) XIZMATI
+//  smartjadval.UZ — TUMAN (DISTRICT) XIZMATI
 //
 //  - Superadmin: tuman yaratish/o'chirish, foydalanuvchini tumanga
 //    biriktirish

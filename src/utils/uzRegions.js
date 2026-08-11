@@ -1,5 +1,5 @@
 // =====================================================================
-//  EDUJADVAL.UZ — O'ZBEKISTON VILOYATLARI VA TUMANLARI
+//  smartjadval.UZ — O'ZBEKISTON VILOYATLARI VA TUMANLARI
 //
 //  Ro'yxatdan o'tishda foydalanuvchi tanlaydi, superadmin esa shu
 //  ro'yxatdan tuman yaratib, tuman adminiga biriktiradi.

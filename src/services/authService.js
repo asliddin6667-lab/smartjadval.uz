@@ -1,5 +1,5 @@
 // =====================================================================
-//  EDUJADVAL.UZ — Auth xizmati (Supabase Auth + profiles jadvali)
+//  smartjadval.UZ — Auth xizmati (Supabase Auth + profiles jadvali)
 //
 //  O'ZGARISHLAR:
 //  - QURILMA CHEKLOVI OLIB TASHLANDI. Foydalanuvchi istalgan

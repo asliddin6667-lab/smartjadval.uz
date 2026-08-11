@@ -1,4 +1,4 @@
-# Edujadval v2.1 — To'liq tekshirilgan paket
+# smartjadval v2.1 — To'liq tekshirilgan paket
 
 ## Ishga tushirish
 
@@ -12,11 +12,11 @@ Brauzerda terminalda chiqqan manzilni oching: `http://localhost:5173/` yoki `htt
 ## Demo login
 
 Super Admin:
-- admin@edujadval.uz
+- admin@smartjadval.uz
 - admin12345
 
 Demo maktab:
-- demo@edujadval.uz
+- demo@smartjadval.uz
 - demo12345
 
 ## Tuzatilganlar

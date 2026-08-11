@@ -285,6 +285,323 @@ export function checkSwap(ctx, src, dst, partner) {
   return { ok: !aErrs.length && !bErrs.length, aErrs, bErrs };
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// SMART MINIMAL SWAP
+// Foydalanuvchi tanlagan A ↔ B almashinuvi MAJBURIY saqlanadi.
+// To'siq darslar minimal cost bilan zanjirli ko'chiriladi (chuqurlik ≤ 5),
+// affected sinf-kunlarda YANGI bo'sh soat paydo bo'lmaydi, locked darsga
+// tegilmaydi. Qidiruv vaqtinchalik nusxada (applyActions — pure) boradi,
+// original jadval o'zgarmaydi — ALL OR NOTHING.
+// Cost: qo'shimcha dars = +10, boshqa kunga = +20, shu kun ichida = +5,
+// yangi ustoz jadvali = +5, yangi sinf = +10. Hard constraint = INVALID.
+// ═══════════════════════════════════════════════════════════════════
+const SMART_MAX_DEPTH = 5;
+const SMART_MAX_STATES = 600;
+const SMART_CANDS = 8;
+
+let smartUidSeq = 1;
+const smartUidMap = new WeakMap();
+function smartUid(lesson) {
+  if (!smartUidMap.has(lesson)) smartUidMap.set(lesson, smartUidSeq++);
+  return smartUidMap.get(lesson);
+}
+
+function teachingSorted(ctx) {
+  return [...(ctx.timeslots || [])]
+    .filter(isTeachingSlot)
+    .sort((a, b) => Number(a.lessonNumber || 0) - Number(b.lessonNumber || 0));
+}
+
+// Sinf-kun "oyna" bahosi: bosh bo'shliq + ichki bo'shliqlar soni.
+// 0 = darslar 1-ruxsat etilgan slotdan boshlab uzluksiz.
+function classGapScore(ctx, sch, classId, day) {
+  const cls = (ctx.classes || []).find((c) => c.id === classId);
+  if (Array.isArray(cls?.offDays) && cls.offDays.includes(day)) return 0;
+  const slots = teachingSorted(ctx).filter(
+    (s) => slotAllowsClass(s, classId) && !classHasLunchAt(s, classId, ctx.lunchGroups, day)
+  );
+  const busy = [];
+  slots.forEach((s, i) => {
+    const cell = sch?.[day]?.[s.id] || [];
+    if (cell.some((l) => classIdsOf(l).includes(classId))) busy.push(i);
+  });
+  if (!busy.length) return 0;
+  const first = busy[0];
+  const last = busy[busy.length - 1];
+  return first + (last - first + 1 - busy.length);
+}
+
+function movesToActions(moves) {
+  return moves.map((m) => ({
+    entries: m.unit.entries, fromDay: m.fromDay, fromSlotId: m.fromSlotId, toDay: m.toDay, toSlotId: m.toSlotId,
+  }));
+}
+
+// Spec bo'yicha cost modeli
+function smartCost(src, partner, moves) {
+  const affT = new Set([...src.unit.teacherIds, ...(partner ? partner.teacherIds : [])]);
+  const affC = new Set([...src.unit.classIds, ...(partner ? partner.classIds : [])]);
+  let cost = 0;
+  moves.forEach((m) => {
+    cost += 10;
+    cost += m.fromDay === m.toDay ? 5 : 20;
+    if (m.unit.teacherIds.some((t) => !affT.has(t))) cost += 5;
+    m.unit.teacherIds.forEach((t) => affT.add(t));
+    m.unit.classIds.forEach((c) => {
+      if (!affC.has(c)) { cost += 10; affC.add(c); }
+    });
+  });
+  return cost;
+}
+
+function smartStateHash(moves) {
+  return moves
+    .map((m) => `${smartUid(m.unit.entries[0])}@${m.toDay}#${m.toSlotId}`)
+    .sort()
+    .join("|");
+}
+
+// Unit hozir temp jadvalning qayerida turibdi (entries identity bo'yicha)
+function findUnitLocation(sch, unit) {
+  const probe = unit.entries[0];
+  for (const day of DAYS) {
+    const dayObj = sch?.[day] || {};
+    for (const sid of Object.keys(dayObj)) {
+      if ((dayObj[sid] || []).includes(probe)) return { day, slotId: sid };
+    }
+  }
+  return null;
+}
+
+// Joylashtirilgan birliklar bilan to'qnashayotgan kartalar (unique)
+function smartConflicts(tempCtx, placedUnits) {
+  const found = [];
+  const seen = new Set();
+  for (const p of placedUnits) {
+    const slot = (tempCtx.timeslots || []).find((s) => s.id === p.slotId);
+    if (!slot) continue;
+    const cards = conflictingCards(tempCtx, p.unit, p.day, slot, new Set());
+    for (const c of cards) {
+      const k = smartUid(c.entries[0]);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      found.push(c);
+    }
+  }
+  return found;
+}
+
+// Nomzod slotlar: avval shu kun (eng yaqin soat), keyin boshqa kunlar
+function smartCandidates(tempCtx, fromDay, fromSlotId) {
+  const ts = teachingSorted(tempCtx);
+  const fromNum = Number((tempCtx.timeslots || []).find((s) => s.id === fromSlotId)?.lessonNumber || 0);
+  const dayIdx = DAYS.indexOf(fromDay);
+  const list = [];
+  DAYS.forEach((day, di) => {
+    ts.forEach((slot) => {
+      if (day === fromDay && slot.id === fromSlotId) return;
+      list.push({
+        day, slot,
+        w: Math.abs(di - dayIdx) * 100 + Math.abs(Number(slot.lessonNumber || 0) - fromNum),
+      });
+    });
+  });
+  list.sort((a, b) => a.w - b.w);
+  return list;
+}
+
+// Bitta sinf-kundagi birinchi bo'shliqni keyingi darsni oldinga tortib yopish
+function smartPullForward(tempCtx, tempSch, classId, day, fixedUids) {
+  const slots = teachingSorted(tempCtx).filter(
+    (s) => slotAllowsClass(s, classId) && !classHasLunchAt(s, classId, tempCtx.lunchGroups, day)
+  );
+  const busy = slots.map((s) => ({
+    slot: s,
+    cell: (tempSch?.[day]?.[s.id] || []).filter((l) => classIdsOf(l).includes(classId)),
+  }));
+  let gapIdx = -1;
+  for (let i = 0; i < busy.length; i++) {
+    const laterBusy = busy.slice(i + 1).some((b) => b.cell.length);
+    if (!busy[i].cell.length && laterBusy) { gapIdx = i; break; }
+  }
+  if (gapIdx === -1) return null;
+  const target = busy[gapIdx].slot;
+  for (let j = gapIdx + 1; j < busy.length; j++) {
+    if (!busy[j].cell.length) continue;
+    const head = busy[j].cell[0];
+    const unit = unitOf(collectCardEntries(tempSch?.[day]?.[busy[j].slot.id] || [], head));
+    if (!unit.entries.length || unit.locked) continue;
+    if (fixedUids.has(smartUid(unit.entries[0]))) continue; // A/B joyidan qimirlamaydi
+    const errs = checkPlace(tempCtx, unit, day, target, new Set());
+    if (errs.length) continue;
+    return { unit, fromDay: day, fromSlotId: busy[j].slot.id, toDay: day, toSlotId: target.id };
+  }
+  return null;
+}
+
+// Ta'sirlangan barcha sinf-kunlarda oyna qolmaguncha ta'mirlash.
+// Yopib bo'lmasa — variant INVALID (null).
+function smartRepairGaps(ctx, baseActions, moves, fixedUids, origGapOf) {
+  const all = [...moves];
+  for (let guard = 0; guard < 24; guard++) {
+    const tempSch = applyActions(ctx.schedule, [...baseActions, ...movesToActions(all)]);
+    const tempCtx = { ...ctx, schedule: tempSch };
+
+    const pairs = new Set();
+    [...baseActions, ...movesToActions(all)].forEach((a) => {
+      const cids = new Set();
+      a.entries.forEach((l) => classIdsOf(l).forEach((c) => cids.add(c)));
+      cids.forEach((c) => { pairs.add(`${c}\u0001${a.fromDay}`); pairs.add(`${c}\u0001${a.toDay}`); });
+    });
+
+    let bad = null;
+    for (const key of pairs) {
+      const [cid, day] = key.split("\u0001");
+      if (classGapScore(ctx, tempSch, cid, day) > origGapOf(cid, day)) { bad = { cid, day }; break; }
+    }
+    if (!bad) return all;
+
+    const fix = smartPullForward(tempCtx, tempSch, bad.cid, bad.day, fixedUids);
+    if (!fix) return null;
+    all.push(fix);
+  }
+  return null;
+}
+
+// Asosiy qidiruv: best-first, visited-state, ALL OR NOTHING.
+// src = { day, slotId, unit }, dst = { day, slotId }, partner — dst dagi karta.
+// Natija: suggestion obyekti yoki null.
+function smartPlanCore(ctx, src, dst, partner) {
+  const dstTs = (ctx.timeslots || []).find((s) => s.id === dst.slotId);
+  const srcTs = (ctx.timeslots || []).find((s) => s.id === src.slotId);
+  if (!dstTs || !srcTs) return null;
+  if (!isTeachingSlot(dstTs) || !isTeachingSlot(srcTs)) return null;
+
+  // Bandlikdan BOSHQA xato bo'lsa (smena, dam kuni, obed) — yechim yo'q
+  const aHard = checkPlace(ctx, src.unit, dst.day, dstTs, partner ? new Set(partner.entries) : new Set())
+    .filter((e) => !BUSY_CODES.includes(e.code));
+  if (aHard.length) return null;
+  if (partner) {
+    const bHard = checkPlace(ctx, partner, src.day, srcTs, new Set(src.unit.entries))
+      .filter((e) => !BUSY_CODES.includes(e.code));
+    if (bHard.length) return null;
+  }
+
+  // PRIMARY — o'zgarmas harakat(lar): A → dst, sherik bo'lsa B → src
+  const baseActions = [
+    { entries: src.unit.entries, fromDay: src.day, fromSlotId: src.slotId, toDay: dst.day, toSlotId: dst.slotId },
+  ];
+  if (partner) {
+    baseActions.push(
+      { entries: partner.entries, fromDay: dst.day, fromSlotId: dst.slotId, toDay: src.day, toSlotId: src.slotId }
+    );
+  }
+  const fixedUids = new Set([smartUid(src.unit.entries[0])]);
+  if (partner) fixedUids.add(smartUid(partner.entries[0]));
+
+  const origGapCache = new Map();
+  const origGapOf = (cid, day) => {
+    const k = `${cid}\u0001${day}`;
+    if (!origGapCache.has(k)) origGapCache.set(k, classGapScore(ctx, ctx.schedule, cid, day));
+    return origGapCache.get(k);
+  };
+
+  const visited = new Set();
+  let states = 0;
+  let best = null;
+  const queue = [{ moves: [], cost: 0 }];
+
+  while (queue.length && states < SMART_MAX_STATES) {
+    queue.sort((a, b) => a.cost - b.cost);
+    const node = queue.shift();
+    states += 1;
+    if (best && node.cost >= best.cost) break; // qolganlari baribir qimmatroq
+
+    const tempSch = applyActions(ctx.schedule, [...baseActions, ...movesToActions(node.moves)]);
+    const tempCtx = { ...ctx, schedule: tempSch };
+
+    const placed = [
+      { unit: src.unit, day: dst.day, slotId: dst.slotId },
+      ...(partner ? [{ unit: partner, day: src.day, slotId: src.slotId }] : []),
+      ...node.moves.map((m) => ({ unit: m.unit, day: m.toDay, slotId: m.toSlotId })),
+    ];
+    const movedUids = new Set(node.moves.map((m) => smartUid(m.unit.entries[0])));
+    const conflicts = smartConflicts(tempCtx, placed);
+
+    if (!conflicts.length) {
+      // Konfliktsiz holat — endi oynalarni ta'mirlaymiz (temp ustida)
+      const repaired = smartRepairGaps(ctx, baseActions, node.moves, fixedUids, origGapOf);
+      if (repaired) {
+        const cost = smartCost(src, partner, repaired);
+        if (!best || cost < best.cost) best = { moves: repaired, cost };
+        if (best.cost === 0) break;
+      }
+      continue;
+    }
+
+    if (node.moves.length >= SMART_MAX_DEPTH) continue;
+
+    const c = conflicts[0];
+    const cu = smartUid(c.entries[0]);
+    // Locked/swap-juft darsga tegilmaydi; A/B va allaqachon ko'chirilganlar qayta ko'chmaydi
+    if (c.locked || c.swap || fixedUids.has(cu) || movedUids.has(cu)) continue;
+
+    const loc = findUnitLocation(tempSch, c);
+    if (!loc) continue;
+
+    let added = 0;
+    for (const cand of smartCandidates(tempCtx, loc.day, loc.slotId)) {
+      if (added >= SMART_CANDS) break;
+      const errs = checkPlace(tempCtx, c, cand.day, cand.slot, new Set());
+      if (errs.length && !onlyBusyReasons(errs)) continue;            // hard xato — mumkin emas
+      if (errs.length && node.moves.length + 1 >= SMART_MAX_DEPTH) continue; // zanjirga chuqurlik qolmadi
+      const moves = [...node.moves, {
+        unit: c, fromDay: loc.day, fromSlotId: loc.slotId, toDay: cand.day, toSlotId: cand.slot.id,
+      }];
+      const h = smartStateHash(moves);
+      if (visited.has(h)) continue;
+      visited.add(h);
+      queue.push({ moves, cost: smartCost(src, partner, moves) + (errs.length ? 1 : 0) });
+      added += 1;
+    }
+  }
+
+  if (!best) return null;
+
+  const extra = best.moves;
+  const lines = extra.map((m) =>
+    `${unitLabel(ctx, m.unit)}: ${slotLabel(ctx, m.fromDay, m.fromSlotId)} → ${slotLabel(ctx, m.toDay, m.toSlotId)}`
+  );
+  const affC = new Set([...src.unit.classIds, ...(partner ? partner.classIds : [])]);
+  extra.forEach((m) => m.unit.classIds.forEach((cc) => affC.add(cc)));
+  const primaryCount = partner ? 2 : 1;
+  const head = partner
+    ? `⇄ Aynan joy almashtirish: ${unitLabel(ctx, src.unit)} (${slotLabel(ctx, src.day, src.slotId)}) ↔ ` +
+      `${unitLabel(ctx, partner)} (${slotLabel(ctx, dst.day, dst.slotId)})`
+    : `➜ Bu darsni ${slotLabel(ctx, dst.day, dst.slotId)} ga qo'yish (to'siqlar minimal suriladi)`;
+
+  return {
+    type: "smart",
+    changes: primaryCount + extra.length,
+    lockedInvolved: Boolean(src.unit.locked || (partner && partner.locked)),
+    label:
+      head +
+      (lines.length ? ` · Qo'shimcha minimal o'zgarishlar: ${lines.join("; ")}` : "") +
+      ` · Jami: ${primaryCount} ta asosiy + ${extra.length} ta qo'shimcha dars, ${affC.size} ta sinf, bo'sh soat qolmaydi`,
+    actions: [...baseActions, ...movesToActions(extra)],
+  };
+}
+
+// A ↔ B majburiy almashinuv (sherik bilan)
+export function smartSwapPlan(ctx, src, dst, partner) {
+  return partner ? smartPlanCore(ctx, src, dst, partner) : null;
+}
+
+// A → dst majburiy ko'chirish — to'siqlar (bir nechta bo'lsa ham) zanjirli suriladi
+export function smartMovePlan(ctx, src, dst) {
+  return smartPlanCore(ctx, src, dst, null);
+}
+
 // ═══ ASOSIY KIRISH NUQTASI ═══
 // src = { day, slotId, unit }
 // dst = { day, slotId, partnerUnit|null, autoSwap?: true }
@@ -334,9 +651,30 @@ export function resolveMove(ctx, src, dst) {
       };
     }
     const reasonObjs = [...aErrs, ...bErrs];
+    // SMART MINIMAL SWAP: A ↔ B majburiy — to'siqlar zanjirli surib yechiladi.
+    // Valid plan topilsa modal ko'rsatilmaydi — darhol qo'llanadi (ok: true).
+    const smart = smartSwapPlan(ctx, src, dst, partner);
+    if (smart) {
+      return {
+        ok: true, mode: "smart", auto, partner,
+        actions: smart.actions,
+        smart: { extra: smart.changes - 2, label: smart.label },
+      };
+    }
     return buildSuggestions(ctx, src, dst, reasonObjs.length ? reasonObjs : moveErrs);
   }
 
+  // SMART MINIMAL MOVE: sherik topilmasa ham (bir nechta to'siq — parallel
+  // darslar) A majburiy dst ga qo'yiladi, to'siqlar zanjirli suriladi.
+  // Valid plan topilsa modal ko'rsatilmaydi — darhol qo'llanadi (ok: true).
+  const smartM = smartMovePlan(ctx, src, dst);
+  if (smartM) {
+    return {
+      ok: true, mode: "smart", partner: null,
+      actions: smartM.actions,
+      smart: { extra: smartM.changes - 1, label: smartM.label },
+    };
+  }
   return buildSuggestions(ctx, src, dst, moveErrs);
 }
 
@@ -464,7 +802,7 @@ function buildSuggestions(ctx, src, dst, reasonObjs) {
   });
 
   // Tartib: avval foydalanuvchi mo'ljallagan katakni saqlaydigan yechimlar
-  const RANK = { swap: 0, rotate: 1, chain: 2, alt: 3 };
+  const RANK = { smart: 0, swap: 1, rotate: 2, chain: 3, alt: 4 };
   suggestions.sort((x, y) => {
     const r = (RANK[x.type] ?? 9) - (RANK[y.type] ?? 9);
     return r !== 0 ? r : x.changes - y.changes;

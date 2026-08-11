@@ -1,5 +1,5 @@
 // =====================================================================
-//  EDUJADVAL.UZ — BULUT SINXRONIZATSIYASI
+//  smartjadval.UZ — BULUT SINXRONIZATSIYASI
 //
 //  Vazifasi: maktab ma'lumotlarini (sinflar, o'qituvchilar, jadval...)
 //  Supabase'dagi `schools` jadvalida saqlash, shunda foydalanuvchi
@@ -51,7 +51,7 @@ const EMPTY = {
   schedule: {},
 };
 
-const DEMO_EMAIL = "demo@edujadval.uz";
+const DEMO_EMAIL = "demo@smartjadval.uz";
 
 // Qayta urinish sozlamalari
 const MAX_RETRY = 3;

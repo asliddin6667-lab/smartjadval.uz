@@ -1,4 +1,4 @@
-# Edujadval v1.13 — Chiroyli rangli dars jadvali
+# smartjadval v1.13 — Chiroyli rangli dars jadvali
 
 Qo'shildi:
 
@@ -21,6 +21,6 @@ npm.cmd run dev
 Agar eski ma'lumot localStorage'da qolgan bo'lsa, Console'da:
 
 ```js
-localStorage.removeItem("edujadval_auth_current_user");
+localStorage.removeItem("smartjadval_auth_current_user");
 location.reload();
 ```

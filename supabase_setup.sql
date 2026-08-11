@@ -1,5 +1,5 @@
 -- =====================================================================
---  EDUJADVAL.UZ — Supabase migratsiya skripti (hisoblar + obuna)
+--  smartjadval.UZ — Supabase migratsiya skripti (hisoblar + obuna)
 --  QAYERDA ISHGA TUSHIRILADI: Supabase Dashboard -> SQL Editor -> New query
 --  Butun faylni nusxalab, "Run" bosing. Bir marta ishga tushiriladi.
 -- =====================================================================
@@ -218,8 +218,8 @@ $$;
 --     update public.profiles set role = 'superadmin', sub_status = 'active'
 --     where email = 'SIZNING@EMAILINGIZ.uz';
 --
---     Demo hisob uchun (saytda demo@edujadval.uz ro'yxatdan o'tgach):
+--     Demo hisob uchun (saytda demo@smartjadval.uz ro'yxatdan o'tgach):
 --
 --     update public.profiles set sub_status = 'active', sub_expires_at = null
---     where email = 'demo@edujadval.uz';
+--     where email = 'demo@smartjadval.uz';
 -- =====================================================================

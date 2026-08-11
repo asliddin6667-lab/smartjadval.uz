@@ -207,11 +207,11 @@ export default function Sidebar({
 
         <img
           src={`${import.meta.env.BASE_URL}logo.png`}
-          alt="Edujadval.uz"
+          alt="smartjadval.uz"
           className="sidebar-brand-img"
           onError={(e) => { e.currentTarget.style.display = 'none'; }}
         />
-        <div className="sidebar-brand-fallback">Edujadval<span>.uz</span></div>
+        <div className="sidebar-brand-fallback">smartjadval<span>.uz</span></div>
         <div className="sidebar-school-name">
           {schoolName || currentUser?.schoolName || "Maktab platformasi"}
         </div>

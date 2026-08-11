@@ -1,5 +1,5 @@
 // ============================================================
-// EDUJADVAL.UZ — Qurilma qulflash UI komponentlari
+// smartjadval.UZ — Qurilma qulflash UI komponentlari
 // 1) <DevicePolicyNotice />  -> to'lov/obuna sahifasida ko'rsatiladi
 // 2) <DeviceLockedScreen />  -> boshqa qurilmadan kirganda ko'rsatiladi
 // ============================================================
