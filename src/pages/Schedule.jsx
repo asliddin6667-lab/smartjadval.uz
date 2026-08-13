@@ -77,6 +77,12 @@ function slotAllowsClass(slot, classId) {
   return ids.length === 0 || ids.includes(classId);
 }
 
+// Blok (2 soat) darsning bir bo'lagimi? Bunday darslar alohida ko'chirilmaydi —
+// aks holda blok ikkiga bo'linib qoladi.
+function isBlockPart(lesson) {
+  return Number(lesson?.blockSize || 1) > 1;
+}
+
 export default function SchedulePage({
   classes = [],
   subjects = [],
@@ -95,7 +101,7 @@ export default function SchedulePage({
   const [collapsed, setCollapsed] = useState({});
   const [manualCell, setManualCell] = useState(null); // { day, slotId, classId }
   const [manualForm, setManualForm] = useState({ subjectId: "", teacherId: "", roomId: "", altEnabled: false, altSubjectId: "", altTeacherId: "", lock: false });
-  const [resolveData, setResolveData] = useState(null); // { classId, subjectId, name, placements }
+  const [resolveData, setResolveData] = useState(null); // { classId, subjectId, name, placements, moves }
   const [moveData, setMoveData] = useState(null);       // MoveResolveModal ma'lumoti
   const [drag, setDrag] = useState(null);               // { day, slotId, classId, unit }
   const [picked, setPicked] = useState(null);           // bosib tanlangan dars
@@ -174,6 +180,7 @@ export default function SchedulePage({
     const isAlt = lesson.alternating && lesson.altSubjectId;
     const altName = isAlt ? (subjectMap.get(lesson.altSubjectId)?.name || "Fan") : "";
     const altTeacher = isAlt && lesson.altTeacherId ? getName(teacherMap, lesson.altTeacherId, "") : "";
+    const isBlock = Number(lesson.blockSize || 1) > 1;
 
     return (
       <div
@@ -189,6 +196,11 @@ export default function SchedulePage({
           {lesson.locked && <span title="Qulflangan">🔒 </span>}
           {detail.subjectName}
           {isAlt && <span className="pretty-alt-sep"> / {altName}</span>}
+          {isBlock && (
+            <span title="2 soat blok — ikkala soat birga ko'chadi" style={{ fontSize: 10.5, fontWeight: 800, marginLeft: 6, opacity: .75 }}>
+              ⛓ {Number(lesson.blockIndex || 0) + 1}/2
+            </span>
+          )}
         </div>
 
         {hasManyParts ? (
@@ -240,13 +252,11 @@ export default function SchedulePage({
   function dragStart(e, day, slotId, classId, card) {
     const src = srcOf(day, slotId, classId, card);
     if (!src) return;
-    // dataTransfer bo'sh bo'lsa ba'zi brauzerlar sudrashni boshlamaydi
     try {
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", `${day}__${slotId}`);
     } catch { /* eski brauzerlar */ }
     setPicked(null);
-    // DOM drag boshlanishida qayta chizilmasligi uchun keyingi kadrga suramiz
     setTimeout(() => setDrag(src), 0);
   }
 
@@ -358,7 +368,6 @@ export default function SchedulePage({
     const cell = schedule?.[day]?.[slot.id] || [];
     const partnerUnit = cards.length === 1 ? unitOf(collectCardEntries(cell, cards[0])) : null;
 
-    // autoSwap: maqsad katakni band qilib turgan dars avtomatik sherik bo'ladi
     const res = resolveMove(ctx, src, { day, slotId: slot.id, partnerUnit, autoSwap: true });
     const partner = res.partner || partnerUnit || null;
     const lockedTouched = Boolean(src.unit.locked || partner?.locked);
@@ -546,6 +555,48 @@ export default function SchedulePage({
     return gaps;
   }
 
+  // Sifat o'lchovi: kunlik yuk notekisligi (kam bo'lgani yaxshi)
+  function countImbalance(sch) {
+    let dev = 0;
+    classes.forEach((cls) => {
+      const off = new Set(Array.isArray(cls.offDays) ? cls.offDays : []);
+      const usable = DAYS.filter((d) => !off.has(d));
+      if (!usable.length) return;
+      const counts = usable.map((day) => sortedTimeslots.reduce((n, ts) => (
+        isTeachingSlot(ts) && (sch?.[day]?.[ts.id] || []).some((l) => classIdsOf(l).includes(cls.id)) ? n + 1 : n
+      ), 0));
+      const total = counts.reduce((a, b) => a + b, 0);
+      const lo = Math.floor(total / usable.length);
+      const hi = total - lo * usable.length > 0 ? lo + 1 : lo;
+      counts.forEach((n) => { dev += n > hi ? n - hi : (n < lo ? lo - n : 0); });
+    });
+    return dev;
+  }
+
+  // Sifat o'lchovi: bir kunda bir fan limitidan oshgan holatlar
+  function countOverCap(sch) {
+    let over = 0;
+    classes.forEach((cls) => {
+      const subjectIds = new Set();
+      (classSubjects?.[cls.id] || []).forEach((a) => {
+        if (a.subjectId) subjectIds.add(a.subjectId);
+        if (a.swapEnabled && a.swapSubjectId) subjectIds.add(a.swapSubjectId);
+      });
+      subjectIds.forEach((sid) => {
+        const cap = subjectDayCap(cls.id, sid);
+        DAYS.forEach((day) => {
+          let n = 0;
+          sortedTimeslots.forEach((ts) => {
+            if (!isTeachingSlot(ts)) return;
+            if ((sch?.[day]?.[ts.id] || []).some((l) => l.subjectId === sid && classIdsOf(l).includes(cls.id))) n += 1;
+          });
+          if (n > cap) over += n - cap;
+        });
+      });
+    });
+    return over;
+  }
+
   // Faqat qulflangan darslarni saqlab qoladigan "urug'" jadval
   function lockedSeed() {
     const seed = {};
@@ -579,16 +630,26 @@ export default function SchedulePage({
 
     try {
       // Ko'p bosqichli qidiruv: har bir urinishdan eng yaxshisi saqlanadi.
-      // Tanlov mezoni leksikografik — (1) joylangan soat, (2) oynalar soni.
+      // Tanlov mezoni leksikografik:
+      // (1) joylangan soat, (2) kunlik fan limitidan oshish, (3) oynalar, (4) yuk notekisligi.
       const MAX_ROUNDS = 30;
       const TIME_CAP_MS = 30000;
-      const STALL_LIMIT = 6;     // yaxshilanmasa erta to'xtash
+      const STALL_LIMIT = 6;
       const start = Date.now();
 
       let best = null;
       let bestPlaced = -1;
+      let bestOver = Infinity;
       let bestGaps = Infinity;
+      let bestBal = Infinity;
       let stall = 0;
+
+      const betterThan = (placed, over, gaps, bal) => {
+        if (placed !== bestPlaced) return placed > bestPlaced;
+        if (over !== bestOver) return over < bestOver;
+        if (gaps !== bestGaps) return gaps < bestGaps;
+        return bal < bestBal;
+      };
 
       for (let r = 0; r < MAX_ROUNDS; r++) {
         // eslint-disable-next-line no-await-in-loop
@@ -598,12 +659,15 @@ export default function SchedulePage({
           classes, subjects, teachers, rooms, timeslots, classSubjects, lunchGroups, seed
         );
         const placed = countPlacedUnits(cand);
+        const over = countOverCap(cand);
         const gaps = countGaps(cand);
+        const bal = countImbalance(cand);
 
-        const better = placed > bestPlaced || (placed === bestPlaced && gaps < bestGaps);
-        if (better) {
+        if (betterThan(placed, over, gaps, bal)) {
           bestPlaced = placed;
+          bestOver = over;
           bestGaps = gaps;
+          bestBal = bal;
           best = cand;
           stall = 0;
         } else {
@@ -613,8 +677,8 @@ export default function SchedulePage({
         setGenProgress(requiredTotal > 0 ? Math.min(100, Math.round((bestPlaced / requiredTotal) * 100)) : 100);
         setGenRound(r + 1);
 
-        if (requiredTotal > 0 && bestPlaced >= requiredTotal && bestGaps === 0) break;
-        if (stall >= STALL_LIMIT && requiredTotal > 0 && bestPlaced >= requiredTotal) break;
+        if (requiredTotal > 0 && bestPlaced >= requiredTotal && bestGaps === 0 && bestOver === 0 && bestBal === 0) break;
+        if (stall >= STALL_LIMIT && requiredTotal > 0 && bestPlaced >= requiredTotal && bestOver === 0) break;
         if (Date.now() - start > TIME_CAP_MS) break;
       }
 
@@ -629,12 +693,13 @@ export default function SchedulePage({
         }
       }
 
-      // Yakuniy zichlash — "ora kunda" sozlamasi saqlanadi (classSubjects 5-argument)
+      // Yakuniy zichlash — "ora kunda", "asosiy fan" va kunlik limit saqlanadi
       try {
         const compacted = compactSchedule(classes, timeslots, lunchGroups, finalSch, classSubjects);
-        if (countPlacedUnits(compacted) >= bestPlaced && countGaps(compacted) <= countGaps(finalSch)) {
-          finalSch = compacted;
-        }
+        const okPlaced = countPlacedUnits(compacted) >= bestPlaced;
+        const okGaps = countGaps(compacted) <= countGaps(finalSch);
+        const okOver = countOverCap(compacted) <= countOverCap(finalSch);
+        if (okPlaced && okGaps && okOver) finalSch = compacted;
       } catch {
         /* zichlash ixtiyoriy — xato bo'lsa jadval o'z holicha qoladi */
       }
@@ -686,6 +751,25 @@ export default function SchedulePage({
       if (a.swapEnabled && a.swapSubjectId === subjectId) req += Number(a.weeklyHours || 0);
     });
     return req;
+  }
+
+  // ——— BIR KUNDA BIR FAN NECHA SOAT BO'LISHI MUMKIN? ———
+  // "2 soat blok" yoqilgan bo'lsa — 2 soat, aks holda 1 soat.
+  // Agar haftalik soat kunlarga sig'masa, limit avtomatik oshadi
+  // (masalan 8 soat / 6 kun => kuniga 2 soat).
+  function usableDaysOf(classId) {
+    const cls = classes.find((c) => c.id === classId);
+    const off = Array.isArray(cls?.offDays) ? cls.offDays : [];
+    return Math.max(1, DAYS.length - off.length);
+  }
+
+  function subjectDayCap(classId, subjectId) {
+    const list = classSubjects?.[classId] || [];
+    const a = list.find((x) => x.subjectId === subjectId)
+      || list.find((x) => x.swapEnabled && x.swapSubjectId === subjectId);
+    const need = requiredHours(classId, subjectId);
+    const base = a && (a.allowDouble || (a.swapEnabled && a.swapSubjectId === subjectId)) ? 2 : 1;
+    return Math.max(base, Math.ceil(need / usableDaysOf(classId)) || 1);
   }
 
   function missingForClass(classId) {
@@ -840,80 +924,206 @@ export default function SchedulePage({
     return warns;
   }
 
-  function findResolutionsFor(classId, subjectId, count) {
-    const subjTeachers = teachersForSubject(subjectId);
-    if (!subjTeachers.length) return [];
+  // ═══════════ TUSHMAGAN SOAT UCHUN YECHIM REJASI ═══════════
+  // Uch bosqichli qidiruv:
+  //   1) mutlaqo bo'sh katak (sinf ham, ustoz ham bo'sh)
+  //   2) sinf bo'sh, lekin ustoz boshqa sinfda band → o'sha darsni boshqa soatga surish
+  //   3) sinfda dars bor → o'sha darsni boshqa soatga surib, joy bo'shatish
+  // 2 va 3-bosqichda boshqa dars ko'chiriladi, shuning uchun foydalanuvchidan
+  // ALBATTA tasdiq so'raladi (modal oynada nima ko'chishi aniq yozib beriladi).
+
+  function slotNumOf(slotId) {
+    return sortedTimeslots.find((s) => s.id === slotId)?.lessonNumber ?? "?";
+  }
+
+  function lessonTitle(l) {
+    const sName = subjectMap.get(l.subjectId)?.name || "Fan";
+    const cNames = classIdsOf(l).map((id) => classes.find((c) => c.id === id)?.name).filter(Boolean).join(", ");
+    const tName = l.teacherId ? getName(teacherMap, l.teacherId, "") : "";
+    return `${cNames || "Sinf"} — ${sName}${tName ? ` (${tName})` : ""}`;
+  }
+
+  // Ko'chirish mumkin bo'lgan dars: qulflanmagan, qo'lda qo'yilmagan, guruhli emas,
+  // parallel emas, hafta almashinuvi emas va 2 soat blokning bo'lagi emas.
+  function isMovableLesson(l) {
+    return Boolean(l) && !l.locked && !l.manual && !l.groupPart && !l.groupKey
+      && !l.levelGroupEnabled && !l.swap && !l.alternating && !isBlockPart(l)
+      && classIdsOf(l).length === 1;
+  }
+
+  function planResolutions(classId, subjectId, count) {
+    const teachingSlots = sortedTimeslots.filter(isTeachingSlot);
+    const work = {};
+    DAYS.forEach((d) => {
+      work[d] = {};
+      sortedTimeslots.forEach((ts) => { work[d][ts.id] = [...((schedule?.[d]?.[ts.id]) || [])]; });
+    });
+
     const cls = classes.find((c) => c.id === classId);
     const classOff = new Set(Array.isArray(cls?.offDays) ? cls.offDays : []);
-    const assigned = assignedTeacher(classId, subjectId);
-    const ordered = subjTeachers.filter((t) => t.id === assigned);
-    if (!ordered.length) return [];
+    const teacherId = assignedTeacher(classId, subjectId);
+    const teacher = teachers.find((t) => t.id === teacherId);
+    if (!teacher || !teachersForSubject(subjectId).some((t) => t.id === teacherId)) {
+      return { placements: [], moves: [] };
+    }
+    const tOff = new Set(Array.isArray(teacher.offDays) ? teacher.offDays : []);
+    const cap = subjectDayCap(classId, subjectId);
 
-    const result = [];
-    const usedClassSlot = new Set();
-    const usedTeacherSlot = new Set();
-    for (const day of DAYS) {
-      if (classOff.has(day)) continue;
-      for (const ts of sortedTimeslots) {
-        if (result.length >= count) return result;
-        if (!isTeachingSlot(ts)) continue;
-        if (!slotAllowsClass(ts, classId)) continue;
-        if (classHasLunchAt(ts, classId, lunchGroups, day)) continue;
-        const slotKey = `${day}__${ts.id}`;
-        if (usedClassSlot.has(slotKey)) continue;
-        const cell = schedule?.[day]?.[ts.id] || [];
-        if (cell.some((l) => classIdsOf(l).includes(classId))) continue;
-        for (const t of ordered) {
-          const tOff = new Set(Array.isArray(t.offDays) ? t.offDays : []);
-          if (tOff.has(day)) continue;
-          if (cell.some((l) => l.teacherId === t.id)) continue;
-          if (usedTeacherSlot.has(`${t.id}__${slotKey}`)) continue;
-          const teacherTotal = teacherClassCountHours(t.id);
-          if (teacherTotal + 1 > Number(t.maxWeeklyHours || 40)) continue;
-          result.push({ day, slotId: ts.id, teacherId: t.id });
-          usedClassSlot.add(slotKey);
-          usedTeacherSlot.add(`${t.id}__${slotKey}`);
+    const slotUsable = (cid, day, ts) => isTeachingSlot(ts)
+      && slotAllowsClass(ts, cid)
+      && !classHasLunchAt(ts, cid, lunchGroups, day);
+    const classFree = (cid, day, tsId) => !(work[day][tsId] || []).some((l) => classIdsOf(l).includes(cid));
+    const teacherFree = (tid, day, tsId) => !tid
+      || !(work[day][tsId] || []).some((l) => l.teacherId === tid || l.altTeacherId === tid);
+    const roomFree = (rid, day, tsId) => !rid || !(work[day][tsId] || []).some((l) => l.roomId === rid);
+    const subjOnDay = (cid, sid, day) => teachingSlots.reduce((n, ts) => (
+      (work[day][ts.id] || []).some((l) => l.subjectId === sid && classIdsOf(l).includes(cid)) ? n + 1 : n
+    ), 0);
+    const teacherLoad = (tid) => DAYS.reduce((n, day) => n + teachingSlots.reduce((m, ts) => (
+      (work[day][ts.id] || []).some((l) => l.teacherId === tid) ? m + 1 : m
+    ), 0), 0);
+
+    // Ko'chirilayotgan dars uchun yangi joy
+    const homeFor = (l, exDay, exTsId) => {
+      const cid = classIdsOf(l)[0];
+      const c2 = classes.find((c) => c.id === cid);
+      const off2 = new Set(Array.isArray(c2?.offDays) ? c2.offDays : []);
+      const t2 = teacherMap.get(l.teacherId);
+      const tOff2 = new Set(Array.isArray(t2?.offDays) ? t2.offDays : []);
+      const cap2 = subjectDayCap(cid, l.subjectId);
+      for (const day of DAYS) {
+        if (off2.has(day) || tOff2.has(day)) continue;
+        if (subjOnDay(cid, l.subjectId, day) >= cap2) continue;
+        for (const ts of teachingSlots) {
+          if (day === exDay && ts.id === exTsId) continue;
+          if (!slotUsable(cid, day, ts)) continue;
+          if (!classFree(cid, day, ts.id)) continue;
+          if (!teacherFree(l.teacherId, day, ts.id)) continue;
+          if (!roomFree(l.roomId, day, ts.id)) continue;
+          return { day, tsId: ts.id };
+        }
+      }
+      return null;
+    };
+
+    const placements = [];
+    const moves = [];
+
+    const doPlace = (day, tsId) => {
+      work[day][tsId] = [...(work[day][tsId] || []), {
+        subjectId, classId, classIds: [classId], teacherId, roomId: "", manual: true, locked: true,
+      }];
+      placements.push({ day, slotId: tsId, teacherId });
+    };
+    const doMove = (l, fromDay, fromTsId, to) => {
+      work[fromDay][fromTsId] = work[fromDay][fromTsId].filter((x) => x !== l);
+      work[to.day][to.tsId] = [...(work[to.day][to.tsId] || []), l];
+      moves.push({ lesson: l, fromDay, fromSlotId: fromTsId, toDay: to.day, toSlotId: to.tsId, label: lessonTitle(l) });
+    };
+
+    for (let n = 0; n < count; n++) {
+      if (teacherLoad(teacherId) + 1 > Number(teacher.maxWeeklyHours || 40)) break;
+      let done = false;
+
+      // 1-bosqich — hech kimni bezovta qilmasdan
+      for (const day of DAYS) {
+        if (done) break;
+        if (classOff.has(day) || tOff.has(day)) continue;
+        if (subjOnDay(classId, subjectId, day) >= cap) continue;
+        for (const ts of teachingSlots) {
+          if (!slotUsable(classId, day, ts)) continue;
+          if (!classFree(classId, day, ts.id)) continue;
+          if (!teacherFree(teacherId, day, ts.id)) continue;
+          doPlace(day, ts.id);
+          done = true;
           break;
         }
       }
-    }
-    return result;
-  }
+      if (done) continue;
 
-  function teacherClassCountHours(teacherId) {
-    let n = 0;
-    DAYS.forEach((day) => {
-      sortedTimeslots.forEach((ts) => {
-        const cell = schedule?.[day]?.[ts.id] || [];
-        if (cell.some((l) => l.teacherId === teacherId)) n += 1;
-      });
-    });
-    return n;
+      // 2-bosqich — ustoz o'sha soatda boshqa sinfda band: o'sha darsni surish
+      for (const day of DAYS) {
+        if (done) break;
+        if (classOff.has(day) || tOff.has(day)) continue;
+        if (subjOnDay(classId, subjectId, day) >= cap) continue;
+        for (const ts of teachingSlots) {
+          if (!slotUsable(classId, day, ts)) continue;
+          if (!classFree(classId, day, ts.id)) continue;
+          const busy = (work[day][ts.id] || []).filter((l) => l.teacherId === teacherId || l.altTeacherId === teacherId);
+          if (busy.length !== 1 || !isMovableLesson(busy[0])) continue;
+          const home = homeFor(busy[0], day, ts.id);
+          if (!home) continue;
+          doMove(busy[0], day, ts.id, home);
+          doPlace(day, ts.id);
+          done = true;
+          break;
+        }
+      }
+      if (done) continue;
+
+      // 3-bosqich — sinfda dars bor: uni boshqa soatga surib joy ochish
+      for (const day of DAYS) {
+        if (done) break;
+        if (classOff.has(day) || tOff.has(day)) continue;
+        if (subjOnDay(classId, subjectId, day) >= cap) continue;
+        for (const ts of teachingSlots) {
+          if (!slotUsable(classId, day, ts)) continue;
+          if (!teacherFree(teacherId, day, ts.id)) continue;
+          const here = (work[day][ts.id] || []).filter((l) => classIdsOf(l).includes(classId));
+          if (here.length !== 1 || !isMovableLesson(here[0])) continue;
+          const home = homeFor(here[0], day, ts.id);
+          if (!home) continue;
+          doMove(here[0], day, ts.id, home);
+          doPlace(day, ts.id);
+          done = true;
+          break;
+        }
+      }
+      if (!done) break;
+    }
+
+    return { placements, moves };
   }
 
   function proposeResolution(classId, subjectId, name, missing) {
-    const placements = findResolutionsFor(classId, subjectId, missing);
+    const { placements, moves } = planResolutions(classId, subjectId, missing);
     if (!placements.length) {
-      toast?.("Bo'sh ustoz yoki vaqt topilmadi — bu fanga yana ustoz qo'shing", "warning");
+      toast?.("Bo'sh soat ham, ko'chirish yo'li ham topilmadi — bu fanga yana ustoz qo'shing yoki soatni kamaytiring", "warning");
       return;
     }
-    setResolveData({ classId, subjectId, name, placements });
+    setResolveData({ classId, subjectId, name, placements, moves });
   }
 
   function applyResolution() {
     if (!setSchedule || !resolveData) return;
-    const { classId, subjectId, placements } = resolveData;
-    const next = { ...schedule };
+    const { classId, subjectId, placements, moves } = resolveData;
+    const next = {};
+    DAYS.forEach((d) => {
+      next[d] = {};
+      sortedTimeslots.forEach((ts) => { next[d][ts.id] = [...((schedule?.[d]?.[ts.id]) || [])]; });
+    });
+
+    // 1) Avval kelishilgan ko'chirishlar
+    (moves || []).forEach((m) => {
+      const from = next[m.fromDay]?.[m.fromSlotId];
+      if (!Array.isArray(from)) return;
+      if (!from.includes(m.lesson)) return; // jadval o'zgargan — bu ko'chirish o'tkazib yuboriladi
+      next[m.fromDay][m.fromSlotId] = from.filter((x) => x !== m.lesson);
+      next[m.toDay][m.toSlotId] = [...(next[m.toDay][m.toSlotId] || []), m.lesson];
+    });
+
+    // 2) Keyin yangi darslar
     placements.forEach(({ day, slotId, teacherId }) => {
-      next[day] = { ...(next[day] || {}) };
       next[day][slotId] = [...(next[day][slotId] || []), {
         subjectId, classId, classIds: [classId], teacherId: teacherId || "", roomId: "",
         manual: true, locked: true,
       }];
     });
+
     setSchedule(next);
     setResolveData(null);
-    toast?.(`${placements.length} ta dars joylashtirildi va qulflandi 🔒`, "success");
+    const moveNote = moves?.length ? ` · ${moves.length} ta dars ko'chirildi` : "";
+    toast?.(`${placements.length} ta dars joylashtirildi va qulflandi 🔒${moveNote}`, "success");
   }
 
   function fillRemaining(base, markManual = true) {
@@ -933,9 +1143,15 @@ export default function SchedulePage({
       }));
       return n;
     };
-    const freeSlot = (cid, teacherList, classOff) => {
+    // Bir kunda shu fan nechta? (kunlik limit uchun)
+    const subjOnDay = (cid, sid, day) => teachingSlots.reduce((n, ts) => (
+      next[day][ts.id].some((l) => l.subjectId === sid && classIdsOf(l).includes(cid)) ? n + 1 : n
+    ), 0);
+
+    const freeSlot = (cid, sid, teacherList, classOff) => {
       for (const day of DAYS) {
         if (classOff.has(day)) continue;
+        if (subjOnDay(cid, sid, day) >= subjectDayCap(cid, sid)) continue;
         for (const ts of teachingSlots) {
           if (!slotAllowsClass(ts, cid)) continue;
           if (classesHaveLunchAt(ts, [cid], lunchGroups, day)) continue;
@@ -953,9 +1169,10 @@ export default function SchedulePage({
       return null;
     };
 
-    // Qulflangan dars HECH QACHON ko'chirilmaydi
+    // Qulflangan, qo'lda qo'yilgan, guruhli va BLOK darslar HECH QACHON ko'chirilmaydi
     const isMovable = (l) => l && !l.locked && !l.manual && !l.groupPart && !l.groupKey
-      && !l.levelGroupEnabled && !l.swap && classIdsOf(l).length === 1;
+      && !l.levelGroupEnabled && !l.swap && !l.alternating && !isBlockPart(l)
+      && classIdsOf(l).length === 1;
     const teacherOffHas = (tid, day) => {
       const tt = teachers.find((x) => x.id === tid);
       return tt && Array.isArray(tt.offDays) && tt.offDays.includes(day);
@@ -964,9 +1181,11 @@ export default function SchedulePage({
       const cid = classIdsOf(l)[0];
       const cObj = classes.find((c) => c.id === cid);
       const classOff2 = new Set(Array.isArray(cObj?.offDays) ? cObj.offDays : []);
+      const cap2 = subjectDayCap(cid, l.subjectId);
       for (const day of DAYS) {
         if (classOff2.has(day)) continue;
         if (l.teacherId && teacherOffHas(l.teacherId, day)) continue;
+        if (subjOnDay(cid, l.subjectId, day) >= cap2) continue;
         for (const ts of teachingSlots) {
           if (day === exDay && ts.id === exTs) continue;
           if (!slotAllowsClass(ts, cid)) continue;
@@ -986,9 +1205,11 @@ export default function SchedulePage({
       const cid = classIdsOf(l)[0];
       const cObj = classes.find((c) => c.id === cid);
       const classOff2 = new Set(Array.isArray(cObj?.offDays) ? cObj.offDays : []);
+      const cap2 = subjectDayCap(cid, l.subjectId);
       for (const day of DAYS) {
         if (classOff2.has(day)) continue;
         if (l.teacherId && teacherOffHas(l.teacherId, day)) continue;
+        if (subjOnDay(cid, l.subjectId, day) >= cap2) continue;
         for (const ts of teachingSlots) {
           if (day === exDay && ts.id === exTs) continue;
           if (!slotAllowsClass(ts, cid)) continue;
@@ -1008,11 +1229,13 @@ export default function SchedulePage({
       }
       return null;
     };
-    const rearrangePlace = (cid, t, classOff) => {
+    const rearrangePlace = (cid, sid, t, classOff) => {
       if ((tLoad[t.id] || 0) + 1 > Number(t.maxWeeklyHours || 40)) return null;
       const tOff = new Set(Array.isArray(t.offDays) ? t.offDays : []);
+      const cap = subjectDayCap(cid, sid);
       for (const day of DAYS) {
         if (classOff.has(day) || tOff.has(day)) continue;
+        if (subjOnDay(cid, sid, day) >= cap) continue;
         for (const ts of teachingSlots) {
           if (!slotAllowsClass(ts, cid)) continue;
           if (classesHaveLunchAt(ts, [cid], lunchGroups, day)) continue;
@@ -1051,8 +1274,8 @@ export default function SchedulePage({
           let guard = 0;
           while (have < need && guard < 80) {
             guard += 1;
-            let spot = freeSlot(cls.id, teacherList, classOff);
-            if (!spot) spot = rearrangePlace(cls.id, t, classOff);
+            let spot = freeSlot(cls.id, sid, teacherList, classOff);
+            if (!spot) spot = rearrangePlace(cls.id, sid, t, classOff);
             if (!spot) break;
             next[spot.day][spot.tsId].push({ subjectId: sid, classId: cls.id, classIds: [cls.id], teacherId: spot.teacherId, roomId: "", manual: markManual });
             tLoad[spot.teacherId] = (tLoad[spot.teacherId] || 0) + 1;
@@ -1408,7 +1631,7 @@ export default function SchedulePage({
                         </span>
                       ))}
                     </div>
-                    <div style={{ fontSize: 12, color: "#92400e", marginTop: 6 }}>«🔧 Hal qilish» bo'sh ustozni topib joylashtiradi. Yoki bo'sh katakdagi <b>＋</b> orqali qo'lda qo'shing.</div>
+                    <div style={{ fontSize: 12, color: "#92400e", marginTop: 6 }}>«🔧 Hal qilish» bo'sh soat topadi; topilmasa boshqa darsni surish rejasini ko'rsatib, tasdiqlashingizni so'raydi.</div>
                   </div>
                 )}
 
@@ -1620,31 +1843,52 @@ export default function SchedulePage({
 
       {resolveData && (() => {
         const cls = classes.find((c) => c.id === resolveData.classId);
+        const moves = resolveData.moves || [];
         return (
           <div onClick={() => setResolveData(null)}
             style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
             <div onClick={(e) => e.stopPropagation()}
-              style={{ background: "var(--card-bg, #fff)", borderRadius: 14, padding: 20, width: "100%", maxWidth: 480, boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
-              <h3 style={{ margin: "0 0 4px" }}>🔧 Avtomatik hal qilish</h3>
+              style={{ background: "var(--card-bg, #fff)", borderRadius: 14, padding: 20, width: "100%", maxWidth: 540, maxHeight: "88vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
+              <h3 style={{ margin: "0 0 4px" }}>🔧 Yechim taklifi</h3>
               <div style={{ fontSize: 14, color: "var(--text-secondary)", marginBottom: 12 }}>
                 <b>{cls?.name}</b> — <b>{resolveData.name}</b>: {resolveData.placements.length} ta soat quyidagicha joylashtirilsinmi?
               </div>
+
+              {moves.length > 0 && (
+                <div style={{ background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 10, padding: 12, marginBottom: 12 }}>
+                  <div style={{ fontWeight: 800, color: "#9a3412", marginBottom: 6, fontSize: 13.5 }}>
+                    ⚠️ Bo'sh soat topilmadi — {moves.length} ta mavjud dars boshqa soatga ko'chiriladi:
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {moves.map((m, i) => (
+                      <div key={i} style={{ background: "#fff", border: "1px solid #fed7aa", borderRadius: 8, padding: "8px 10px", fontSize: 13, color: "#7c2d12", lineHeight: 1.5 }}>
+                        <b>{m.label}</b><br />
+                        {m.fromDay}, {slotNumOf(m.fromSlotId)}-dars <b>→</b> {m.toDay}, {slotNumOf(m.toSlotId)}-dars
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 12, color: "#9a3412", marginTop: 8 }}>
+                    Ko'chirilgan darslarning ustozi va sinfi yangi soatda bo'sh ekani tekshirildi — hech qanday to'qnashuv yuzaga kelmaydi.
+                  </div>
+                </div>
+              )}
+
+              <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 6, color: "var(--text-secondary)" }}>Yangi qo'yiladigan darslar:</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
-                {resolveData.placements.map((p, i) => {
-                  const slot = sortedTimeslots.find((s) => s.id === p.slotId);
-                  return (
-                    <div key={i} style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 8, padding: "8px 10px", fontSize: 13, color: "#065f46" }}>
-                      <b>{p.day}, {slot?.lessonNumber}-dars</b> — ustoz: {getName(teacherMap, p.teacherId)}
-                    </div>
-                  );
-                })}
+                {resolveData.placements.map((p, i) => (
+                  <div key={i} style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 8, padding: "8px 10px", fontSize: 13, color: "#065f46" }}>
+                    <b>{p.day}, {slotNumOf(p.slotId)}-dars</b> — {resolveData.name}, ustoz: {getName(teacherMap, p.teacherId)}
+                  </div>
+                ))}
               </div>
               <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 14 }}>
-                Bu darslar bo'sh ustoz bilan qo'yiladi va qulflanadi 🔒 (qayta avtomatik tuzsangiz ham buzilmaydi).
+                Yangi darslar qulflanadi 🔒 — qayta avtomatik tuzganingizda ham joyidan qimirlamaydi.
               </div>
               <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
                 <button className="btn btn-secondary" type="button" onClick={() => setResolveData(null)}>Bekor qilish</button>
-                <button className="btn btn-success" type="button" onClick={applyResolution}>Tasdiqlash va qo'yish</button>
+                <button className="btn btn-success" type="button" onClick={applyResolution}>
+                  {moves.length > 0 ? "Ha, ko'chirilsin va qo'yilsin" : "Tasdiqlash va qo'yish"}
+                </button>
               </div>
             </div>
           </div>
