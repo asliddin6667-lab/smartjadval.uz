@@ -156,7 +156,205 @@
   color: #b45309;
 }
 
-/* ---------- Tab tugmalar ---------- */
+/* ---------- Segment (asosiy kesim) tugmalari ---------- */
+.vak-segwrap {
+  margin-bottom: 14px;
+}
+
+.vak-seg {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 12px;
+  background: rgba(100, 116, 139, 0.09);
+  border: 1px solid rgba(100, 116, 139, 0.14);
+  flex-wrap: wrap;
+}
+
+.vak-seg__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  border-radius: 9px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.vak-seg__btn:hover {
+  background: rgba(100, 116, 139, 0.1);
+}
+
+.vak-seg__btn--active {
+  background: var(--da-card-bg, #ffffff);
+  color: #4f46e5;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.16);
+}
+
+.vak-seg__icon {
+  font-size: 14px;
+}
+
+.vak-seg__count {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(100, 116, 139, 0.16);
+  color: var(--da-text-2, #64748b);
+}
+
+.vak-seg__btn--active .vak-seg__count {
+  background: rgba(79, 70, 229, 0.14);
+  color: #4f46e5;
+}
+
+/* ---------- Mini statistika lentasi ---------- */
+.vak-mini {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.vak-mini__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 12px;
+  border-radius: 11px;
+  border: 1px solid rgba(100, 116, 139, 0.14);
+  background: rgba(100, 116, 139, 0.04);
+}
+
+.vak-mini__val {
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.vak-mini__lab {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--da-text-2, #64748b);
+}
+
+.vak-mini__item--ok {
+  border-color: rgba(16, 185, 129, 0.26);
+  background: rgba(16, 185, 129, 0.06);
+}
+
+.vak-mini__item--ok .vak-mini__val {
+  color: #059669;
+}
+
+.vak-mini__item--bad {
+  border-color: rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.06);
+}
+
+.vak-mini__item--bad .vak-mini__val {
+  color: #dc2626;
+}
+
+.vak-mini__item--warn {
+  border-color: rgba(245, 158, 11, 0.32);
+  background: rgba(245, 158, 11, 0.07);
+}
+
+.vak-mini__item--warn .vak-mini__val {
+  color: #b45309;
+}
+
+/* ---------- Asboblar qatori: qidiruv + filtrlar ---------- */
+.vak-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.vak-toolbar__right {
+  margin-left: auto;
+}
+
+.vak-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 220px;
+  flex: 0 1 280px;
+}
+
+.vak-search__icon {
+  position: absolute;
+  left: 10px;
+  font-size: 12px;
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.vak-search__input {
+  width: 100%;
+  padding: 7px 28px 7px 30px;
+  border-radius: 10px;
+  border: 1px solid rgba(100, 116, 139, 0.25);
+  background: rgba(100, 116, 139, 0.05);
+  color: inherit;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.vak-search__input::placeholder {
+  color: #94a3b8;
+}
+
+.vak-search__input:focus {
+  border-color: rgba(79, 70, 229, 0.55);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12);
+}
+
+.vak-search__clear {
+  position: absolute;
+  right: 6px;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+  line-height: 1;
+}
+
+.vak-search__clear:hover {
+  color: #dc2626;
+}
+
+.vak-linkbtn {
+  border: none;
+  background: transparent;
+  color: #4f46e5;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 5px 8px;
+  border-radius: 8px;
+  font-family: inherit;
+}
+
+.vak-linkbtn:hover {
+  background: rgba(79, 70, 229, 0.1);
+}
+
+/* ---------- Tab tugmalar (filtr chipslari) ---------- */
 .vak-tabs {
   display: inline-flex;
   gap: 6px;
@@ -172,6 +370,12 @@
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.vak-tab:hover {
+  background: rgba(100, 116, 139, 0.08);
 }
 
 .vak-tab--active {
@@ -246,14 +450,230 @@
 }
 
 .vak-classes {
-  max-width: 280px;
+  max-width: 300px;
   font-size: 12px;
   white-space: normal;
-  line-height: 1.5;
+  line-height: 1.9;
 }
 
 .vak-load {
   font-weight: 700;
+}
+
+.vak-sub {
+  font-size: 11.5px;
+  color: var(--da-text-2, #64748b);
+  font-weight: 500;
+  margin-top: 2px;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- Saralanadigan sarlavha ---------- */
+.vak-th {
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s ease;
+}
+
+.vak-th:hover {
+  color: #4f46e5;
+}
+
+.vak-th__in {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.vak-th .vak-th__arrow {
+  font-size: 9px;
+  opacity: 0.4;
+}
+
+.vak-th--active {
+  color: #4f46e5;
+}
+
+.vak-th--active .vak-th__arrow {
+  opacity: 1;
+}
+
+.vak-th.vak-c .vak-th__in {
+  justify-content: center;
+}
+
+/* ---------- Ochiladigan qatorlar ---------- */
+.vak-table--exp .vak-clickrow {
+  cursor: pointer;
+}
+
+.vak-expcol {
+  width: 28px;
+  padding-right: 0 !important;
+}
+
+.vak-caret {
+  display: inline-block;
+  font-size: 11px;
+  color: #94a3b8;
+  transition: transform 0.18s ease, color 0.18s ease;
+}
+
+.vak-caret--open {
+  transform: rotate(90deg);
+  color: #4f46e5;
+}
+
+.vak-detailrow > td {
+  padding: 0 !important;
+  background: rgba(100, 116, 139, 0.05);
+}
+
+.vak-detailrow:hover > td {
+  background: rgba(100, 116, 139, 0.05);
+}
+
+.vak-detail {
+  padding: 12px 14px 14px 38px;
+  border-left: 3px solid rgba(79, 70, 229, 0.45);
+}
+
+.vak-detail__title {
+  font-size: 12.5px;
+  font-weight: 800;
+  margin-bottom: 8px;
+  color: var(--da-text-2, #475569);
+}
+
+.vak-detail__chips {
+  margin-top: 9px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+/* ---------- Ichki (detal) jadval ---------- */
+.vak-subtable {
+  width: 100%;
+  max-width: 640px;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  background: var(--da-card-bg, #ffffff);
+  border-radius: 9px;
+  overflow: hidden;
+  border: 1px solid rgba(100, 116, 139, 0.14);
+}
+
+.vak-subtable th {
+  text-align: left;
+  padding: 6px 10px;
+  font-size: 10.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--da-text-2, #64748b);
+  border-bottom: 1px solid rgba(100, 116, 139, 0.18);
+  white-space: nowrap;
+}
+
+.vak-subtable td {
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(100, 116, 139, 0.09);
+}
+
+.vak-subtable tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.vak-subtable tfoot td {
+  border-top: 1px solid rgba(100, 116, 139, 0.2);
+  border-bottom: none;
+  background: rgba(100, 116, 139, 0.05);
+}
+
+/* ---------- Chip (kichik yorliq) ---------- */
+.vak-chip {
+  display: inline-block;
+  padding: 2px 9px;
+  margin: 2px 4px 2px 0;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  background: rgba(100, 116, 139, 0.12);
+  color: var(--da-text-2, #475569);
+  white-space: nowrap;
+}
+
+.vak-chip--bad {
+  background: rgba(239, 68, 68, 0.12);
+  color: #dc2626;
+}
+
+.vak-chip--ok {
+  background: rgba(16, 185, 129, 0.12);
+  color: #059669;
+}
+
+/* ---------- Yuklama indikatori ---------- */
+.vak-bar {
+  position: relative;
+  width: 100%;
+  min-width: 110px;
+  height: 18px;
+  border-radius: 999px;
+  background: rgba(100, 116, 139, 0.14);
+  overflow: hidden;
+}
+
+.vak-bar__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.vak-bar__fill--ok {
+  background: rgba(16, 185, 129, 0.35);
+}
+
+.vak-bar__fill--warn {
+  background: rgba(245, 158, 11, 0.4);
+}
+
+.vak-bar__fill--bad {
+  background: rgba(239, 68, 68, 0.4);
+}
+
+.vak-bar__fill--muted {
+  background: transparent;
+}
+
+.vak-bar__txt {
+  position: relative;
+  display: block;
+  text-align: center;
+  line-height: 18px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.vak-bar__txt--ok {
+  color: #047857;
+}
+
+.vak-bar__txt--warn {
+  color: #b45309;
+}
+
+.vak-bar__txt--bad {
+  color: #b91c1c;
+}
+
+.vak-bar__txt--muted {
+  color: #94a3b8;
 }
 
 /* ---------- Izoh va ogohlantirish ---------- */
@@ -261,6 +681,7 @@
   margin-top: 8px;
   font-size: 11.5px;
   color: var(--da-text-2, #64748b);
+  line-height: 1.6;
 }
 
 .vak-alert {
@@ -299,8 +720,133 @@
   line-height: 1.6;
 }
 
+/* ---------- Tungi rejim moslamalari ---------- */
+body.dark .vak-seg__btn--active,
+.dark .vak-seg__btn--active {
+  background: rgba(148, 163, 184, 0.16);
+  color: #a5b4fc;
+  box-shadow: none;
+}
+
+body.dark .vak-seg__btn--active .vak-seg__count,
+.dark .vak-seg__btn--active .vak-seg__count {
+  background: rgba(165, 180, 252, 0.18);
+  color: #a5b4fc;
+}
+
+body.dark .vak-subtable,
+.dark .vak-subtable {
+  background: rgba(148, 163, 184, 0.07);
+}
+
+body.dark .vak-tab--active,
+.dark .vak-tab--active {
+  color: #a5b4fc;
+  border-color: rgba(165, 180, 252, 0.45);
+  background: rgba(165, 180, 252, 0.14);
+}
+
+body.dark .vak-th--active,
+body.dark .vak-th:hover,
+body.dark .vak-caret--open,
+body.dark .vak-linkbtn,
+.dark .vak-th--active,
+.dark .vak-th:hover,
+.dark .vak-caret--open,
+.dark .vak-linkbtn {
+  color: #a5b4fc;
+}
+
+body.dark .vak-detail,
+.dark .vak-detail {
+  border-left-color: rgba(165, 180, 252, 0.5);
+}
+
+body.dark .vak-bar__txt--ok,
+.dark .vak-bar__txt--ok {
+  color: #6ee7b7;
+}
+
+body.dark .vak-bar__txt--warn,
+.dark .vak-bar__txt--warn {
+  color: #fcd34d;
+}
+
+body.dark .vak-bar__txt--bad,
+.dark .vak-bar__txt--bad {
+  color: #fca5a5;
+}
+
+body.dark .vak-badge--warn,
+.dark .vak-badge--warn {
+  color: #fcd34d;
+}
+
+body.dark .vak-badge--bad,
+body.dark .vak-red,
+.dark .vak-badge--bad,
+.dark .vak-red {
+  color: #fca5a5;
+}
+
+body.dark .vak-badge--ok,
+.dark .vak-badge--ok {
+  color: #6ee7b7;
+}
+
+body.dark .vak-alert,
+.dark .vak-alert {
+  color: #fca5a5;
+}
+
+body.dark .vak-kpi--bad .vak-kpi__value,
+.dark .vak-kpi--bad .vak-kpi__value {
+  color: #fca5a5;
+}
+
+body.dark .vak-kpi--warn .vak-kpi__value,
+.dark .vak-kpi--warn .vak-kpi__value {
+  color: #fcd34d;
+}
+
+body.dark .vak-mini__item--bad .vak-mini__val,
+.dark .vak-mini__item--bad .vak-mini__val {
+  color: #fca5a5;
+}
+
+body.dark .vak-mini__item--warn .vak-mini__val,
+.dark .vak-mini__item--warn .vak-mini__val {
+  color: #fcd34d;
+}
+
+body.dark .vak-mini__item--ok .vak-mini__val,
+.dark .vak-mini__item--ok .vak-mini__val {
+  color: #6ee7b7;
+}
+
+body.dark .vak-section__sub,
+.dark .vak-section__sub {
+  color: #fcd34d;
+}
+
 @media (max-width: 640px) {
   .vak-kpis {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .vak-mini {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .vak-toolbar__right {
+    margin-left: 0;
+  }
+
+  .vak-search {
+    flex: 1 1 100%;
+  }
+
+  .vak-detail {
+    padding-left: 16px;
   }
 }
