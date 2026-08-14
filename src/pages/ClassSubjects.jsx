@@ -3,6 +3,7 @@ import {
   PRIMARY_SUBJECT_NAMES, MIDDLE_SUBJECT_NAMES, HIGH_SUBJECT_NAMES,
   PRIMARY_SUBJECT_NAMES_RU, MIDDLE_SUBJECT_NAMES_RU, HIGH_SUBJECT_NAMES_RU
 } from "../utils/constants";
+import { sortByName, cmpName } from "../utils/sortHelpers";
 
 function teacherSubjectIds(teacher) {
   return Array.isArray(teacher.subjectIds) ? teacher.subjectIds : (teacher.subjectId ? [teacher.subjectId] : []);
@@ -83,11 +84,16 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
   const selectedClass = classes.find(c => c.id === selectedClassId);
   const assignments = classSubjects[selectedClassId] || [];
 
-  // ——— Ta'lim tili: tanlangan sinf tiliga mos fanlar ———
+  // ——— Alifbo tartibidagi umumiy ro'yxatlar ———
+  const sortedClasses = sortByName(classes);
+  const sortedRooms = sortByName(rooms);
+  const sortedAllSubjects = sortByName(subjects);
+
+  // ——— Ta'lim tili: tanlangan sinf tiliga mos fanlar (alifbo bo'yicha) ———
   const classLang = classLangOf(selectedClass);
-  const langSubjects = subjects.filter(s => subjectLangOf(s) === classLang);
+  const langSubjects = sortByName(subjects.filter(s => subjectLangOf(s) === classLang));
   // Tanlangan sinf bilan bir tildagi sinflar (parallel/hovuz/nusxalash faqat shular orasida)
-  const sameLangClasses = classes.filter(c => classLangOf(c) === classLang);
+  const sameLangClasses = sortByName(classes.filter(c => classLangOf(c) === classLang));
 
   function subjectById(id) { return subjects.find(s => s.id === id); }
 
@@ -133,7 +139,10 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
   function togglePoolTeacher(tid) {
     setPoolForm((p) => ({ ...p, teacherIds: p.teacherIds.includes(tid) ? p.teacherIds.filter((x) => x !== tid) : [...p.teacherIds, tid] }));
   }
-  function teachersForSubject(subjectId) { return teachers.filter(t => teacherSubjectIds(t).includes(subjectId)); }
+  // Fanga biriktirilgan ustozlar — alifbo bo'yicha
+  function teachersForSubject(subjectId) {
+    return sortByName(teachers.filter(t => teacherSubjectIds(t).includes(subjectId)));
+  }
   function isChecked(subjectId) { return assignments.some(a => a.subjectId === subjectId); }
   function getAssignment(subjectId) { return assignments.find(a => a.subjectId === subjectId) || {}; }
   function assignmentAllowsDouble(a, subject) { return a.allowDouble === undefined ? Boolean(subject?.allowDouble) : Boolean(a.allowDouble); }
@@ -267,7 +276,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
 
   function applyByNames(names, targetClassId = selectedClassId, lang = classLang) {
     if (!targetClassId) return;
-    const selected = subjects.filter(s => names.includes(s.name) && subjectLangOf(s) === lang);
+    const selected = sortByName(subjects.filter(s => names.includes(s.name) && subjectLangOf(s) === lang));
     if (!selected.length) {
       toast(lang === "ru"
         ? "Avval Fanlar bo'limida ruscha standart fanlarni qo'shing"
@@ -291,7 +300,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
     classes.forEach(cls => {
       const lang = classLangOf(cls);
       const names = namesForGrade(getGradeFromClassName(cls.name), lang);
-      const selected = subjects.filter(s => names.includes(s.name) && subjectLangOf(s) === lang);
+      const selected = sortByName(subjects.filter(s => names.includes(s.name) && subjectLangOf(s) === lang));
       if (!selected.length) {
         if (lang === "ru") missingRu = true; else missingUz = true;
         return; // fanlar hali qo'shilmagan tildagi sinfga tegmaymiz
@@ -458,7 +467,8 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
   }, [classes.length, subjects.length]);
 
   const totalHours = assignments.reduce((sum, a) => sum + Number(a.weeklyHours || 0), 0);
-  const teacherLoads = teachers.map(t => {
+  // Ustoz yuklamasi — alifbo tartibida
+  const teacherLoads = sortByName(teachers).map(t => {
     let load = 0;
     Object.values(classSubjects || {}).forEach(list => {
       (list || []).forEach(a => {
@@ -494,7 +504,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
           <div className="page-subtitle">Sinfga fan, ustoz, soat, xona va daraja guruhlarini biriktiring</div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button className="btn btn-primary" onClick={() => { setPoolForm({ subjectId: langSubjects[0]?.id || subjects[0]?.id || "", classIds: [], teacherIds: [], weeklyHours: 5 }); setPoolOpen(true); }} disabled={!classes.length || !subjects.length}>🏊 Hovuz (daraja guruhi)</button>
+          <button className="btn btn-primary" onClick={() => { setPoolForm({ subjectId: langSubjects[0]?.id || sortedAllSubjects[0]?.id || "", classIds: [], teacherIds: [], weeklyHours: 5 }); setPoolOpen(true); }} disabled={!classes.length || !subjects.length}>🏊 Hovuz (daraja guruhi)</button>
           <button className="btn btn-secondary" onClick={applySmartForSelected} disabled={!selectedClassId || !subjects.length}>⚡ Mos fanlar</button>
           <button className="btn btn-success" onClick={applySmartForAllClasses} disabled={!classes.length || !subjects.length}>⚡ Hammaga mos</button>
           <button className="btn btn-primary" onClick={copyToAllClasses} disabled={!selectedClassId || !classes.length}>↗ Nusxalash</button>
@@ -509,7 +519,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
             <div className="card" style={{ overflowY: "auto", minHeight: 0, height: "100%" }}><div className="card-body">
               <div style={{ fontWeight: 700, marginBottom: 12 }}>🏫 Sinflar</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {[...classes].sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "uz", { numeric: true, sensitivity: "base" })).map(c => {
+                {sortedClasses.map(c => {
                   const count = (classSubjects[c.id] || []).length;
                   return <button key={c.id} className={`nav-item ${selectedClassId === c.id ? "active" : ""}`} style={{ background: selectedClassId === c.id ? "var(--accent-light)" : "transparent", color: selectedClassId === c.id ? "#fff" : "var(--text-secondary)" }} onClick={() => setSelectedClassId(c.id)}>
                     <span className="nav-icon">🏫</span><span className="nav-label" style={{ position: "relative", zIndex: 1 }}>{c.name}{classLangOf(c) === "ru" ? " 🇷🇺" : ""}</span><span style={{ marginLeft: "auto", position: "relative", zIndex: 1 }} className="badge badge-default">{count}</span>
@@ -603,7 +613,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                           </div>
                           <div className="cs-col-room">
                             <select className="form-control" disabled={!checked || a.levelGroupEnabled} value={a.roomId || ""} onChange={e => updateAssignment(s.id, { roomId: e.target.value })}>
-                              <option value="">Xonasiz</option>{rooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                              <option value="">Xonasiz</option>{sortedRooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                             </select>
                           </div>
                           <div className="cs-col-settings">
@@ -681,7 +691,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                                   Tanlangan sinflar <b>{teachers.find(t => t.id === a.teacherId)?.name || "ustoz tanlanmagan"}</b> bilan, bir vaqtda <b>{s.name}</b> o'qiydi. Ustoz/xona/soatni tepadagi asosiy qatordan tanlang.
                                 </div>
                                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 150, overflowY: "auto" }}>
-                                  {[...sameLangClasses].sort((x, y) => String(x.name).localeCompare(String(y.name), "uz", { numeric: true })).map(c => {
+                                  {sameLangClasses.map(c => {
                                     const inGroup = classInParallel(c.id, s.id, a.groupKey);
                                     const isOwner = c.id === selectedClassId;
                                     return (
@@ -708,7 +718,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                                   <select className="form-control" disabled={a.swapEnabled} value={a.teacherId2 || ""} onChange={e => updateAssignment(s.id, { teacherId2: e.target.value })}>
                                     <option value="">— 2-guruh ustozi —</option>{availableTeachers.filter(t => t.id !== a.teacherId).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                                   </select>
-                                  <select className="form-control" disabled={a.swapEnabled} value={a.roomId2 || ""} onChange={e => updateAssignment(s.id, { roomId2: e.target.value })}><option value="">2-guruh xonasi</option>{rooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select>
+                                  <select className="form-control" disabled={a.swapEnabled} value={a.roomId2 || ""} onChange={e => updateAssignment(s.id, { roomId2: e.target.value })}><option value="">2-guruh xonasi</option>{sortedRooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select>
                                 </div>
                                 <div style={{ marginTop: 10, background: "var(--card-bg)", border: "1px solid var(--card-border)", padding: 12, borderRadius: 10 }}>
                                   <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
@@ -731,7 +741,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                                           {teachersForSubject(a.swapSubjectId).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                                         </select>
                                         <select className="form-control" value={a.swapRoomId || ""} onChange={e => updateAssignment(s.id, { swapRoomId: e.target.value })}>
-                                          <option value="">2-fan xonasi: Xonasiz</option>{rooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                                          <option value="">2-fan xonasi: Xonasiz</option>{sortedRooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                                         </select>
                                       </div>
                                     </>
@@ -761,7 +771,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                                 <div style={{ marginBottom: 12, background: "var(--card-bg)", border: "1px solid var(--card-border)", borderRadius: 10, padding: 10 }}>
                                   <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Qaysi sinflar shu guruhda? (tanlang)</div>
                                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 150, overflowY: "auto" }}>
-                                    {[...sameLangClasses].sort((x, y) => String(x.name).localeCompare(String(y.name), "uz", { numeric: true })).map(c => {
+                                    {sameLangClasses.map(c => {
                                       const inGroup = classInLevelGroup(c.id, s.id, a.levelGroupKey);
                                       const isOwner = c.id === selectedClassId;
                                       return (
@@ -789,7 +799,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                                         {availableTeachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                                       </select>
                                       <select className="form-control" style={{ marginTop: 8 }} value={g.roomId || ""} onChange={e => updateLevelGroup(s.id, i, { roomId: e.target.value })}>
-                                        <option value="">Xonasiz</option>{rooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                                        <option value="">Xonasiz</option>{sortedRooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                                       </select>
                                     </div>
                                   ))}
@@ -824,7 +834,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                                   <div>
                                     <label className="form-label">Almashadigan fan xonasi (ixtiyoriy)</label>
                                     <select className="form-control" value={a.weekAltRoomId || ""} onChange={e => updateAssignment(s.id, { weekAltRoomId: e.target.value })}>
-                                      <option value="">Xonasiz</option>{rooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                                      <option value="">Xonasiz</option>{sortedRooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                                     </select>
                                   </div>
                                   <div>
@@ -876,13 +886,11 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
       {poolOpen && (() => {
         const poolSubject = subjectById(poolForm.subjectId);
         const poolLang = poolSubject ? subjectLangOf(poolSubject) : classLang;
-        // Hovuzga faqat fan tiliga mos sinflar qo'shiladi
-        const sortedC = classes
-          .filter(c => classLangOf(c) === poolLang)
-          .sort((a, b) => String(a.name).localeCompare(String(b.name), "uz", { numeric: true }));
+        // Hovuzga faqat fan tiliga mos sinflar qo'shiladi (alifbo bo'yicha)
+        const sortedC = sortByName(classes.filter(c => classLangOf(c) === poolLang));
         const subjTeachers = poolForm.subjectId
-          ? teachers.filter((t) => (Array.isArray(t.subjectIds) ? t.subjectIds : [t.subjectId]).includes(poolForm.subjectId))
-          : teachers;
+          ? sortByName(teachers.filter((t) => (Array.isArray(t.subjectIds) ? t.subjectIds : [t.subjectId]).includes(poolForm.subjectId)))
+          : sortByName(teachers);
         return (
           <div onClick={() => setPoolOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
             <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--card-bg,#fff)", borderRadius: 16, padding: 22, width: "100%", maxWidth: 640, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 24px 70px rgba(0,0,0,.35)" }}>
@@ -893,7 +901,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
 
               <label className="form-label">Fan</label>
               <select className="form-control" value={poolForm.subjectId} onChange={(e) => setPoolForm({ ...poolForm, subjectId: e.target.value, classIds: [], teacherIds: [] })}>
-                {subjects.map((s) => <option key={s.id} value={s.id}>{subjectLangOf(s) === "ru" ? "🇷🇺 " : "🇺🇿 "}{s.name}</option>)}
+                {sortedAllSubjects.map((s) => <option key={s.id} value={s.id}>{subjectLangOf(s) === "ru" ? "🇷🇺 " : "🇺🇿 "}{s.name}</option>)}
               </select>
 
               <label className="form-label" style={{ marginTop: 12, display: "block" }}>Haftalik soat</label>
@@ -928,7 +936,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
 
               {poolForm.classIds.length >= 2 && poolForm.teacherIds.length >= 1 && (
                 <div style={{ marginTop: 12, background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 10, padding: 10, fontSize: 13, color: "#065f46" }}>
-                  Natija: <b>{poolForm.classIds.map((id) => classes.find((c) => c.id === id)?.name).join(" + ")}</b> — {subjectById(poolForm.subjectId)?.name}, {poolForm.teacherIds.length} daraja, {poolForm.weeklyHours} soat. Ustozlar bir vaqtda o'qiydi.
+                  Natija: <b>{[...poolForm.classIds].sort((x, y) => cmpName(classes.find(c => c.id === x)?.name, classes.find(c => c.id === y)?.name)).map((id) => classes.find((c) => c.id === id)?.name).join(" + ")}</b> — {subjectById(poolForm.subjectId)?.name}, {poolForm.teacherIds.length} daraja, {poolForm.weeklyHours} soat. Ustozlar bir vaqtda o'qiydi.
                 </div>
               )}
 

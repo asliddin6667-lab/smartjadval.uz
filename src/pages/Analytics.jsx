@@ -1,566 +1,527 @@
 import { useMemo, useState } from "react";
-import { DAYS } from "../utils/constants";
-import { isTeachingSlot } from "../utils/scheduleGenerator";
-import VacancyAnalysis, { computeVacancy } from "./VacancyAnalysis";
 import "./vacancy.css";
 
-function classIdsOf(lesson) {
-  return Array.isArray(lesson.classIds) ? lesson.classIds : [lesson.classId].filter(Boolean);
+// =====================================================================
+//  VAKANSIYA TAHLILI — umumiy modul
+//
+//  Maktab ma'lumotlaridan (classes, subjects, teachers, classSubjects)
+//  har bir fan bo'yicha vakant (o'qituvchi biriktirilmagan) soatlarni
+//  va o'qituvchilarning ortiqcha yuklamasini hisoblaydi.
+//
+//  Ishlatiladi:
+//    1. Maktab foydalanuvchisi — Tahlil (Analytics) sahifasida
+//    2. Tuman admin — "💼 Vakansiyalar" bo'limi va maktab oynasida
+//
+//  Hisoblash mantig'i:
+//    - Har bir sinf-fan biriktiruvi (classSubjects) "o'rin"larga
+//      ajratiladi: oddiy dars = 1 o'rin (teacherId), bo'lingan guruh =
+//      2 o'rin (teacherId + teacherId2), daraja guruhi (hovuz) = har
+//      guruh alohida o'rin.
+//    - HOVUZ (birlashgan sinflar): 2-A va 2-B bitta hovuzga birikkan
+//      bo'lsa, ustoz ikkala sinfga BIR VAQTDA, bitta slotda dars
+//      beradi. Shu sababli soat FAQAT 1 MARTA hisoblanadi —
+//      sinflar soniga ko'paytirilmaydi. Sinflar ro'yxatda alohida
+//      ko'rinaveradi, lekin soat bir marta sanaladi.
+//    - O'rin bo'sh (o'qituvchi tanlanmagan) bo'lsa — shu fanning
+//      haftalik soati VAKANT hisoblanadi.
+//    - O'qituvchining biriktirilgan jami soati maksimal soatidan
+//      (t.maxWeeklyHours, bo'lmasa 25) oshsa — ORTIQCHA YUKLAMA.
+//    - Vakant soat > 0 yoki ortiqcha yuklama > 0 → maktab MUHTOJ.
+// =====================================================================
+
+export const DEFAULT_MAX_HOURS = 25;
+
+// ---------------------------------------------------------------------
+//  HOVUZ ANIQLASH
+//  classSubjects yozuvida hovuz turli nomlar bilan saqlangan bo'lishi
+//  mumkin. Quyidagi tartibda qidiriladi:
+//    1) To'g'ridan-to'g'ri hovuz ID maydoni (poolId, hovuzId, ...)
+//    2) Nomi pool/hovuz/level/daraja/guruh/parallel bilan boshlanib,
+//       id/key/code bilan tugaydigan har qanday maydon
+//    3) Hovuzga kiruvchi sinflar ro'yxati (classIds, poolClassIds, ...)
+//  Topilmasa null qaytadi — oddiy dars kabi hisoblanadi.
+// ---------------------------------------------------------------------
+const POOL_ID_FIELDS = [
+  "poolId",
+  "hovuzId",
+  "poolKey",
+  "levelPoolId",
+  "levelGroupId",
+  "levelGroupKey",
+  "darajaGuruhId",
+  "guruhId",
+  "groupId",
+  "sharedId",
+  "sharedGroupId",
+  "linkId",
+  "linkedId",
+  "pairId",
+  "parallelId",
+];
+
+const POOL_CLASS_FIELDS = [
+  "poolClassIds",
+  "hovuzClassIds",
+  "sharedClassIds",
+  "linkedClassIds",
+  "groupClassIds",
+  "classIds",
+];
+
+export function poolSignature(a) {
+  if (!a || typeof a !== "object") return null;
+
+  // 1) Aniq nomlangan hovuz ID
+  for (const f of POOL_ID_FIELDS) {
+    const v = a[f];
+    if (v && typeof v !== "object") return `id:${String(v)}`;
+  }
+
+  // 2) Umumiy qidiruv — pool*/hovuz*/level*/daraja*/guruh*/parallel* + Id/Key/Code
+  for (const k of Object.keys(a)) {
+    if (
+      /^(pool|hovuz|level|daraja|group|guruh|parallel|shared|link)/i.test(k) &&
+      /(id|key|code)$/i.test(k)
+    ) {
+      const v = a[k];
+      if (v && typeof v !== "object") return `id:${String(v)}`;
+    }
+  }
+
+  // 3) Hovuzga kiruvchi sinflar ro'yxati (kamida 2 ta sinf)
+  for (const f of POOL_CLASS_FIELDS) {
+    const ids = a[f];
+    if (Array.isArray(ids) && ids.length > 1) {
+      return `cls:${[...ids].map(String).sort().join(",")}`;
+    }
+  }
+
+  return null;
 }
 
-export default function AnalyticsPage({
-  classes = [],
-  subjects = [],
-  teachers = [],
-  schedule = {},
-  classSubjects = {},
-  timeslots = [],
-}) {
-  const [view, setView] = useState("classes"); // "classes" | "teachers" | "vacancy"
-  const [search, setSearch] = useState("");
-  const [filterClass, setFilterClass] = useState("");
-  const [filterTeacher, setFilterTeacher] = useState("");
-  const [filterSubject, setFilterSubject] = useState("");
+function emptyResult() {
+  return {
+    hasData: false,
+    subjects: [],
+    vacantSubjects: [],
+    teachers: [],
+    overloaded: [],
+    requiredTotal: 0,
+    assignedTotal: 0,
+    vacantTotal: 0,
+    overloadTotal: 0,
+    poolMergedTotal: 0,
+    needy: false,
+  };
+}
 
-  const subjectMap = useMemo(() => new Map(subjects.map((s) => [s.id, s])), [subjects]);
-  const teacherMap = useMemo(() => new Map(teachers.map((t) => [t.id, t])), [teachers]);
-  const classMap = useMemo(() => new Map(classes.map((c) => [c.id, c])), [classes]);
+export function computeVacancy(d) {
+  if (!d || typeof d !== "object") return emptyResult();
 
-  const sortedTimeslots = useMemo(
-    () => [...timeslots].sort((a, b) => Number(a.lessonNumber || 0) - Number(b.lessonNumber || 0)),
-    [timeslots]
-  );
+  const classes = Array.isArray(d.classes) ? d.classes : [];
+  const subjects = Array.isArray(d.subjects) ? d.subjects : [];
+  const teachers = Array.isArray(d.teachers) ? d.teachers : [];
+  const classSubjects =
+    d.classSubjects && typeof d.classSubjects === "object" ? d.classSubjects : {};
 
-  // 💼 Vakansiya tahlili — "Sinf fanlari"dagi biriktiruvlar asosida
-  const vac = useMemo(
-    () => computeVacancy({ classes, subjects, teachers, classSubjects }),
-    [classes, subjects, teachers, classSubjects]
-  );
+  if (!classes.length) return emptyResult();
 
-  const stats = useMemo(() => {
-    const classSubject = {}; // `${cid}__${sid}` -> hours
-    const classTotal = {}; // cid -> hours
-    const teacherTotal = {}; // tid -> distinct teaching slots
-    const teacherClass = {}; // tid -> { cid -> hours }
-    const teacherSubject = {}; // tid -> { sid -> hours }
-    const teacherDaily = {}; // tid -> { day -> hours }
-    const classSubjectTeachers = {}; // `${cid}__${sid}` -> Set(tid)
-    const teacherClassSubject = {}; // `${tid}__${cid}__${sid}` -> hours
+  const subjName = new Map(subjects.map((s) => [s.id, s.name]));
 
-    DAYS.forEach((day) => {
-      sortedTimeslots.forEach((ts) => {
-        if (!isTeachingSlot(ts)) return;
-        const cell = schedule?.[day]?.[ts.id] || [];
-        if (!cell.length) return;
-        const seenCS = new Set();
-        const seenT = new Set();
-        const seenTC = new Set();
-        const seenTS = new Set();
-        const seenTCS = new Set();
-        cell.forEach((l) => {
-          const sid = l.subjectId;
-          const tid = l.teacherId || "";
-          classIdsOf(l).forEach((cid) => {
-            const csk = `${cid}__${sid}`;
-            if (tid) {
-              classSubjectTeachers[csk] = classSubjectTeachers[csk] || new Set();
-              classSubjectTeachers[csk].add(tid);
-            }
-            if (!seenCS.has(csk)) {
-              seenCS.add(csk);
-              classSubject[csk] = (classSubject[csk] || 0) + 1;
-              classTotal[cid] = (classTotal[cid] || 0) + 1;
-            }
-            if (tid) {
-              const tck = `${tid}__${cid}`;
-              if (!seenTC.has(tck)) {
-                seenTC.add(tck);
-                teacherClass[tid] = teacherClass[tid] || {};
-                teacherClass[tid][cid] = (teacherClass[tid][cid] || 0) + 1;
-              }
-              const tcsk = `${tid}__${cid}__${sid}`;
-              if (!seenTCS.has(tcsk)) {
-                seenTCS.add(tcsk);
-                teacherClassSubject[tcsk] = (teacherClassSubject[tcsk] || 0) + 1;
-              }
-            }
-          });
-          if (tid) {
-            if (!seenT.has(tid)) {
-              seenT.add(tid);
-              teacherTotal[tid] = (teacherTotal[tid] || 0) + 1;
-              teacherDaily[tid] = teacherDaily[tid] || {};
-              teacherDaily[tid][day] = (teacherDaily[tid][day] || 0) + 1;
-            }
-            const tsk = `${tid}__${sid}`;
-            if (!seenTS.has(tsk)) {
-              seenTS.add(tsk);
-              teacherSubject[tid] = teacherSubject[tid] || {};
-              teacherSubject[tid][sid] = (teacherSubject[tid][sid] || 0) + 1;
-            }
-          }
-        });
-      });
-    });
+  const req = new Map();          // subjectId -> kerakli jami soat
+  const ass = new Map();          // subjectId -> biriktirilgan soat
+  const vac = new Map();          // subjectId -> vakant soat
+  const vacByClass = new Map();   // subjectId -> Map(sinf -> soat)
+  const declared = new Map();     // teacherId -> jami biriktirilgan soat
+  const declaredSubj = new Map(); // teacherId -> Map(subjectId -> soat)
 
-    return { classSubject, classTotal, teacherTotal, teacherClass, teacherSubject, teacherDaily, classSubjectTeachers, teacherClassSubject };
-  }, [schedule, sortedTimeslots]);
+  const bump = (m, k, h) => m.set(k, (m.get(k) || 0) + h);
 
-  function requiredHours(classId, subjectId) {
-    const list = classSubjects?.[classId] || [];
-    let req = 0;
-    list.forEach((a) => {
-      if (a.subjectId === subjectId) req += Number(a.weeklyHours || 0);
-      if (a.swapEnabled && a.swapSubjectId === subjectId) req += Number(a.weeklyHours || 0);
-    });
-    return req;
+  // ---- 1-bosqich: barcha biriktiruvlarni yig'ish + hovuz sinflarini aniqlash
+  const entries = [];
+  const poolClassNames = new Map(); // sig -> Set(sinf nomlari)
+
+  for (const c of classes) {
+    const list = Array.isArray(classSubjects[c.id]) ? classSubjects[c.id] : [];
+    for (const a of list) {
+      if (!a) continue;
+      const h = Number(a.weeklyHours || 0);
+      const sid = a.subjectId;
+      if (!h || !sid) continue;
+
+      // O'rinlar ro'yxati: har o'rin bitta o'qituvchi talab qiladi
+      let slots;
+      if (a.levelGroupEnabled && Array.isArray(a.levelGroups) && a.levelGroups.length) {
+        slots = a.levelGroups.map((g) => (g && g.teacherId) || "");
+      } else {
+        slots = [a.teacherId || ""];
+        if (a.teacherId2) slots.push(a.teacherId2);
+      }
+
+      const sig = poolSignature(a);
+      if (sig) {
+        if (!poolClassNames.has(sig)) poolClassNames.set(sig, new Set());
+        poolClassNames.get(sig).add(c.name || "?");
+      }
+
+      entries.push({ clsName: c.name || "?", h, sid, slots, sig });
+    }
   }
 
-  // Sinf uchun barcha tegishli fanlar (biriktirilgan + jadvalda bor)
-  function subjectsForClass(classId) {
-    const ids = new Set();
-    (classSubjects?.[classId] || []).forEach((a) => {
-      if (a.subjectId) ids.add(a.subjectId);
-      if (a.swapEnabled && a.swapSubjectId) ids.add(a.swapSubjectId);
+  // ---- 2-bosqich: hisoblash (hovuz — bir marta)
+  const seenSlot = new Set();    // hovuz o'rni (fan + guruh) — kerakli/vakant uchun
+  const seenTeach = new Set();   // hovuz o'rni + ustoz — yuklama uchun
+  let poolMergedTotal = 0;       // hovuz tufayli qo'shilmagan (takroriy) soatlar
+
+  for (const e of entries) {
+    e.slots.forEach((tid, idx) => {
+      const slotKey = e.sig ? `${e.sig}|${e.sid}|${idx}` : null;
+      const teachKey = e.sig ? `${slotKey}|${tid || "-"}` : null;
+
+      const dupSlot = slotKey ? seenSlot.has(slotKey) : false;
+      const dupTeach = teachKey ? seenTeach.has(teachKey) : false;
+      if (slotKey) seenSlot.add(slotKey);
+      if (teachKey) seenTeach.add(teachKey);
+
+      if (dupSlot) poolMergedTotal += e.h;
+
+      // --- Fan bo'yicha kerakli / biriktirilgan / vakant
+      if (!dupSlot) {
+        bump(req, e.sid, e.h);
+        if (tid) {
+          bump(ass, e.sid, e.h);
+        } else {
+          bump(vac, e.sid, e.h);
+          if (!vacByClass.has(e.sid)) vacByClass.set(e.sid, new Map());
+          const label = e.sig
+            ? `${[...(poolClassNames.get(e.sig) || [e.clsName])].sort((x, y) =>
+                String(x).localeCompare(String(y), "uz", { numeric: true })
+              ).join("+")} (hovuz)`
+            : e.clsName;
+          bump(vacByClass.get(e.sid), label, e.h);
+        }
+      }
+
+      // --- O'qituvchi yuklamasi (hovuzda ayni ustoz 1 marta)
+      if (tid && !dupTeach) {
+        bump(declared, tid, e.h);
+        if (!declaredSubj.has(tid)) declaredSubj.set(tid, new Map());
+        bump(declaredSubj.get(tid), e.sid, e.h);
+      }
     });
-    Object.keys(stats.classSubject).forEach((k) => {
-      const [cid, sid] = k.split("__");
-      if (cid === classId) ids.add(sid);
-    });
-    return [...ids];
   }
 
-  const totals = useMemo(() => {
-    let placed = 0;
-    let required = 0;
-    classes.forEach((c) => {
-      placed += stats.classTotal[c.id] || 0;
-      (classSubjects?.[c.id] || []).forEach((a) => {
-        required += Number(a.weeklyHours || 0);
-        if (a.swapEnabled && a.swapSubjectId) required += Number(a.weeklyHours || 0);
-      });
-    });
-    return { placed, required };
-  }, [classes, classSubjects, stats]);
+  const subjectRows = [...req.keys()]
+    .map((sid) => ({
+      id: sid,
+      name: subjName.get(sid) || "Noma'lum fan",
+      required: req.get(sid) || 0,
+      assigned: ass.get(sid) || 0,
+      vacant: vac.get(sid) || 0,
+      vacantClasses: [...(vacByClass.get(sid) || new Map()).entries()]
+        .map(([cls, hours]) => ({ cls, hours }))
+        .sort((x, y) => String(x.cls).localeCompare(String(y.cls), "uz", { numeric: true })),
+    }))
+    .sort((x, y) => (y.vacant - x.vacant) || x.name.localeCompare(y.name, "uz"));
 
-  const fillPct = totals.required > 0 ? Math.round((totals.placed / totals.required) * 100) : 0;
+  const teacherRows = teachers
+    .filter((t) => t && t.name)
+    .map((t) => {
+      const dec = declared.get(t.id) || 0;
+      const ownMax = Number(t.maxWeeklyHours || t.maxHours || 0);
+      const max = ownMax > 0 ? ownMax : DEFAULT_MAX_HOURS;
+      const sMap = declaredSubj.get(t.id);
+      const subjectNames = sMap
+        ? [...sMap.keys()].map((sid) => subjName.get(sid)).filter(Boolean).join(", ")
+        : "";
+      return {
+        id: t.id,
+        name: t.name,
+        subjectNames,
+        declared: dec,
+        max,
+        hasOwnMax: ownMax > 0,
+        excess: Math.max(0, dec - max),
+      };
+    })
+    .sort((x, y) =>
+      (y.excess - x.excess) || (y.declared - x.declared) || x.name.localeCompare(y.name, "uz")
+    );
 
-  const sortedClasses = useMemo(
-    () => [...classes].sort((a, b) => String(a.name).localeCompare(String(b.name), "uz", { numeric: true })),
-    [classes]
-  );
-  const sortedTeachers = useMemo(
-    () => [...teachers].sort((a, b) => (stats.teacherTotal[b.id] || 0) - (stats.teacherTotal[a.id] || 0)),
-    [teachers, stats]
-  );
+  const overloaded = teacherRows.filter((t) => t.excess > 0);
+  const requiredTotal = subjectRows.reduce((a, r) => a + r.required, 0);
+  const assignedTotal = subjectRows.reduce((a, r) => a + r.assigned, 0);
+  const vacantTotal = subjectRows.reduce((a, r) => a + r.vacant, 0);
+  const overloadTotal = overloaded.reduce((a, t) => a + t.excess, 0);
 
-  // Tanlangan o'qituvchi (sinflar ko'rinishida qo'shimcha ustun uchun)
-  const selectedTeacher = filterTeacher ? teacherMap.get(filterTeacher) : null;
+  return {
+    hasData: requiredTotal > 0,
+    subjects: subjectRows,
+    vacantSubjects: subjectRows.filter((r) => r.vacant > 0),
+    teachers: teacherRows,
+    overloaded,
+    requiredTotal,
+    assignedTotal,
+    vacantTotal,
+    overloadTotal,
+    poolMergedTotal,
+    needy: vacantTotal > 0 || overloadTotal > 0,
+  };
+}
 
-  const card = { background: "var(--card-bg, #fff)", border: "1px solid var(--card-border, #e5e7eb)", borderRadius: 12, padding: 16, marginBottom: 16 };
-  const th = { textAlign: "left", padding: "8px 10px", fontSize: 13, color: "var(--text-secondary)", borderBottom: "2px solid var(--card-border, #e5e7eb)" };
-  const td = { padding: "8px 10px", fontSize: 14, borderBottom: "1px solid var(--card-border, #eef2f7)" };
+// Qisqa matn: "Fizika (12), Kimyo (4)" — jadval/ro'yxatlarda ishlatiladi
+export function vacancySummaryText(vacResult, limit = 3) {
+  if (!vacResult || !vacResult.vacantSubjects.length) return "";
+  const parts = vacResult.vacantSubjects
+    .slice(0, limit)
+    .map((r) => `${r.name} (${r.vacant})`);
+  const rest = vacResult.vacantSubjects.length - limit;
+  return parts.join(", ") + (rest > 0 ? ` +${rest} fan` : "");
+}
 
-  const vacantCount = vac?.hasData ? vac.vacantTotal || 0 : 0;
+// ---------------------------------------------------------------------
+//  Holat belgisi (badge)
+// ---------------------------------------------------------------------
+export function VacancyBadge({ vac }) {
+  if (!vac || !vac.hasData) {
+    return <span className="vak-badge vak-badge--muted">Ma'lumot yo'q</span>;
+  }
+  if (vac.vacantTotal > 0) {
+    return <span className="vak-badge vak-badge--bad">🆘 Muhtoj · {vac.vacantTotal} soat vakant</span>;
+  }
+  if (vac.overloadTotal > 0) {
+    return <span className="vak-badge vak-badge--warn">⚠️ Ortiqcha yuklama · {vac.overloadTotal} soat</span>;
+  }
+  return <span className="vak-badge vak-badge--ok">✓ Ta'minlangan</span>;
+}
 
-  return (
-    <div>
-      <div className="page-header">
-        <div>
-          <div className="page-title">📈 Jadval tahlili</div>
-          <div className="page-subtitle">Sinflar, o'qituvchilar va vakansiyalar bo'yicha tahlil</div>
+// ---------------------------------------------------------------------
+//  TO'LIQ HISOBOT — bitta maktab uchun
+//  props:
+//    data         — computeVacancy() natijasi
+//    showTeachers — barcha o'qituvchilar yuklamasi jadvali (default: true)
+// ---------------------------------------------------------------------
+export function VacancyReport({ data, showTeachers = true }) {
+  const [teacherFilter, setTeacherFilter] = useState("all"); // all | over
+
+  if (!data || !data.hasData) {
+    return (
+      <div className="vak-empty">
+        <div className="vak-empty__icon">💼</div>
+        <div className="vak-empty__title">Vakansiya tahlili uchun ma'lumot yo'q</div>
+        <div className="vak-empty__text">
+          "Sinf fanlari" bo'limida fanlarga haftalik soat va o'qituvchi biriktirilsa,
+          tahlil shu yerda avtomatik hisoblanadi.
         </div>
       </div>
+    );
+  }
 
-      {/* Umumiy ko'rsatkichlar */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }}>
-        {[
-          { label: "Sinflar", value: classes.length, icon: "🏫" },
-          { label: "O'qituvchilar", value: teachers.length, icon: "👩‍🏫" },
-          { label: "Joylashgan soat", value: totals.placed, icon: "✅" },
-          { label: "To'ldirish", value: `${fillPct}%`, icon: fillPct >= 100 ? "🟢" : "🟡" },
-          {
-            label: "Vakant soat",
-            value: vacantCount,
-            icon: "💼",
-            danger: vacantCount > 0,
-            onClick: () => setView("vacancy"),
-          },
-        ].map((c) => (
-          <div
-            key={c.label}
-            onClick={c.onClick}
-            style={{
-              ...card,
-              marginBottom: 0,
-              textAlign: "center",
-              cursor: c.onClick ? "pointer" : "default",
-              border: c.danger ? "1px solid rgba(239, 68, 68, 0.5)" : card.border,
-            }}
-          >
-            <div style={{ fontSize: 22 }}>{c.icon}</div>
-            <div style={{ fontSize: 26, fontWeight: 800, color: c.danger ? "#dc2626" : "var(--accent, #4f46e5)" }}>{c.value}</div>
-            <div style={{ fontSize: 13, color: c.danger ? "#dc2626" : "var(--text-secondary)" }}>{c.label}</div>
+  const pct = data.requiredTotal
+    ? Math.round((data.assignedTotal / data.requiredTotal) * 100)
+    : 0;
+
+  const KPIS = [
+    { icon: "🕐", label: "Kerakli jami soat", value: data.requiredTotal, cls: "" },
+    { icon: "✅", label: "Biriktirilgan soat", value: `${data.assignedTotal} (${pct}%)`, cls: "vak-kpi--ok" },
+    { icon: "💼", label: "Vakant soat", value: data.vacantTotal, cls: data.vacantTotal > 0 ? "vak-kpi--bad" : "vak-kpi--ok" },
+    { icon: "⚠️", label: "Ortiqcha yuklama", value: data.overloadTotal, cls: data.overloadTotal > 0 ? "vak-kpi--warn" : "vak-kpi--ok" },
+  ];
+
+  const shownTeachers = teacherFilter === "over" ? data.overloaded : data.teachers;
+  const hasDefaultMax = data.teachers.some((t) => !t.hasOwnMax);
+
+  return (
+    <div className="vak-root">
+      {/* Umumiy holat */}
+      <div className="vak-statusrow">
+        <VacancyBadge vac={data} />
+        {data.vacantTotal > 0 && (
+          <span className="vak-statusrow__note">
+            Vakant fanlar: <b>{vacancySummaryText(data, 5)}</b> — yangi o'qituvchi kerak
+          </span>
+        )}
+      </div>
+
+      <div className="vak-kpis">
+        {KPIS.map((k, i) => (
+          <div key={i} className={`vak-kpi ${k.cls}`}>
+            <div className="vak-kpi__icon">{k.icon}</div>
+            <div>
+              <div className="vak-kpi__value">{k.value}</div>
+              <div className="vak-kpi__label">{k.label}</div>
+            </div>
           </div>
         ))}
       </div>
 
-      {/* Ko'rinish tanlash */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
-        <button
-          className={`btn ${view === "classes" ? "btn-primary" : "btn-secondary"}`}
-          style={{ fontSize: 17, fontWeight: 700, padding: "14px 28px", borderRadius: 12 }}
-          onClick={() => setView("classes")}
-        >
-          🏫 Sinflar bo'yicha
-        </button>
-        <button
-          className={`btn ${view === "teachers" ? "btn-primary" : "btn-secondary"}`}
-          style={{ fontSize: 17, fontWeight: 700, padding: "14px 28px", borderRadius: 12 }}
-          onClick={() => setView("teachers")}
-        >
-          👩‍🏫 O'qituvchilar bo'yicha
-        </button>
-        <button
-          className={`btn ${view === "vacancy" ? "btn-primary" : "btn-secondary"}`}
-          style={{
-            fontSize: 17,
-            fontWeight: 700,
-            padding: "14px 28px",
-            borderRadius: 12,
-            border: view !== "vacancy" && vacantCount > 0 ? "1px solid rgba(239, 68, 68, 0.6)" : undefined,
-            color: view !== "vacancy" && vacantCount > 0 ? "#dc2626" : undefined,
-          }}
-          onClick={() => setView("vacancy")}
-        >
-          💼 Vakansiya{vacantCount > 0 ? ` (${vacantCount})` : ""}
-        </button>
-      </div>
-
-      {/* 💼 VAKANSIYA KO'RINISHI */}
-      {view === "vacancy" && (
-        <VacancyAnalysis
-          classes={classes}
-          subjects={subjects}
-          teachers={teachers}
-          classSubjects={classSubjects}
-        />
-      )}
-
-      {/* Izlash / filtr — faqat sinf/o'qituvchi ko'rinishlarida */}
-      {view !== "vacancy" && (
-      <div style={{ ...card, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" }}>
-        <div style={{ flex: "1 1 200px", minWidth: 160 }}>
-          <label className="form-label" style={{ fontSize: 12 }}>Izlash</label>
-          <input className="form-control" placeholder="Nom bo'yicha izlash..." value={search} onChange={(e) => setSearch(e.target.value)} />
+      {/* Fanlar bo'yicha */}
+      <div className="vak-section">
+        <div className="vak-section__title">
+          📚 Fanlar bo'yicha ta'minot
+          {data.vacantSubjects.length > 0 && (
+            <span className="vak-section__sub"> · {data.vacantSubjects.length} ta fanda vakansiya</span>
+          )}
         </div>
-        <div style={{ flex: "1 1 160px", minWidth: 140 }}>
-          <label className="form-label" style={{ fontSize: 12 }}>Sinf</label>
-          <select className="form-control" value={filterClass} onChange={(e) => setFilterClass(e.target.value)}>
-            <option value="">Barcha sinflar</option>
-            {sortedClasses.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        </div>
-        <div style={{ flex: "1 1 180px", minWidth: 150 }}>
-          <label className="form-label" style={{ fontSize: 12 }}>O'qituvchi</label>
-          <select className="form-control" value={filterTeacher} onChange={(e) => setFilterTeacher(e.target.value)}>
-            <option value="">Barcha o'qituvchilar</option>
-            {[...teachers].sort((a, b) => String(a.name).localeCompare(String(b.name), "uz")).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
-        </div>
-        <div style={{ flex: "1 1 160px", minWidth: 140 }}>
-          <label className="form-label" style={{ fontSize: 12 }}>Fan</label>
-          <select className="form-control" value={filterSubject} onChange={(e) => setFilterSubject(e.target.value)}>
-            <option value="">Barcha fanlar</option>
-            {[...subjects].sort((a, b) => String(a.name).localeCompare(String(b.name), "uz")).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-        </div>
-        {(search || filterClass || filterTeacher || filterSubject) && (
-          <button className="btn btn-secondary" onClick={() => { setSearch(""); setFilterClass(""); setFilterTeacher(""); setFilterSubject(""); }}>
-            ✕ Tozalash
-          </button>
-        )}
-      </div>
-      )}
-
-      {/* Tanlangan o'qituvchi haqida umumiy ma'lumot */}
-      {view !== "vacancy" && selectedTeacher && (
-        <div style={{ ...card, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
-          <div style={{ fontWeight: 800, fontSize: 15 }}>👩‍🏫 {selectedTeacher.name}</div>
-          <span className="badge badge-info">Jami: {stats.teacherTotal[filterTeacher] || 0} soat</span>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-            {Object.entries(stats.teacherClass[filterTeacher] || {})
-              .sort((a, b) => String(classMap.get(a[0])?.name || "").localeCompare(String(classMap.get(b[0])?.name || ""), "uz", { numeric: true }))
-              .map(([cid, h]) => (
-                <span key={cid} className="badge badge-default">{classMap.get(cid)?.name || "?"}: {h} soat</span>
+        <div className="vak-tablewrap">
+          <table className="vak-table">
+            <thead>
+              <tr>
+                <th>Fan</th>
+                <th>Kerakli</th>
+                <th>Biriktirilgan</th>
+                <th>Vakant</th>
+                <th>Vakant sinflar</th>
+                <th>Holat</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.subjects.map((r) => (
+                <tr key={r.id} className={r.vacant > 0 ? "vak-row--bad" : ""}>
+                  <td><b>{r.name}</b></td>
+                  <td className="vak-c">{r.required}</td>
+                  <td className="vak-c">{r.assigned}</td>
+                  <td className="vak-c">
+                    {r.vacant > 0 ? <b className="vak-red">{r.vacant}</b> : <span className="vak-dim">—</span>}
+                  </td>
+                  <td className="vak-classes">
+                    {r.vacantClasses.length
+                      ? r.vacantClasses.map((v) => `${v.cls} (${v.hours})`).join(", ")
+                      : <span className="vak-dim">—</span>}
+                  </td>
+                  <td>
+                    {r.vacant > 0
+                      ? <span className="vak-badge vak-badge--bad">🆘 {r.vacant} soat vakant</span>
+                      : <span className="vak-badge vak-badge--ok">✓ To'liq</span>}
+                  </td>
+                </tr>
               ))}
-          </div>
+            </tbody>
+            <tfoot>
+              <tr className="vak-total">
+                <td><b>Jami</b></td>
+                <td className="vak-c"><b>{data.requiredTotal}</b></td>
+                <td className="vak-c"><b>{data.assignedTotal}</b></td>
+                <td className="vak-c"><b className={data.vacantTotal ? "vak-red" : ""}>{data.vacantTotal || "—"}</b></td>
+                <td></td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
         </div>
-      )}
+      </div>
 
-      {/* Tanlangan o'qituvchining haftalik dars jadvali: qaysi kuni, nechinchi soat, qaysi sinf */}
-      {view !== "vacancy" && selectedTeacher && (() => {
-        const teachingSlots = sortedTimeslots.filter((ts) => isTeachingSlot(ts));
-        const slotsByNumber = {};
-        teachingSlots.forEach((ts) => {
-          const n = Number(ts.lessonNumber || 0);
-          (slotsByNumber[n] = slotsByNumber[n] || []).push(ts);
-        });
-        const lessonNumbers = Object.keys(slotsByNumber).map(Number).sort((a, b) => a - b);
-        return (
-          <div style={card}>
-            <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 10 }}>
-              📅 {selectedTeacher.name} — haftalik dars jadvali
+      {/* O'qituvchilar yuklamasi */}
+      {showTeachers && data.teachers.length > 0 && (
+        <div className="vak-section">
+          <div className="vak-section__head">
+            <div className="vak-section__title">
+              👨‍🏫 O'qituvchilar yuklamasi
+              {data.overloaded.length > 0 && (
+                <span className="vak-section__sub"> · {data.overloaded.length} ta o'qituvchida ortiqcha soat</span>
+              )}
             </div>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
-                <thead>
-                  <tr>
-                    <th style={th}>Soat</th>
-                    {DAYS.map((d) => (
-                      <th key={d} style={{ ...th, textAlign: "center" }}>{d}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {lessonNumbers.map((n) => (
-                    <tr key={n}>
-                      <td style={{ ...td, fontWeight: 700, whiteSpace: "nowrap" }}>{n}-soat</td>
-                      {DAYS.map((day) => {
-                        const items = [];
-                        (slotsByNumber[n] || []).forEach((ts) => {
-                          (schedule?.[day]?.[ts.id] || []).forEach((l) => {
-                            if ((l.teacherId || "") === filterTeacher) items.push(l);
-                          });
-                        });
-                        return (
-                          <td key={day} style={{ ...td, textAlign: "center", verticalAlign: "top" }}>
-                            {items.length === 0 ? (
-                              <span style={{ color: "var(--text-muted, #d1d5db)" }}>—</span>
-                            ) : (
-                              items.map((l, i) => (
-                                <div
-                                  key={i}
-                                  style={{
-                                    background: "var(--accent-light, #eef2ff)",
-                                    borderRadius: 8,
-                                    padding: "4px 8px",
-                                    marginBottom: i < items.length - 1 ? 4 : 0,
-                                    display: "inline-block",
-                                    minWidth: 70,
-                                  }}
-                                >
-                                  <div style={{ fontWeight: 800, fontSize: 13, color: "var(--accent, #4f46e5)" }}>
-                                    {classIdsOf(l).map((cid) => classMap.get(cid)?.name || "?").join(", ")}
-                                  </div>
-                                  <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>
-                                    {subjectMap.get(l.subjectId)?.name || ""}
-                                  </div>
-                                </div>
-                              ))
-                            )}
-                          </td>
-                        );
-                      })}
+            <div className="vak-tabs">
+              <button
+                type="button"
+                className={`vak-tab ${teacherFilter === "all" ? "vak-tab--active" : ""}`}
+                onClick={() => setTeacherFilter("all")}
+              >
+                Hammasi ({data.teachers.length})
+              </button>
+              <button
+                type="button"
+                className={`vak-tab ${teacherFilter === "over" ? "vak-tab--active" : ""}`}
+                onClick={() => setTeacherFilter("over")}
+              >
+                Ortiqcha yuklama ({data.overloaded.length})
+              </button>
+            </div>
+          </div>
+          <div className="vak-tablewrap">
+            <table className="vak-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>F.I.Sh.</th>
+                  <th>Fanlari</th>
+                  <th>Biriktirilgan</th>
+                  <th>Maksimal</th>
+                  <th>Yuklama</th>
+                  <th>Holat</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shownTeachers.length === 0 ? (
+                  <tr><td colSpan={7} className="vak-dim vak-c">Ortiqcha yuklamali o'qituvchi yo'q ✓</td></tr>
+                ) : shownTeachers.map((t, i) => {
+                  const loadPct = t.max > 0 ? Math.round((t.declared / t.max) * 100) : 0;
+                  return (
+                    <tr key={t.id || i} className={t.excess > 0 ? "vak-row--warn" : ""}>
+                      <td className="vak-c">{i + 1}</td>
+                      <td><b>{t.name}</b></td>
+                      <td>{t.subjectNames || <span className="vak-dim">—</span>}</td>
+                      <td className="vak-c"><b>{t.declared || "—"}</b></td>
+                      <td className="vak-c">
+                        {t.max}{!t.hasOwnMax && <span className="vak-dim">*</span>}
+                      </td>
+                      <td className="vak-c">
+                        <span className={`vak-load ${loadPct > 100 ? "vak-red" : loadPct >= 85 ? "vak-amber" : ""}`}>
+                          {loadPct}%
+                        </span>
+                      </td>
+                      <td>
+                        {t.excess > 0
+                          ? <span className="vak-badge vak-badge--warn">+{t.excess} soat ortiqcha</span>
+                          : t.declared === 0
+                            ? <span className="vak-badge vak-badge--muted">Soat biriktirilmagan</span>
+                            : <span className="vak-badge vak-badge--ok">✓ Normal</span>}
+                      </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
-        );
-      })()}
-
-      {view === "classes" && (
-        <div>
-          {(() => {
-            const q = search.trim().toLowerCase();
-            const rows = sortedClasses
-              .filter((cls) => !filterClass || cls.id === filterClass)
-              .map((cls) => {
-                let subs = subjectsForClass(cls.id);
-                if (filterSubject) subs = subs.filter((sid) => sid === filterSubject);
-                if (filterTeacher) subs = subs.filter((sid) => stats.classSubjectTeachers[`${cls.id}__${sid}`]?.has(filterTeacher));
-                if (q) {
-                  const classMatch = String(cls.name).toLowerCase().includes(q);
-                  if (!classMatch) subs = subs.filter((sid) => String(subjectMap.get(sid)?.name || "").toLowerCase().includes(q));
-                }
-                subs = subs.sort((a, b) => String(subjectMap.get(a)?.name || "").localeCompare(String(subjectMap.get(b)?.name || ""), "uz"));
-                return { cls, subs };
-              })
-              .filter(({ subs, cls }) => {
-                const anyFilter = filterSubject || filterTeacher || q;
-                if (anyFilter && subs.length === 0) {
-                  // agar faqat sinf nomi qidiruvga mos bo'lsa ham ko'rsatamiz
-                  if (q && String(cls.name).toLowerCase().includes(q) && !filterSubject && !filterTeacher) return true;
-                  return false;
-                }
-                return true;
-              });
-
-            if (rows.length === 0) return <div style={card}>Mos natija topilmadi.</div>;
-
-            return rows.map(({ cls, subs }) => {
-              const total = stats.classTotal[cls.id] || 0;
-              const teacherInClass = filterTeacher ? (stats.teacherClass[filterTeacher]?.[cls.id] || 0) : 0;
-              return (
-                <div key={cls.id} style={card}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
-                    <div style={{ fontWeight: 800, fontSize: 16 }}>🏫 {cls.name}</div>
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      {selectedTeacher && (
-                        <span className="badge badge-success">👩‍🏫 {selectedTeacher.name}: {teacherInClass} soat</span>
-                      )}
-                      <span className="badge badge-info">Jami: {total} soat</span>
-                    </div>
-                  </div>
-                  {subs.length === 0 ? (
-                    <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>Mos fan yo'q.</div>
-                  ) : (
-                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                      <thead>
-                        <tr>
-                          <th style={th}>Fan</th>
-                          <th style={{ ...th, textAlign: "center" }}>Joylashgan</th>
-                          {selectedTeacher && (
-                            <th style={{ ...th, textAlign: "center", color: "var(--accent, #4f46e5)" }}>
-                              {selectedTeacher.name} (soat)
-                            </th>
-                          )}
-                          <th style={{ ...th, textAlign: "center" }}>Kerakli</th>
-                          <th style={{ ...th, textAlign: "center" }}>Holat</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {subs.map((sid) => {
-                          const placed = stats.classSubject[`${cls.id}__${sid}`] || 0;
-                          const need = requiredHours(cls.id, sid);
-                          const ok = need > 0 ? placed >= need : true;
-                          const teacherHours = filterTeacher ? (stats.teacherClassSubject[`${filterTeacher}__${cls.id}__${sid}`] || 0) : 0;
-                          return (
-                            <tr key={sid}>
-                              <td style={td}>{subjectMap.get(sid)?.name || "Fan"}</td>
-                              <td style={{ ...td, textAlign: "center", fontWeight: 700 }}>{placed}</td>
-                              {selectedTeacher && (
-                                <td style={{ ...td, textAlign: "center", fontWeight: 800, color: "var(--accent, #4f46e5)" }}>
-                                  {teacherHours}
-                                </td>
-                              )}
-                              <td style={{ ...td, textAlign: "center", color: "var(--text-secondary)" }}>{need || "—"}</td>
-                              <td style={{ ...td, textAlign: "center" }}>
-                                {need === 0 ? (
-                                  <span className="badge badge-default">reja yo'q</span>
-                                ) : ok ? (
-                                  <span className="badge badge-success">to'liq</span>
-                                ) : (
-                                  <span className="badge badge-warning">{need - placed} kam</span>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
-              );
-            });
-          })()}
+          {hasDefaultMax && (
+            <div className="vak-note">
+              * — o'qituvchiga maksimal soat kiritilmagan, standart {DEFAULT_MAX_HOURS} soat olindi.
+            </div>
+          )}
+          {data.poolMergedTotal > 0 && (
+            <div className="vak-note">
+              🔗 Hovuz (birlashgan sinflar) darslari bir marta hisoblandi — {data.poolMergedTotal} soat
+              takroriy sanalmadi.
+            </div>
+          )}
         </div>
       )}
 
-      {view === "teachers" && (
-        <div style={card}>
-          {(() => {
-            const q = search.trim().toLowerCase();
-            const list = sortedTeachers.filter((t) => {
-              if (filterTeacher && t.id !== filterTeacher) return false;
-              if (filterClass && !(stats.teacherClass[t.id] && stats.teacherClass[t.id][filterClass])) return false;
-              if (filterSubject && !(stats.teacherSubject[t.id] && stats.teacherSubject[t.id][filterSubject])) return false;
-              if (q) {
-                const nameMatch = String(t.name).toLowerCase().includes(q);
-                const subjMatch = Object.keys(stats.teacherSubject[t.id] || {}).some((sid) => String(subjectMap.get(sid)?.name || "").toLowerCase().includes(q));
-                const classMatch = Object.keys(stats.teacherClass[t.id] || {}).some((cid) => String(classMap.get(cid)?.name || "").toLowerCase().includes(q));
-                if (!nameMatch && !subjMatch && !classMatch) return false;
-              }
-              return true;
-            });
-            if (list.length === 0) return <div style={{ color: "var(--text-secondary)" }}>Mos natija topilmadi.</div>;
-            return (
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    <th style={th}>O'qituvchi</th>
-                    <th style={{ ...th, textAlign: "center" }}>Jami soat</th>
-                    <th style={th}>Fanlar (soat)</th>
-                    <th style={th}>Sinflar (soat)</th>
-                    <th style={th}>Kunlik yuk</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {list.map((t) => {
-                    const total = stats.teacherTotal[t.id] || 0;
-                    let subjEntries = Object.entries(stats.teacherSubject[t.id] || {});
-                    let classEntries = Object.entries(stats.teacherClass[t.id] || {});
-                    if (filterSubject) subjEntries = subjEntries.filter(([sid]) => sid === filterSubject);
-                    if (filterClass) classEntries = classEntries.filter(([cid]) => cid === filterClass);
-                    const daily = stats.teacherDaily[t.id] || {};
-                    const maxWeek = Number(t.maxWeeklyHours || 0);
-                    const over = maxWeek > 0 && total > maxWeek;
-                    return (
-                      <tr key={t.id}>
-                        <td style={{ ...td, fontWeight: 700 }}>
-                          {t.name}
-                          {maxWeek > 0 && (
-                            <div style={{ fontSize: 12, color: over ? "#dc2626" : "var(--text-secondary)" }}>
-                              maks: {maxWeek} soat{over ? " (oshib ketgan!)" : ""}
-                            </div>
-                          )}
-                        </td>
-                        <td style={{ ...td, textAlign: "center", fontWeight: 800, fontSize: 16 }}>{total}</td>
-                        <td style={td}>
-                          {subjEntries.length === 0 ? "—" : (
-                            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                              {subjEntries.sort((a, b) => b[1] - a[1]).map(([sid, h]) => (
-                                <span key={sid} className="badge badge-default">{subjectMap.get(sid)?.name || "Fan"}: {h}</span>
-                              ))}
-                            </div>
-                          )}
-                        </td>
-                        <td style={td}>
-                          {classEntries.length === 0 ? "—" : (
-                            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                              {classEntries
-                                .sort((a, b) => String(classMap.get(a[0])?.name || "").localeCompare(String(classMap.get(b[0])?.name || ""), "uz", { numeric: true }))
-                                .map(([cid, h]) => (
-                                  <span key={cid} className="badge badge-info">{classMap.get(cid)?.name || "?"}: {h}</span>
-                                ))}
-                            </div>
-                          )}
-                        </td>
-                        <td style={td}>
-                          <div style={{ display: "flex", gap: 3 }}>
-                            {DAYS.map((d) => (
-                              <span key={d} title={d} style={{
-                                width: 22, height: 22, borderRadius: 5, display: "inline-flex", alignItems: "center", justifyContent: "center",
-                                fontSize: 11, fontWeight: 700,
-                                background: (daily[d] || 0) > 0 ? "var(--accent-light, #eef2ff)" : "var(--content-bg, #f3f4f6)",
-                                color: (daily[d] || 0) > 0 ? "var(--accent, #4f46e5)" : "var(--text-muted, #9ca3af)",
-                              }}>
-                                {daily[d] || 0}
-                              </span>
-                            ))}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            );
-          })()}
+      {data.needy && (
+        <div className="vak-alert">
+          🆘 Xulosa: bu maktabga
+          {data.vacantTotal > 0 && <> <b>{data.vacantTotal} soat</b> uchun yangi o'qituvchi kerak</>}
+          {data.vacantTotal > 0 && data.overloadTotal > 0 && " va"}
+          {data.overloadTotal > 0 && <> <b>{data.overloadTotal} soat</b> ortiqcha yuklamani qayta taqsimlash lozim</>}.
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+//  Maktab foydalanuvchisi uchun tayyor sahifa bo'lagi — Tahlil
+//  (Analytics) sahifasiga qo'yiladi. Xom state'lardan o'zi hisoblaydi.
+// ---------------------------------------------------------------------
+export default function VacancyAnalysis({ classes, subjects, teachers, classSubjects }) {
+  const data = useMemo(
+    () => computeVacancy({ classes, subjects, teachers, classSubjects }),
+    [classes, subjects, teachers, classSubjects]
+  );
+  return (
+    <div className="vak-card">
+      <div className="vak-card__title">💼 Vakansiya va yuklama tahlili</div>
+      <VacancyReport data={data} />
     </div>
   );
 }

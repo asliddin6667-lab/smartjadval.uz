@@ -1,6 +1,12 @@
 import { useMemo, useState } from "react";
 import { DAYS } from "../utils/constants";
 import { replaceTeacher } from "../utils/replaceTeacher";
+import {
+  applyTeacherToClassSubjects,
+  countTeacherInClassSubjects,
+  classIdsWithTeacherInSubjects,
+} from "../utils/replaceTeacherSubjects";
+import { sortTeachers, cmpName } from "../utils/sortHelpers";
 
 function classIdsOf(lesson) {
   return Array.isArray(lesson?.classIds) ? lesson.classIds : [lesson?.classId].filter(Boolean);
@@ -13,7 +19,9 @@ export default function TeacherReplacePage({
   timeslots = [],
   lunchGroups = [],
   schedule = {},
+  classSubjects = {},
   setSchedule,
+  setClassSubjects,
   toast,
 }) {
   const [oldTeacherId, setOldTeacherId] = useState("");
@@ -47,27 +55,40 @@ export default function TeacherReplacePage({
     return out;
   }, [oldTeacherId, schedule, sortedTimeslots]);
 
-  // Ketgan ustoz dars beradigan unikal sinflar (sinf tanlash ro'yxati uchun)
+  // Ketgan ustoz "Sinf fanlari"da biriktirilgan sinflar
+  const oldTeacherSubjClassIds = useMemo(
+    () => classIdsWithTeacherInSubjects(classSubjects, oldTeacherId),
+    [classSubjects, oldTeacherId]
+  );
+
+  // Sinf tanlash ro'yxati — jadval va sinf fanlari birlashtiriladi
   const oldTeacherClassIds = useMemo(() => {
     const set = new Set();
     oldTeacherLessons.forEach(({ lesson }) => classIdsOf(lesson).forEach((cid) => set.add(cid)));
-    return [...set].sort((a, b) => String(classMap.get(a)?.name).localeCompare(String(classMap.get(b)?.name), "uz", { numeric: true }));
-  }, [oldTeacherLessons, classMap]);
+    oldTeacherSubjClassIds.forEach((cid) => set.add(cid));
+    return [...set]
+      .filter((cid) => classMap.has(cid))
+      .sort((a, b) => cmpName(classMap.get(a)?.name, classMap.get(b)?.name));
+  }, [oldTeacherLessons, oldTeacherSubjClassIds, classMap]);
 
-  // Ketgan ustozning sinf bo'yicha dars soni (checkbox yonida ko'rsatish uchun)
+  // Ketgan ustozning sinf bo'yicha dars soni (chip yonida ko'rsatish uchun)
   function lessonCountForClass(cid) {
     return oldTeacherLessons.filter(({ lesson }) => classIdsOf(lesson).includes(cid)).length;
   }
 
-  const teachersWithLessons = useMemo(() => teachers.filter((t) => {
-    return DAYS.some((day) => sortedTimeslots.some((ts) =>
-      (schedule?.[day]?.[ts.id] || []).some((l) => l.teacherId === t.id)));
-  }).sort((a, b) => String(a.name).localeCompare(String(b.name), "uz", { numeric: true, sensitivity: "base" })), [teachers, schedule, sortedTimeslots]);
+  // Ro'yxatda ko'rinadigan ustozlar: jadvalda darsi bor YOKI sinf fanlariga biriktirilgan
+  const teachersWithWork = useMemo(() => {
+    const inSchedule = new Set();
+    DAYS.forEach((day) => sortedTimeslots.forEach((ts) => {
+      (schedule?.[day]?.[ts.id] || []).forEach((l) => { if (l.teacherId) inSchedule.add(l.teacherId); });
+    }));
+    return sortTeachers(teachers.filter((t) => (
+      inSchedule.has(t.id) || countTeacherInClassSubjects({ classSubjects, oldTeacherId: t.id }) > 0
+    )));
+  }, [teachers, schedule, sortedTimeslots, classSubjects]);
 
   // Yangi o'qituvchi ro'yxati — alifbo bo'yicha
-  const sortedTeachers = useMemo(() => [...teachers].sort((a, b) => (
-    String(a.name).localeCompare(String(b.name), "uz", { numeric: true, sensitivity: "base" })
-  )), [teachers]);
+  const sortedTeachers = useMemo(() => sortTeachers(teachers), [teachers]);
 
   function totalTeacherLessons(tid) {
     let n = 0;
@@ -89,7 +110,7 @@ export default function TeacherReplacePage({
     setResult(null);
   }
 
-  // Tanlangan sinflar bo'yicha (classId, subjectId) juftlari — funksiyaga beriladi
+  // Tanlangan sinflar bo'yicha (classId, subjectId) juftlari — jadval uchun
   function buildOnlyPairs() {
     if (scope === "all") return null;
     const pairs = [];
@@ -106,12 +127,20 @@ export default function TeacherReplacePage({
     return pairs;
   }
 
+  // Sinf fanlari uchun qamrov (null = barcha sinflar)
+  const csScopeClassIds = scope === "all" ? null : pickedClassIds;
+
   // Ko'chiriladigan darslar soni (tugma matni uchun)
   const targetCount = useMemo(() => {
     if (scope === "all") return oldTeacherLessons.length;
     return oldTeacherLessons.filter(({ lesson }) =>
       classIdsOf(lesson).some((cid) => pickedClassIds.includes(cid))).length;
   }, [scope, oldTeacherLessons, pickedClassIds]);
+
+  // "Sinf fanlari"da nechta yozuv yangilanadi
+  const csCount = useMemo(() => countTeacherInClassSubjects({
+    classSubjects, oldTeacherId, classIds: csScopeClassIds,
+  }), [classSubjects, oldTeacherId, scope, pickedClassIds]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function preview() {
     if (!oldTeacherId || !newTeacherId) { toast?.("Eski va yangi o'qituvchini tanlang", "warning"); return; }
@@ -127,15 +156,36 @@ export default function TeacherReplacePage({
   }
 
   function apply() {
-    if (!setSchedule || !result?.schedule) return;
-    setSchedule(result.schedule);
+    if (!result) return;
+
+    // 1) Dars jadvali (schedule)
+    if (setSchedule && result.schedule) setSchedule(result.schedule);
+
+    // 2) Sinf fanlari (classSubjects) — ENG MUHIM QADAM.
+    //    Bu qilinmasa, jadval qayta tuzilganda generator classSubjects'dan
+    //    o'qib, darslarni yana eski ustozga qaytarib qo'yadi.
+    let csChanged = 0;
+    if (setClassSubjects) {
+      const out = applyTeacherToClassSubjects({
+        classSubjects, oldTeacherId, newTeacherId, classIds: csScopeClassIds,
+      });
+      csChanged = out.changed;
+      if (csChanged > 0) setClassSubjects(out.classSubjects);
+    }
+
     const s = result.summary || {};
     const swapped = s.swapped || 0;
+    const moved = (s.inPlace || 0) + swapped;
+    const csTxt = csChanged > 0 ? `, sinf fanlarida ${csChanged} yozuv yangilandi` : "";
+
     if (s.failed > 0) {
-      toast?.(`${(s.inPlace || 0) + swapped} dars o'tkazildi, ${s.failed} tasi eski ustozda qoldi`, "warning");
+      toast?.(`${moved} dars o'tkazildi, ${s.failed} tasi eski ustozda qoldi${csTxt}`, "warning");
+    } else if (moved === 0 && csChanged > 0) {
+      toast?.(`Sinf fanlarida ${csChanged} yozuv yangi ustozga o'tkazildi ✓`, "success");
     } else {
-      toast?.(`O'qituvchi almashtirildi ✓ (${s.inPlace} joyida, ${swapped} o'rin almashdi)`, "success");
+      toast?.(`O'qituvchi almashtirildi ✓ (${s.inPlace} joyida, ${swapped} o'rin almashdi)${csTxt}`, "success");
     }
+
     // qayta boshlash
     setResult(null);
     setOldTeacherId("");
@@ -158,8 +208,20 @@ export default function TeacherReplacePage({
         usedSubjects.add(lesson.subjectId);
       }
     });
+    // Sinf fanlaridagi fanlar ham hisobga olinadi (jadval hali tuzilmagan bo'lishi mumkin)
+    Object.entries(classSubjects || {}).forEach(([cid, list]) => {
+      if (scope === "some" && !pickedClassIds.includes(cid)) return;
+      (list || []).forEach((a) => {
+        const hit = a.teacherId === oldTeacherId || a.teacherId2 === oldTeacherId
+          || a.swapTeacherId === oldTeacherId || a.weekAltTeacherId === oldTeacherId
+          || (Array.isArray(a.levelGroups) && a.levelGroups.some((g) => g.teacherId === oldTeacherId));
+        if (hit && a.subjectId) usedSubjects.add(a.subjectId);
+      });
+    });
     return [...usedSubjects].filter((sid) => !newSubj.has(sid));
-  }, [oldT, newT, oldTeacherLessons, scope, pickedClassIds]);
+  }, [oldT, newT, oldTeacherLessons, scope, pickedClassIds, classSubjects, oldTeacherId]);
+
+  const canRun = targetCount > 0 || csCount > 0;
 
   return (
     <div className="tr-page">
@@ -225,6 +287,7 @@ export default function TeacherReplacePage({
 
         .tr-warn{display:flex;gap:10px;background:#fff7ed;border:1px solid #fdba74;border-radius:13px;padding:12px 14px;font-size:13px;line-height:1.5;color:#9a3412;margin-top:16px;}
         .tr-warn-icon{flex-shrink:0;font-size:16px;line-height:1.3;}
+        .tr-note{display:flex;gap:10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:13px;padding:12px 14px;font-size:13px;line-height:1.5;color:#1e40af;margin-top:16px;}
 
         .tr-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:20px;}
         .tr-btn{display:inline-flex;align-items:center;gap:8px;height:48px;padding:0 26px;border-radius:13px;border:none;font-size:15px;font-weight:700;
@@ -274,7 +337,7 @@ export default function TeacherReplacePage({
           <div className="tr-hero-badge">🔄</div>
           <div>
             <h1>O'qituvchini almashtirish</h1>
-            <p>Ketgan o'qituvchining darslarini yangi o'qituvchiga o'tkazadi. Yangi ustoz band bo'lgan soatlarda dars sinfning boshqa darsi bilan o'rin almashtiriladi — jadvalda bo'sh katak qolmaydi.</p>
+            <p>Ketgan o'qituvchining darslarini yangi o'qituvchiga o'tkazadi — dars jadvalida ham, <b>Sinf fanlarida</b> ham. Yangi ustoz band bo'lgan soatlarda dars sinfning boshqa darsi bilan o'rin almashtiriladi, jadvalda bo'sh katak qolmaydi.</p>
           </div>
         </div>
       </div>
@@ -285,9 +348,12 @@ export default function TeacherReplacePage({
             <div className="tr-slot-label"><span className="tr-slot-dot" /> Ketgan o'qituvchi</div>
             <select className="tr-select" value={oldTeacherId} onChange={(e) => resetOld(e.target.value)}>
               <option value="">— tanlang —</option>
-              {teachersWithLessons.map((t) => (
-                <option key={t.id} value={t.id}>{t.name} ({totalTeacherLessons(t.id)} dars)</option>
-              ))}
+              {teachersWithWork.map((t) => {
+                const n = totalTeacherLessons(t.id);
+                const cs = countTeacherInClassSubjects({ classSubjects, oldTeacherId: t.id });
+                const info = n > 0 ? `${n} dars` : `${cs} fan (jadvalsiz)`;
+                return <option key={t.id} value={t.id}>{t.name} ({info})</option>;
+              })}
             </select>
           </div>
 
@@ -323,16 +389,27 @@ export default function TeacherReplacePage({
               <div className="tr-classes">
                 {oldTeacherClassIds.map((cid) => {
                   const on = pickedClassIds.includes(cid);
+                  const n = lessonCountForClass(cid);
                   return (
                     <div key={cid} className={`tr-chip ${on ? "on" : ""}`} onClick={() => toggleClass(cid)}>
                       <span>{on ? "☑" : "☐"}</span>
                       <span>{classMap.get(cid)?.name || cid}</span>
-                      <span className="tr-count">{lessonCountForClass(cid)} dars</span>
+                      <span className="tr-count">{n > 0 ? `${n} dars` : "sinf fanlarida"}</span>
                     </div>
                   );
                 })}
               </div>
             )}
+          </div>
+        )}
+
+        {oldTeacherId && newTeacherId && csCount > 0 && (
+          <div className="tr-note">
+            <span className="tr-warn-icon">🔗</span>
+            <span>
+              <b>Sinf fanlari</b> ham yangilanadi: {csCount} ta yozuvda ustoz almashtiriladi.
+              Shu tufayli jadvalni qaytadan tuzganingizda dars eski ustozga qaytmaydi.
+            </span>
           </div>
         )}
 
@@ -345,13 +422,13 @@ export default function TeacherReplacePage({
 
         {oldTeacherId && newTeacherId && (
           <div className="tr-actions">
-            <button type="button" className="tr-btn tr-btn-primary" onClick={preview} disabled={targetCount === 0}>
-              👁 Ko'rish ({targetCount} dars)
+            <button type="button" className="tr-btn tr-btn-primary" onClick={preview} disabled={!canRun}>
+              👁 Ko'rish ({targetCount} dars{csCount > 0 ? ` · ${csCount} fan` : ""})
             </button>
           </div>
         )}
 
-        {oldTeacherId && newTeacherId && targetCount === 0 && (
+        {oldTeacherId && newTeacherId && !canRun && (
           <div className="tr-hint">Ko'chiradigan dars yo'q — sinf tanlang.</div>
         )}
       </div>
@@ -359,11 +436,14 @@ export default function TeacherReplacePage({
       {result && summary && !summary.error && (
         <div className="tr-card">
           <div className="tr-summary">
-            <div className="tr-summary-title">Natija: {summary.totalLessons} ta dars ko'chiriladi</div>
+            <div className="tr-summary-title">
+              Natija: {summary.totalLessons} ta dars{csCount > 0 ? ` · ${csCount} ta sinf fani yozuvi` : ""}
+            </div>
             <div className="tr-stats">
               <span className="tr-stat" style={{ background: "#dcfce7", color: "#166534" }}>✓ {summary.inPlace} o'z joyida</span>
               {summary.swapped > 0 && <span className="tr-stat" style={{ background: "#dbeafe", color: "#1e40af" }}>⇄ {summary.swapped} o'rin almashdi</span>}
               {summary.failed > 0 && <span className="tr-stat" style={{ background: "#fee2e2", color: "#991b1b" }}>✕ {summary.failed} eski ustozda qoldi</span>}
+              {csCount > 0 && <span className="tr-stat" style={{ background: "#ede9fe", color: "#5b21b6" }}>🔗 {csCount} sinf fani yangilanadi</span>}
             </div>
           </div>
 
@@ -430,7 +510,7 @@ export default function TeacherReplacePage({
           <div className="tr-step">
             <div className="tr-step-num">3</div>
             <h4>Ko'ring va qo'llang</h4>
-            <p>Barcha yoki tanlangan sinflarni belgilab, natijani oldindan ko'ring — so'ng jadvalga qo'llang.</p>
+            <p>Jadval bilan birga Sinf fanlari ham yangilanadi — jadvalni qayta tuzganda eski ustoz qaytmaydi.</p>
           </div>
         </div>
       )}

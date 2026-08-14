@@ -2,6 +2,7 @@ import { useState } from "react";
 import ConfirmModal from "../components/ConfirmModal";
 import { genId } from "../utils/helpers";
 import { DAYS } from "../utils/constants";
+import { sortByName, cmpName } from "../utils/sortHelpers";
 
 export default function TeachersPage({ teachers, setTeachers, subjects, toast }) {
   const [search, setSearch] = useState("");
@@ -15,13 +16,15 @@ export default function TeachersPage({ teachers, setTeachers, subjects, toast })
   }
 
   // Fanlar ta'lim tili bo'yicha (eski fanlar lang'siz — o'zbekcha hisoblanadi)
-  const uzSubjects = subjects.filter(s => (s.lang || "uz") === "uz");
-  const ruSubjects = subjects.filter(s => (s.lang || "uz") === "ru");
+  // Har ikkala ro'yxat alifbo tartibida ko'rsatiladi.
+  const uzSubjects = sortByName(subjects.filter(s => (s.lang || "uz") === "uz"));
+  const ruSubjects = sortByName(subjects.filter(s => (s.lang || "uz") === "ru"));
 
+  // O'qituvchilar ro'yxati — F.I.Sh bo'yicha alifbo tartibida
   const filtered = teachers.filter(t => {
     const names = teacherSubjectIds(t).map(id => subjects.find(s => s.id === id)?.name || "").join(" ");
     return t.name.toLowerCase().includes(search.toLowerCase()) || names.toLowerCase().includes(search.toLowerCase());
-  }).sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "uz", { numeric: true, sensitivity: "base" }));
+  }).sort((a, b) => cmpName(a.name, b.name));
 
   function openAdd() {
     setEditItem(null);
@@ -139,7 +142,9 @@ export default function TeachersPage({ teachers, setTeachers, subjects, toast })
                 </thead>
                 <tbody>
                   {filtered.map((t, i) => {
-                    const teacherSubs = teacherSubjectIds(t).map(id => subjects.find(s => s.id === id)).filter(Boolean);
+                    const teacherSubs = sortByName(
+                      teacherSubjectIds(t).map(id => subjects.find(s => s.id === id)).filter(Boolean)
+                    );
                     return (
                       <tr key={t.id}>
                         <td style={{ color: "var(--text-muted)", fontSize: 12 }}>{i + 1}</td>

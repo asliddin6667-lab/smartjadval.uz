@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import "./styles/global.css";
 import "./styles/responsive.css";
 
@@ -33,11 +33,45 @@ import { buildDemoSchoolData } from "./utils/demoData";
 
 const emptySettings = { schoolName: "", academicYear: "2024-2025" };
 
+// =====================================================================
+//  NAVIGATSIYA (URL hash bilan)
+//
+//  Har bir bo'lim URL'da `#/schedule` ko'rinishida saqlanadi. Shu tufayli:
+//    • brauzerning "⬅ Orqaga" tugmasi oldingi BO'LIMga qaytaradi
+//      (saytdan chiqib ketmaydi yoki Dashboard'ga tashlamaydi),
+//    • F5 (yangilash) bosilganda o'sha bo'lim qayta ochiladi,
+//    • havolani nusxalab yuborish mumkin.
+//
+//  Hash ishlatiladi (path emas), chunki GitHub Pages'da server tomonda
+//  qayta yo'naltirish yo'q — `/smartjadval.uz/schedule` 404 berardi.
+// =====================================================================
+const PAGE_IDS = [
+  "dashboard", "classes", "subjects", "teachers", "classSubjects",
+  "rooms", "timeslots", "lunchGroups", "schedule", "teacherReplace",
+  "analytics", "importExport", "users", "settings",
+];
+
+function pageFromHash() {
+  if (typeof window === "undefined") return null;
+  const raw = String(window.location.hash || "").replace(/^#\/?/, "").trim();
+  return PAGE_IDS.includes(raw) ? raw : null;
+}
+
+function initialPage() {
+  const fromHash = pageFromHash();
+  if (fromHash) return fromHash;
+  const saved = loadData("lastPage", "dashboard");
+  return PAGE_IDS.includes(saved) ? saved : "dashboard";
+}
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => getCurrentUser());
-  const [activePage, setActivePage] = useState("dashboard");
+  const [activePage, setActivePage] = useState(() => initialPage());
   const [darkMode, setDarkMode] = useState(() => loadData("darkMode", false));
   const [settings, setSettings] = useState(emptySettings);
+
+  // Birinchi marta hash yozilganda tarixga yangi yozuv qo'shilmasin
+  const hashInitDone = useRef(false);
 
   // Parol tiklash havolasidan kelgan bo'lsa — hamma narsadan oldin
   // yangi parol o'rnatish ekrani ko'rsatiladi.
@@ -69,6 +103,33 @@ export default function App() {
   const userId = currentUser?.id;
   // Tuman admini — maktab ma'lumotlari yuklanmaydi va sinxronlanmaydi
   const isDistrictAdmin = currentUser?.role === "district_admin";
+
+  // ——— Faol bo'limni URL hash va localStorage'ga yozish ———
+  useEffect(() => {
+    if (!currentUser || isDistrictAdmin || recoveryMode) return;
+    saveData("lastPage", activePage);
+    const target = `#/${activePage}`;
+    if (typeof window === "undefined") return;
+    if (window.location.hash === target) { hashInitDone.current = true; return; }
+    if (!hashInitDone.current) {
+      // Ilova endi ochildi — tarixga qo'shimcha yozuv qo'shmaymiz
+      window.history.replaceState({ page: activePage }, "", target);
+      hashInitDone.current = true;
+    } else {
+      window.history.pushState({ page: activePage }, "", target);
+    }
+  }, [activePage, currentUser, isDistrictAdmin, recoveryMode]);
+
+  // ——— Brauzerning "Orqaga / Oldinga" tugmalari ———
+  useEffect(() => {
+    function onPop() {
+      const page = pageFromHash();
+      setActivePage(page || "dashboard");
+      setMobileNavOpen(false);
+    }
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   // Mobil menyu ochiq bo'lganda orqa fon siljimasin
   useEffect(() => {
@@ -209,7 +270,14 @@ export default function App() {
       setSchedule(loadedSchedule);
       setDataReady(true);
       setSyncing(false);
-      setActivePage("dashboard");
+
+      // Oxirgi ochilgan bo'lim tiklanadi (URL hash ustunroq).
+      // "users" faqat superadmin uchun — boshqasiga dashboard beriladi.
+      const restored = initialPage();
+      setActivePage(
+        restored === "users" && currentUser.role !== "superadmin" ? "dashboard" : restored
+      );
+
       setPaywallOpen(false);
       setShowPayPage(false);
       setMobileNavOpen(false);
@@ -262,6 +330,13 @@ export default function App() {
     setPaywallOpen(false);
     setShowPayPage(false);
     setMobileNavOpen(false);
+    // Navigatsiya holati tozalanadi — keyingi kirishda Dashboard ochiladi
+    setActivePage("dashboard");
+    saveData("lastPage", "dashboard");
+    hashInitDone.current = false;
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
   }
 
   function handleNavigate(pageId) {
@@ -401,7 +476,7 @@ export default function App() {
 
   function renderPage() {
     switch (activePage) {
-      case "dashboard": return <DashboardPage {...pageProps} setActivePage={setActivePage} />;
+      case "dashboard": return <DashboardPage {...pageProps} setActivePage={handleNavigate} />;
       case "classes": return <ClassesPage {...pageProps} setClasses={setClasses} />;
       case "subjects": return <SubjectsPage {...pageProps} setSubjects={setSubjects} />;
       case "teachers": return <TeachersPage {...pageProps} setTeachers={setTeachers} />;
@@ -410,10 +485,10 @@ export default function App() {
       case "timeslots": return <TimeslotsPage {...pageProps} setTimeslots={setTimeslots} shifts={shifts} setShifts={setShifts} />;
       case "lunchGroups": return <LunchGroupsPage {...pageProps} setLunchGroups={setLunchGroups} />;
       case "schedule": return <SchedulePage {...pageProps} setSchedule={setSchedule} />;
-      case "teacherReplace": return <TeacherReplacePage {...pageProps} setSchedule={setSchedule} />;
+      case "teacherReplace": return <TeacherReplacePage {...pageProps} setSchedule={setSchedule} setClassSubjects={setClassSubjects} />;
       case "analytics": return <AnalyticsPage {...pageProps} />;
       case "importExport": return <ImportExportPage {...pageProps} setSubjects={setSubjects} setTeachers={setTeachers} />;
-      case "users": return currentUser.role === "superadmin" ? <UsersPage {...pageProps} /> : <DashboardPage {...pageProps} setActivePage={setActivePage} />;
+      case "users": return currentUser.role === "superadmin" ? <UsersPage {...pageProps} /> : <DashboardPage {...pageProps} setActivePage={handleNavigate} />;
       case "settings": return (
         <SettingsPage
           settings={settings} setSettings={setSettings}
@@ -426,7 +501,7 @@ export default function App() {
           {...pageProps}
         />
       );
-      default: return <DashboardPage {...pageProps} setActivePage={setActivePage} />;
+      default: return <DashboardPage {...pageProps} setActivePage={handleNavigate} />;
     }
   }
 
