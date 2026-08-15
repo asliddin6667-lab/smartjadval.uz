@@ -92,7 +92,9 @@ function makeAssignment(subject, firstTeacherId = "") {
     groupName2: "2-guruh",
     levelGroupEnabled: false,
     levelGroupKey: "",
-    allowDouble: Boolean(subject?.allowDouble),
+    // "2 soat blok" — fan qo'shilganda HAR DOIM o'chiq.
+    // Faqat foydalanuvchi ⚙️ Sozlamalardan o'zi yoqsa ishlaydi.
+    allowDouble: false,
     levelGroupCount: 3,
     levelGroups: makeLevelGroups(3),
     parallelEnabled: false,
@@ -165,6 +167,10 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
   const [poolForm, setPoolForm] = useState({ subjectId: "", classIds: [], teacherIds: [], weeklyHours: 5 });
   // Qaysi fan qatorining ilg'or sozlamalari ochiq (subjectId)
   const [openSettings, setOpenSettings] = useState(null);
+  // O'chirish tasdiq oynasi
+  const [clearOpen, setClearOpen] = useState(false);
+  // "Barcha sinflardan" tugmasi — ikkinchi bosishda o'chiradi (xatolik oldini olish)
+  const [armAll, setArmAll] = useState(false);
 
   useEffect(() => {
     if (!selectedClassId && classes[0]?.id) setSelectedClassId(classes[0].id);
@@ -234,7 +240,9 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
   }
   function isChecked(subjectId) { return assignments.some(a => a.subjectId === subjectId); }
   function getAssignment(subjectId) { return assignments.find(a => a.subjectId === subjectId) || {}; }
-  function assignmentAllowsDouble(a, subject) { return a.allowDouble === undefined ? Boolean(subject?.allowDouble) : Boolean(a.allowDouble); }
+  // "2 soat blok" faqat shu sinf fanida aniq yoqilgan bo'lsa ishlaydi.
+  // Fanlar bo'limidagi umumiy sozlama bu yerga avtomatik ko'chmaydi.
+  function assignmentAllowsDouble(a) { return Boolean(a?.allowDouble); }
 
   function sameLevelGroupAssignments(subjectId, levelGroupKey) {
     const key = String(levelGroupKey || "").trim();
@@ -445,6 +453,40 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
     toast(`Tanlangan sozlama ${classLang === "ru" ? "barcha rus" : "barcha o'zbek"} sinflariga nusxalandi ✓`, "success");
   }
 
+  // ——— O'CHIRISH (tasdiq bilan) ———
+  function openClearDialog() {
+    setArmAll(false);
+    setClearOpen(true);
+  }
+
+  function closeClearDialog() {
+    setArmAll(false);
+    setClearOpen(false);
+  }
+
+  // Faqat tanlangan sinfning fanlarini o'chirish
+  function clearSelectedClass() {
+    if (!selectedClassId) return;
+    const count = (classSubjects[selectedClassId] || []).length;
+    if (!count) { toast("Bu sinfda o'chiriladigan fan yo'q", "warning"); return; }
+    const next = { ...classSubjects };
+    delete next[selectedClassId];
+    setClassSubjects(next);
+    setOpenSettings(null);
+    closeClearDialog();
+    toast(`${selectedClass?.name || "Sinf"} — ${count} ta fan o'chirildi ✓`, "success");
+  }
+
+  // Barcha sinflardagi fanlarni o'chirish (ikki bosqichli tasdiq)
+  function clearAllClasses() {
+    const totalSubjects = Object.values(classSubjects || {}).reduce((sum, l) => sum + (l || []).length, 0);
+    if (!totalSubjects) { toast("O'chiriladigan fan yo'q", "warning"); return; }
+    setClassSubjects({});
+    setOpenSettings(null);
+    closeClearDialog();
+    toast(`Barcha sinflardan ${totalSubjects} ta fan o'chirildi ✓`, "success");
+  }
+
   function classInLevelGroup(classId, subjectId, key) {
     const list = classSubjects[classId] || [];
     const a = list.find(x => x.subjectId === subjectId);
@@ -608,7 +650,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
   function activeChips(a, s) {
     const chips = [];
     if (a.isCore) chips.push({ text: "⭐ Asosiy", bg: "#fef3c7", fg: "#92400e" });
-    if (assignmentAllowsDouble(a, s)) chips.push({ text: "2 soat blok", bg: "#e0e7ff", fg: "#3730a3" });
+    if (assignmentAllowsDouble(a)) chips.push({ text: "2 soat blok", bg: "#e0e7ff", fg: "#3730a3" });
     if (a.spacedDays) chips.push({ text: "📆 Ora kunda", bg: "#ffedd5", fg: "#9a3412" });
     if (a.groupKey && !a.levelGroupEnabled) chips.push({ text: "🔁 Parallel", bg: "#d1fae5", fg: "#065f46" });
     if (a.splitEnabled && !a.levelGroupEnabled) chips.push({ text: a.swapEnabled ? "🔄 Almashinuv" : "✂️ 2 guruh", bg: "#fce7f3", fg: "#9d174d" });
@@ -629,6 +671,15 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
           <button className="btn btn-secondary" onClick={applySmartForSelected} disabled={!selectedClassId || !subjects.length}>⚡ Mos fanlar</button>
           <button className="btn btn-success" onClick={applySmartForAllClasses} disabled={!classes.length || !subjects.length}>⚡ Hammaga mos</button>
           <button className="btn btn-primary" onClick={copyToAllClasses} disabled={!selectedClassId || !classes.length}>↗ Nusxalash</button>
+          <button
+            className="btn"
+            style={{ background: "#dc2626", borderColor: "#dc2626", color: "#fff" }}
+            onClick={openClearDialog}
+            disabled={!classes.length}
+            title="Sinf fanlarini o'chirish (tasdiq so'raladi)"
+          >
+            🗑 Hammasini o'chirish
+          </button>
         </div>
       </div>
 
@@ -767,8 +818,8 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                                 <span>⭐ Asosiy fan</span>
                               </label>
                               <label className="cs-toggle">
-                                <input type="checkbox" checked={assignmentAllowsDouble(a, s)} onChange={e => updateAssignment(s.id, { allowDouble: e.target.checked })} />
-                                <span>2 soat blok {assignmentAllowsDouble(a, s) && <em style={{ color: "var(--text-muted)", fontWeight: 400 }}>({hoursNow} soat → {Math.ceil(hoursNow / 2)} blok)</em>}</span>
+                                <input type="checkbox" checked={assignmentAllowsDouble(a)} onChange={e => updateAssignment(s.id, { allowDouble: e.target.checked })} />
+                                <span>2 soat blok {assignmentAllowsDouble(a) && <em style={{ color: "var(--text-muted)", fontWeight: 400 }}>({hoursNow} soat → {Math.ceil(hoursNow / 2)} blok)</em>}</span>
                               </label>
                               <label className="cs-toggle" title="Dars kunlar oralab qo'yiladi: Dushanba → Chorshanba → Juma">
                                 <input type="checkbox" checked={Boolean(a.spacedDays)} onChange={e => updateAssignment(s.id, { spacedDays: e.target.checked })} />
@@ -798,9 +849,9 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                                 <div style={{ fontSize: 13, fontWeight: 700, color: "#9a3412", marginBottom: 6 }}>📆 Ora kunda (kun oralab)</div>
                                 <div style={{ fontSize: 12, color: "#9a3412", lineHeight: 1.6 }}>
                                   Bu fan ketma-ket kunlarda takrorlanmaydi: <b>Dushanba → Chorshanba → Juma</b> tartibida joylashadi.
-                                  {assignmentAllowsDouble(a, s) && <> "2 soat blok" yoqilgan — blok ichidagi 2 soat bitta kunda qoladi, oraliq bloklar orasida hisoblanadi.</>}
+                                  {assignmentAllowsDouble(a) && <> "2 soat blok" yoqilgan — blok ichidagi 2 soat bitta kunda qoladi, oraliq bloklar orasida hisoblanadi.</>}
                                 </div>
-                                {hoursNow > 3 && !assignmentAllowsDouble(a, s) && (
+                                {hoursNow > 3 && !assignmentAllowsDouble(a) && (
                                   <div style={{ marginTop: 8, background: "#fff", border: "1px solid #fed7aa", borderRadius: 8, padding: 8, fontSize: 12, color: "#9a3412" }}>
                                     ⚠️ Haftalik soat <b>{hoursNow}</b> ta. 6 kunlik haftada to'liq oralab joylash faqat <b>3 soatgacha</b> mumkin. Generator qolgan soatlarni imkon qadar uzoq kunlarga tarqatadi.
                                   </div>
@@ -1075,6 +1126,86 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
               <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 18 }}>
                 <button className="btn btn-secondary" type="button" onClick={() => setPoolOpen(false)}>Bekor qilish</button>
                 <button className="btn btn-primary" type="button" onClick={createPool}>Hovuzni yaratish</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ——— O'CHIRISH TASDIQ OYNASI ——— */}
+      {clearOpen && (() => {
+        const selCount = (classSubjects[selectedClassId] || []).length;
+        const selHours = (classSubjects[selectedClassId] || []).reduce((sum, a) => sum + Number(a.weeklyHours || 0), 0);
+        const filledClasses = Object.values(classSubjects || {}).filter(l => (l || []).length > 0).length;
+        const totalSubjectRows = Object.values(classSubjects || {}).reduce((sum, l) => sum + (l || []).length, 0);
+        const totalAllHours = Object.values(classSubjects || {}).reduce(
+          (sum, l) => sum + (l || []).reduce((s2, a) => s2 + Number(a.weeklyHours || 0), 0), 0);
+        return (
+          <div onClick={closeClearDialog} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+            <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--card-bg,#fff)", borderRadius: 16, padding: 22, width: "100%", maxWidth: 560, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 24px 70px rgba(0,0,0,.35)" }}>
+              <h3 style={{ margin: "0 0 4px" }}>🗑 Fanlarni o'chirish</h3>
+              <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 14 }}>
+                Haqiqatan ham o'chirasizmi? Bu amalni <b>ortga qaytarib bo'lmaydi</b>. Fanlar, soatlar, ustoz/xona biriktirmalari va daraja guruhlari (hovuzlar) o'chib ketadi.
+              </div>
+
+              {/* 1) Faqat tanlangan sinf */}
+              <div style={{ border: "1px solid var(--card-border,#e5e7eb)", borderRadius: 12, padding: 14, marginBottom: 12 }}>
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>1️⃣ Faqat shu sinfdan</div>
+                <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 10 }}>
+                  <b>{selectedClass?.name || "Sinf"}</b> — {selCount} ta fan · {selHours} soat o'chiriladi. Boshqa sinflarga tegilmaydi.
+                </div>
+                <button
+                  className="btn"
+                  type="button"
+                  style={{ background: "#f59e0b", borderColor: "#f59e0b", color: "#fff" }}
+                  disabled={!selCount}
+                  onClick={clearSelectedClass}
+                >
+                  🗑 {selectedClass?.name || "Sinf"} fanlarini o'chirish
+                </button>
+              </div>
+
+              {/* 2) Barcha sinflar — ikki bosqichli tasdiq */}
+              <div style={{ border: "1px solid #fecaca", background: "#fef2f2", borderRadius: 12, padding: 14 }}>
+                <div style={{ fontWeight: 700, marginBottom: 4, color: "#991b1b" }}>2️⃣ Barcha sinflardan</div>
+                <div style={{ fontSize: 13, color: "#991b1b", marginBottom: 10 }}>
+                  <b>{filledClasses} ta sinf</b> · jami <b>{totalSubjectRows} ta fan</b> · {totalAllHours} soat butunlay o'chiriladi.
+                </div>
+
+                {!armAll ? (
+                  <button
+                    className="btn"
+                    type="button"
+                    style={{ background: "#dc2626", borderColor: "#dc2626", color: "#fff" }}
+                    disabled={!totalSubjectRows}
+                    onClick={() => setArmAll(true)}
+                  >
+                    🗑 Barcha sinflardan o'chirish
+                  </button>
+                ) : (
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#991b1b", marginBottom: 8 }}>
+                      ⚠️ Oxirgi tasdiq: rostdan ham {filledClasses} ta sinfning barcha fanlari o'chirilsinmi?
+                    </div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <button
+                        className="btn"
+                        type="button"
+                        style={{ background: "#dc2626", borderColor: "#dc2626", color: "#fff" }}
+                        onClick={clearAllClasses}
+                      >
+                        ✅ Ha, hammasini o'chir
+                      </button>
+                      <button className="btn btn-secondary" type="button" onClick={() => setArmAll(false)}>
+                        ↩ Yo'q, bekor qilish
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
+                <button className="btn btn-secondary" type="button" onClick={closeClearDialog}>Yopish</button>
               </div>
             </div>
           </div>
