@@ -18,6 +18,42 @@ function getGradeFromClassName(name = "") {
 function classLangOf(c) { return c?.eduLang || "uz"; }
 function subjectLangOf(s) { return s?.lang || "uz"; }
 
+// ——— Hovuz (daraja guruhi) a'zolari uchun UMUMIY maydonlar ———
+// Bir joyda o'zgarsa — guruhdagi barcha sinflarda bir xil bo'ladi.
+// Diqqat: levelGroupEnabled shu ro'yxatda YO'Q — bitta sinfni guruhdan
+// chiqarish boshqalarni o'chirib yubormasligi kerak.
+const POOL_SHARED_FIELDS = [
+  "weeklyHours",
+  "allowDouble",
+  "isCore",
+  "spacedDays",
+  "levelGroupCount",
+  "levelGroups",
+  "parallelEnabled",
+  "groupKey",
+  "splitEnabled",
+  "swapEnabled",
+  "weekAltEnabled",
+  "weekAltSubjectId",
+  "weekAltTeacherId",
+  "weekAltRoomId",
+  "weekAltHours",
+];
+
+function pickShared(obj = {}) {
+  const out = {};
+  POOL_SHARED_FIELDS.forEach((k) => {
+    if (Object.prototype.hasOwnProperty.call(obj, k)) out[k] = obj[k];
+  });
+  return out;
+}
+
+function cloneShared(shared = {}) {
+  const out = { ...shared };
+  if (Array.isArray(out.levelGroups)) out.levelGroups = out.levelGroups.map((g) => ({ ...g }));
+  return out;
+}
+
 function namesForGrade(grade, lang = "uz") {
   if (lang === "ru") {
     if (grade >= 1 && grade <= 4) return PRIMARY_SUBJECT_NAMES_RU;
@@ -68,6 +104,59 @@ function makeAssignment(subject, firstTeacherId = "") {
     weekAltRoomId: "",
     weekAltHours: 1,
   };
+}
+
+// ——— Ustoz yuklamasi: hovuz va parallel darslar 1 marta hisoblanadi ———
+// Hovuz: 3 sinf birga, bir vaqtda o'qiydi → ustozga 3 soat emas, 1 soat.
+// Parallel: bir ustoz bir nechta sinfga bir vaqtda kiradi → 1 marta.
+function computeTeacherHours(classSubjects) {
+  const load = {};
+  const add = (tid, h) => {
+    if (!tid || !h) return;
+    load[tid] = (load[tid] || 0) + h;
+  };
+  const poolDone = new Set();
+  const parallelDone = new Set();
+
+  Object.values(classSubjects || {}).forEach((list) => {
+    (list || []).forEach((a) => {
+      if (!a) return;
+      const h = Number(a.weeklyHours || 0);
+      if (!h) return;
+
+      // 1) Hovuz / daraja guruhi — har bir daraja ustozi guruh bo'yicha 1 marta
+      if (a.levelGroupEnabled) {
+        const key = String(a.levelGroupKey || "").trim();
+        (a.levelGroups || []).forEach((g) => {
+          const tid = g?.teacherId;
+          if (!tid) return;
+          const sig = key ? `L|${a.subjectId}|${key}|${tid}` : "";
+          if (sig) {
+            if (poolDone.has(sig)) return;
+            poolDone.add(sig);
+          }
+          add(tid, h);
+        });
+        return;
+      }
+
+      // 2) Parallel dars — bitta ustoz, bitta slot, bir nechta sinf
+      const pKey = String(a.groupKey || "").trim();
+      if (pKey && a.teacherId) {
+        const sig = `P|${a.subjectId}|${pKey}|${a.teacherId}`;
+        if (parallelDone.has(sig)) return;
+        parallelDone.add(sig);
+        add(a.teacherId, h);
+        return;
+      }
+
+      // 3) Oddiy dars
+      add(a.teacherId, h);
+      if (a.splitEnabled && a.teacherId2) add(a.teacherId2, h);
+    });
+  });
+
+  return load;
 }
 
 export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, classSubjects, setClassSubjects, toast }) {
@@ -189,16 +278,20 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
   }
 
   function normalizeAllSharedLevelGroups(showToast = false) {
-    const groups = new Map();
+    // Har bir hovuz uchun "etalon" sozlama tanlanadi: guruhlari eng ko'p bo'lgani,
+    // teng bo'lsa — soati eng kattasi.
+    const canon = new Map();
     Object.entries(classSubjects || {}).forEach(([classId, list]) => {
-      (list || []).forEach((a, index) => {
+      (list || []).forEach((a) => {
         if (!a.levelGroupEnabled || !a.levelGroupKey) return;
         const key = `${a.subjectId}__${String(a.levelGroupKey).trim()}`;
         const cfg = makeLevelGroups(a.levelGroupCount || 1, a.levelGroups);
-        const current = groups.get(key);
-        if (!current || cfg.length > current.groups.length) {
-          groups.set(key, { subjectId: a.subjectId, levelGroupKey: String(a.levelGroupKey).trim(), groups: cfg });
-        }
+        const cur = canon.get(key);
+        const better =
+          !cur ||
+          cfg.length > cur.groups.length ||
+          (cfg.length === cur.groups.length && Number(a.weeklyHours || 0) > Number(cur.shared.weeklyHours || 0));
+        if (better) canon.set(key, { groups: cfg, shared: pickShared(a) });
       });
     });
 
@@ -207,21 +300,24 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
     Object.entries(next).forEach(([classId, list]) => {
       next[classId] = (list || []).map(a => {
         if (!a.levelGroupEnabled || !a.levelGroupKey) return a;
-        const shared = groups.get(`${a.subjectId}__${String(a.levelGroupKey).trim()}`);
-        if (!shared) return a;
-        const current = makeLevelGroups(a.levelGroupCount || 1, a.levelGroups);
-        const sameLen = current.length === shared.groups.length;
-        const sameData = JSON.stringify(current) === JSON.stringify(shared.groups);
-        if (!sameLen || !sameData) {
+        const c = canon.get(`${a.subjectId}__${String(a.levelGroupKey).trim()}`);
+        if (!c) return a;
+        const merged = {
+          ...a,
+          ...cloneShared(c.shared),
+          levelGroupCount: c.groups.length,
+          levelGroups: c.groups.map(g => ({ ...g })),
+        };
+        if (JSON.stringify(merged) !== JSON.stringify(a)) {
           changed = true;
-          return { ...a, levelGroupCount: shared.groups.length, levelGroups: shared.groups.map(g => ({ ...g })) };
+          return merged;
         }
         return a;
       });
     });
     if (changed) {
       setClassSubjects(next);
-      if (showToast) toast("Birlashtirilgan sinflar guruhlari tenglashtirildi ✓", "success");
+      if (showToast) toast("Birlashtirilgan sinflar sozlamalari va soatlari tenglashtirildi ✓", "success");
     } else if (showToast) {
       toast("Guruhlar allaqachon bir xil", "success");
     }
@@ -244,9 +340,36 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
     }
   }
 
+  // Sozlama o'zgarganda — agar bu fan hovuzda (daraja guruhida) bo'lsa,
+  // umumiy maydonlar (soat, 2 soat blok, ora kunda, asosiy fan, hafta almashinuvi...)
+  // guruhdagi BARCHA sinflarga bir xil qilib yoziladi.
   function updateAssignment(subjectId, patch) {
     const current = classSubjects[selectedClassId] || [];
-    saveAssignments(current.map(a => a.subjectId === subjectId ? { ...a, ...patch } : a));
+    const a = current.find(x => x.subjectId === subjectId);
+    const oldKey = String(a?.levelGroupKey || "").trim();
+    const pooled = Boolean(a?.levelGroupEnabled) && Boolean(oldKey);
+
+    if (!pooled) {
+      saveAssignments(current.map(x => x.subjectId === subjectId ? { ...x, ...patch } : x));
+      return;
+    }
+
+    const renaming = Object.prototype.hasOwnProperty.call(patch, "levelGroupKey");
+    const newKey = renaming ? patch.levelGroupKey : oldKey;
+    const shared = pickShared(patch);
+
+    const next = { ...classSubjects };
+    Object.entries(next).forEach(([cid, list]) => {
+      next[cid] = (list || []).map(x => {
+        if (x.subjectId !== subjectId) return x;
+        if (cid === selectedClassId) return { ...x, ...patch };
+        if (x.levelGroupEnabled && String(x.levelGroupKey || "").trim() === oldKey) {
+          return { ...x, ...cloneShared(shared), ...(renaming ? { levelGroupKey: newKey } : {}) };
+        }
+        return x;
+      });
+    });
+    setClassSubjects(next);
   }
 
   function updateLevelGroup(subjectId, index, patch) {
@@ -328,7 +451,10 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
     return Boolean(a && a.levelGroupEnabled && String(a.levelGroupKey || "").trim() === String(key || "").trim());
   }
 
+  // Sinfni hovuzga qo'shganda — asosiy sinfning SOATI va BARCHA sozlamalari
+  // bir xil qilib ko'chiriladi.
   function toggleClassInLevelGroup(subjectId, key, groupsConfig, groupCount, classId) {
+    const owner = getAssignment(subjectId);
     const next = { ...classSubjects };
     const list = next[classId] || [];
     const idx = list.findIndex(a => a.subjectId === subjectId);
@@ -339,12 +465,14 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
       const base = idx >= 0 ? list[idx] : makeAssignment(subject, "");
       const updated = {
         ...base,
+        ...cloneShared(pickShared(owner)),
         levelGroupEnabled: true,
         levelGroupKey: key,
         levelGroupCount: groupCount,
         levelGroups: (groupsConfig || []).map(g => ({ ...g })),
         splitEnabled: false,
         swapEnabled: false,
+        parallelEnabled: false,
         groupKey: "",
       };
       next[classId] = idx >= 0 ? list.map((a, i) => i === idx ? updated : a) : [...list, updated];
@@ -387,6 +515,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
   function autoGroupSameGrade(subjectId) {
     if (!selectedClass) return;
     const subject = subjectById(subjectId);
+    const owner = getAssignment(subjectId);
     const grade = getGradeFromClassName(selectedClass.name);
     const key = `${grade}-sinf ${subject?.name || "fan"} daraja guruhlari`;
     const sameGradeClasses = sameLangClasses.filter(c => getGradeFromClassName(c.name) === grade);
@@ -404,11 +533,14 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
       const base = idx >= 0 ? list[idx] : makeAssignment(subject, firstTeachers[0]?.id || "");
       const updated = {
         ...base,
+        ...cloneShared(pickShared(owner)),
         levelGroupEnabled: true,
         levelGroupKey: key,
         levelGroupCount: defaultGroups.length,
-        levelGroups: defaultGroups,
+        levelGroups: defaultGroups.map(g => ({ ...g })),
         splitEnabled: false,
+        swapEnabled: false,
+        parallelEnabled: false,
         groupKey: "",
       };
       next[c.id] = idx >= 0 ? list.map((a, i) => i === idx ? updated : a) : [...list, updated];
@@ -467,21 +599,10 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
   }, [classes.length, subjects.length]);
 
   const totalHours = assignments.reduce((sum, a) => sum + Number(a.weeklyHours || 0), 0);
-  // Ustoz yuklamasi — alifbo tartibida
-  const teacherLoads = sortByName(teachers).map(t => {
-    let load = 0;
-    Object.values(classSubjects || {}).forEach(list => {
-      (list || []).forEach(a => {
-        if (a.levelGroupEnabled) {
-          (a.levelGroups || []).forEach(g => { if (g.teacherId === t.id) load += Number(a.weeklyHours || 0); });
-        } else {
-          if (a.teacherId === t.id) load += Number(a.weeklyHours || 0);
-          if (a.splitEnabled && a.teacherId2 === t.id) load += Number(a.weeklyHours || 0);
-        }
-      });
-    });
-    return { ...t, load };
-  });
+
+  // Ustoz yuklamasi — alifbo tartibida, hovuz/parallel 1 marta hisoblangan holda
+  const teacherHourMap = computeTeacherHours(classSubjects);
+  const teacherLoads = sortByName(teachers).map(t => ({ ...t, load: teacherHourMap[t.id] || 0 }));
 
   // Fan qatorida ko'rinadigan "yoqilgan sozlama" chiplari
   function activeChips(a, s) {
@@ -593,6 +714,9 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                               {chips.map((c, i) => (
                                 <span key={i} className="cs-chip" style={{ background: c.bg, color: c.fg }}>{c.text}</span>
                               ))}
+                              {sharedClassCount > 1 && (
+                                <span className="cs-chip" style={{ background: "#ede9fe", color: "#5b21b6" }}>🔗 {sharedClassCount} sinf umumiy</span>
+                              )}
                             </div>
                           </div>
                           <div className="cs-col-hours">
@@ -631,6 +755,11 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                         {/* ——— OCHILADIGAN SOZLAMALAR PANELI ——— */}
                         {checked && isOpen && (
                           <div className="cs-settings-panel">
+                            {sharedClassCount > 1 && (
+                              <div style={{ marginBottom: 10, background: "#eef2ff", border: "1px solid #c7d2fe", borderRadius: 10, padding: 8, fontSize: 12, color: "#3730a3" }}>
+                                🔗 Bu fan <b>{sharedClassCount} ta sinfga</b> umumiy (hovuz). Bu yerdagi <b>soat</b> va <b>barcha sozlamalar</b> avtomatik ravishda guruhdagi hamma sinfga bir xil yoziladi.
+                              </div>
+                            )}
                             {/* Tez almashtirgichlar qatori */}
                             <div className="cs-toggles">
                               <label className="cs-toggle" title="Asosiy fan — dars jadvalida yuqoriga (erta darslarga) qo'yiladi">
@@ -756,7 +885,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
                                   <div>
                                     <b>🎯 Daraja guruhlari</b>
-                                    {sharedClassCount > 1 && <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>Bu guruh {sharedClassCount} ta sinfga umumiy ulangan. Bir joyda o'zgarsa, hammaga bir xil bo'ladi.</div>}
+                                    {sharedClassCount > 1 && <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>Bu guruh {sharedClassCount} ta sinfga umumiy ulangan. Soat va sozlamalar bir joyda o'zgarsa, hammaga bir xil bo'ladi. Ustoz yuklamasida bu hovuz <b>1 marta</b> hisoblanadi.</div>}
                                   </div>
                                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                     <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>Guruhlar soni</span>
@@ -784,7 +913,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                                     })}
                                   </div>
                                   <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 6 }}>
-                                    Tanlangan sinflar bir xil guruhlarga, bir xil ustozlarga va bir vaqtda biriktiriladi. Belgini olib tashlasangiz, sinf guruhdan chiqariladi.
+                                    Tanlangan sinflar bir xil guruhlarga, bir xil ustozlarga, bir xil soatga va bir vaqtda biriktiriladi. Belgini olib tashlasangiz, sinf guruhdan chiqariladi.
                                   </div>
                                   <div style={{ marginTop: 8 }}>
                                     <button className="btn btn-secondary btn-sm" onClick={() => autoGroupSameGrade(s.id)}>⚡ Shu sinfning barcha parallellarini guruhlash</button>
@@ -866,7 +995,10 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
               </div></div>
 
               <div className="card"><div className="card-body">
-                <div style={{ fontWeight: 700, marginBottom: 12 }}>👨‍🏫 Ustoz yuklamasi</div>
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>👨‍🏫 Ustoz yuklamasi</div>
+                <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 12 }}>
+                  🏊 Hovuz (daraja guruhi) va 🔁 parallel darslar <b>1 marta</b> hisoblanadi — 3 ta sinf bitta hovuzda bo'lsa, ustozga 3 soat emas, <b>1 soat</b> yoziladi.
+                </div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 10 }}>
                   {teacherLoads.map(t => {
                     const max = Number(t.maxWeeklyHours || 40);
@@ -896,7 +1028,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
             <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--card-bg,#fff)", borderRadius: 16, padding: 22, width: "100%", maxWidth: 640, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 24px 70px rgba(0,0,0,.35)" }}>
               <h3 style={{ margin: "0 0 4px" }}>🏊 Hovuz (daraja guruhi) tez sozlash</h3>
               <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 16 }}>
-                Bir nechta sinf birlashib, bir vaqtda bir necha ustoz (daraja) bilan o'qiydi. Masalan 3-A + 3-B Ingliz tili → 3 ustoz.
+                Bir nechta sinf birlashib, bir vaqtda bir necha ustoz (daraja) bilan o'qiydi. Masalan 3-A + 3-B Ingliz tili → 3 ustoz. Ustoz yuklamasiga bu hovuz 1 marta yoziladi.
               </div>
 
               <label className="form-label">Fan</label>
