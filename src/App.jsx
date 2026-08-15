@@ -487,8 +487,7 @@ export default function App() {
       case "schedule": return <SchedulePage {...pageProps} setSchedule={setSchedule} />;
       case "teacherReplace": return <TeacherReplacePage {...pageProps} setSchedule={setSchedule} setClassSubjects={setClassSubjects} />;
       case "analytics": return <AnalyticsPage {...pageProps} />;
-      case "importExport": return <ImportExportPage {...pageProps} setSubjects={setSubjects} setTeachers={setTeachers} />;
-      case "users": return currentUser.role === "superadmin" ? <UsersPage {...pageProps} /> : <DashboardPage {...pageProps} setActivePage={handleNavigate} />;
+case "importExport": return <ImportExportPage {...pageProps} settings={settings} setSubjects={setSubjects} setTeachers={setTeachers} />;      case "users": return currentUser.role === "superadmin" ? <UsersPage {...pageProps} /> : <DashboardPage {...pageProps} setActivePage={handleNavigate} />;
       case "settings": return (
         <SettingsPage
           settings={settings} setSettings={setSettings}

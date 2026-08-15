@@ -24,6 +24,7 @@ export default function ImportExportPage({
   teachers, setTeachers,
   rooms, timeslots, lunchGroups, schedule,
   classSubjects = {},
+  settings = {},
   schoolName = '',
   toast,
 }) {
@@ -251,9 +252,10 @@ export default function ImportExportPage({
   }
 
   // Dars soat setkasi — fan × sinf matritsasi (tuman admin varag'i bilan bir xil).
+  // Sarlavhadagi maktab nomi Sozlamalar sahifasidan (settings.schoolName) olinadi.
   async function exportHourGrid() {
     await exportHourGridExcel({
-      classes, subjects, classSubjects, schoolName, toast,
+      classes, subjects, classSubjects, settings, schoolName, toast,
     });
   }
 
@@ -321,7 +323,7 @@ export default function ImportExportPage({
             <div style={{ fontSize: 28, marginBottom: 10 }}>🕐</div>
             <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 6 }}>Dars soat setkasi</div>
             <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 14 }}>
-              Fan × sinf matritsasi: har bir fanning har bir sinfdagi haftalik soati, qator va ustun jamilari bilan. Tuman hisobotidagi "Soat setkasi" varag'i bilan bir xil ko'rinishda.
+              Fan × sinf matritsasi: har bir fanning har bir sinfdagi haftalik soati, qator va ustun jamilari bilan. Sarlavhada Sozlamalardagi maktab nomi chiqadi.
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button className="btn btn-success" onClick={exportHourGrid}>🕐 Soat setkasi (Excel)</button>

@@ -8,6 +8,10 @@
 //  Farqi: ma'lumot Excel yuklamadan emas, foydalanuvchining o'z
 //  "Sinf fanlari" (classSubjects) sozlamasidan olinadi.
 //
+//  YANGILANDI: sarlavhadagi maktab nomi endi SOZLAMALAR bo'limidagi
+//  "Maktab nomi" (settings.schoolName) dan olinadi — akkaunt nomidan
+//  ("1-maktab") emas. Fayl nomi ham shu nomdan yasaladi.
+//
 //  Chaqirilishi: ImportExport.jsx → exportHourGridExcel({...})
 // =====================================================================
 
@@ -42,15 +46,86 @@ function natCmp(a, b) {
   return String(a || '').localeCompare(String(b || ''), 'uz', { numeric: true, sensitivity: 'base' });
 }
 
-// ---------------------------------------------------------------------
-//  Maktab nomini aniqlash (prop berilmasa — brauzer xotirasidan)
-// ---------------------------------------------------------------------
+// =====================================================================
+//  MAKTAB NOMINI ANIQLASH
+//
+//  Tartib (birinchi topilgani ishlatiladi):
+//    1) settings.schoolName — to'g'ridan-to'g'ri prop orqali kelsa
+//    2) localStorage dagi sozlamalar obyektidan (Sozlamalar sahifasi)
+//    3) schoolName propi (akkaunt nomi — zaxira variant)
+//    4) foydalanuvchi obyektidan (eng oxirgi chora)
+//    5) "Maktab"
+// =====================================================================
+const SETTINGS_KEYS = [
+  'edu-settings', 'edu_settings', 'eduSettings',
+  'sj-settings', 'smartjadval-settings', 'edujadval-settings',
+  'app-settings', 'settings', 'edu-sozlamalar', 'sozlamalar',
+];
+
 const USER_KEYS = [
   'edu-current-user', 'currentUser', 'edu-user', 'edu-auth-user',
   'sj-current-user', 'edu-session', 'user',
 ];
 
-function pickName(o) {
+function readObj(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const t = raw.trim();
+    if (t[0] !== '{') return null;
+    const o = JSON.parse(t);
+    return (o && typeof o === 'object' && !Array.isArray(o)) ? o : null;
+  } catch {
+    return null;
+  }
+}
+
+function pickSettingsName(o) {
+  if (!o) return '';
+  const n = o.schoolName ?? o.school_name ?? o.maktabNomi ?? '';
+  return String(n).trim();
+}
+
+function looksLikeSettings(o) {
+  if (!o) return false;
+  return ('academicYear' in o) || ('academic_year' in o) || ('oquvYili' in o)
+    || ('lessonDuration' in o) || ('directorName' in o) || ('theme' in o);
+}
+
+// Sozlamalar obyektidagi maktab nomini localStorage dan qidiramiz
+function detectSettingsName() {
+  try {
+    if (typeof localStorage === 'undefined') return '';
+
+    // 1) Ma'lum kalitlar
+    for (const k of SETTINGS_KEYS) {
+      const n = pickSettingsName(readObj(k));
+      if (n) return n;
+    }
+
+    // 2) Nomida "setting/sozlama/config" bo'lgan kalitlar
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i) || '';
+      if (!/setting|sozlama|config/i.test(k)) continue;
+      const n = pickSettingsName(readObj(k));
+      if (n) return n;
+    }
+
+    // 3) Sozlamalarga o'xshash har qanday obyekt (o'quv yili, dars davomiyligi...)
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i) || '';
+      const o = readObj(k);
+      if (!looksLikeSettings(o)) continue;
+      const n = pickSettingsName(o);
+      if (n) return n;
+    }
+  } catch {
+    /* jim o'tamiz */
+  }
+  return '';
+}
+
+function pickUserName(o) {
   if (!o || typeof o !== 'object') return '';
   return String(
     o.schoolName || o.school_name || o.school?.name ||
@@ -58,27 +133,36 @@ function pickName(o) {
   ).trim();
 }
 
-function detectSchoolName() {
+function detectUserName() {
   try {
+    if (typeof localStorage === 'undefined') return '';
     for (const k of USER_KEYS) {
-      const raw = localStorage.getItem(k);
-      if (!raw) continue;
-      const n = pickName(JSON.parse(raw));
+      const n = pickUserName(readObj(k));
       if (n) return n;
     }
-    // Oxirgi chora: "user" so'zi bor kalitlarni ko'rib chiqamiz
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i) || '';
       if (!/user|auth|profil/i.test(k)) continue;
-      const raw = localStorage.getItem(k);
-      if (!raw || raw[0] !== '{') continue;
-      const n = pickName(JSON.parse(raw));
+      const n = pickUserName(readObj(k));
       if (n) return n;
     }
   } catch {
     /* jim o'tamiz */
   }
-  return 'Maktab';
+  return '';
+}
+
+export function resolveSchoolName({ settings, schoolName } = {}) {
+  const fromProp = pickSettingsName(settings);
+  if (fromProp) return fromProp;
+
+  const fromStore = detectSettingsName();
+  if (fromStore) return fromStore;
+
+  const fallback = String(schoolName || '').trim();
+  if (fallback) return fallback;
+
+  return detectUserName() || 'Maktab';
 }
 
 // ---------------------------------------------------------------------
@@ -109,7 +193,7 @@ function makeStyledSheet(XLSX, {
     ];
   }
   ws['!rows'] = [
-    { hpt: 32 }, { hpt: 17 }, { hpt: 6 }, { hpt: 26 },
+    { hpt: 40 }, { hpt: 17 }, { hpt: 6 }, { hpt: 26 },
     ...body.map(() => ({ hpt: 20 })),
   ];
 
@@ -124,7 +208,7 @@ function makeStyledSheet(XLSX, {
 
       if (R === 0) {
         cell.s = {
-          font: { name: 'Calibri', sz: 15, bold: true, color: { rgb: 'FFFFFF' } },
+          font: { name: 'Calibri', sz: 18, bold: true, color: { rgb: 'FFFFFF' } },
           fill: xlFill(th.accent),
           alignment: { horizontal: 'center', vertical: 'center' },
         };
@@ -215,6 +299,7 @@ export async function exportHourGridExcel({
   classes = [],
   subjects = [],
   classSubjects = {},
+  settings = null,
   schoolName = '',
   toast,
 }) {
@@ -231,7 +316,7 @@ export async function exportHourGridExcel({
     }
 
     const XLSX = await loadStyledXLSX();
-    const name = String(schoolName || detectSchoolName());
+    const name = resolveSchoolName({ settings, schoolName });
     const stamp = `smartjadval · Soat setkasi · ${todayStr()}`;
 
     const cls = grid.classes;
