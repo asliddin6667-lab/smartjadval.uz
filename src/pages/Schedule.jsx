@@ -533,7 +533,7 @@ export default function SchedulePage({
     return n;
   }
 
-  // Sifat o'lchovi: oynalar (bo'sh oraliq darslar) soni — kam bo'lgani yaxshi
+  // Sifat o'lchovi: oynalar (kun o'rtasidagi bo'sh darslar) soni — kam bo'lgani yaxshi
   function countGaps(sch) {
     let gaps = 0;
     classes.forEach((cls) => {
@@ -612,6 +612,35 @@ export default function SchedulePage({
     return has ? seed : null;
   }
 
+  // Yakuniy zichlash — kun o'rtasida bo'sh soat qolmasligi uchun bir necha marta
+  // ishlatiladi. MUHIM: oyna kamaysa natija QABUL QILINADI; "bir kunda bir fan"
+  // limiti ikkinchi darajali mezon (ilgari u tufayli zichlash butunlay rad
+  // etilar va ekranda oynali jadval qolib ketardi).
+  function compactUntilClean(startSch, minPlaced) {
+    let best = startSch;
+    for (let k = 0; k < 4; k++) {
+      let next;
+      try {
+        next = compactSchedule(classes, timeslots, lunchGroups, best, classSubjects);
+      } catch {
+        break;
+      }
+      if (!next) break;
+      const gBefore = countGaps(best);
+      const gAfter = countGaps(next);
+      const okPlaced = countPlacedUnits(next) >= minPlaced;
+      const okOver = countOverCap(next) <= countOverCap(best);
+      if (!okPlaced) break;
+      if (gAfter < gBefore || (gAfter === gBefore && okOver && countImbalance(next) < countImbalance(best))) {
+        best = next;
+        if (gAfter === 0) break;
+      } else {
+        break;
+      }
+    }
+    return best;
+  }
+
   async function handleGenerate() {
     if (!setSchedule || generating) return;
 
@@ -631,10 +660,11 @@ export default function SchedulePage({
     try {
       // Ko'p bosqichli qidiruv: har bir urinishdan eng yaxshisi saqlanadi.
       // Tanlov mezoni leksikografik:
-      // (1) joylangan soat, (2) kunlik fan limitidan oshish, (3) oynalar, (4) yuk notekisligi.
-      const MAX_ROUNDS = 30;
-      const TIME_CAP_MS = 30000;
-      const STALL_LIMIT = 6;
+      // (1) joylangan soat, (2) KUN O'RTASIDAGI OYNA, (3) kunlik yuk notekisligi,
+      // (4) bir kunda bir fan limitidan oshish.
+      const MAX_ROUNDS = 60;
+      const TIME_CAP_MS = 45000;
+      const STALL_LIMIT = 10;
       const start = Date.now();
 
       let best = null;
@@ -646,9 +676,9 @@ export default function SchedulePage({
 
       const betterThan = (placed, over, gaps, bal) => {
         if (placed !== bestPlaced) return placed > bestPlaced;
-        if (over !== bestOver) return over < bestOver;
         if (gaps !== bestGaps) return gaps < bestGaps;
-        return bal < bestBal;
+        if (bal !== bestBal) return bal < bestBal;
+        return over < bestOver;
       };
 
       for (let r = 0; r < MAX_ROUNDS; r++) {
@@ -677,8 +707,8 @@ export default function SchedulePage({
         setGenProgress(requiredTotal > 0 ? Math.min(100, Math.round((bestPlaced / requiredTotal) * 100)) : 100);
         setGenRound(r + 1);
 
-        if (requiredTotal > 0 && bestPlaced >= requiredTotal && bestGaps === 0 && bestOver === 0 && bestBal === 0) break;
-        if (stall >= STALL_LIMIT && requiredTotal > 0 && bestPlaced >= requiredTotal && bestOver === 0) break;
+        if (requiredTotal > 0 && bestPlaced >= requiredTotal && bestGaps === 0 && bestBal === 0) break;
+        if (stall >= STALL_LIMIT && requiredTotal > 0 && bestPlaced >= requiredTotal && bestGaps === 0) break;
         if (Date.now() - start > TIME_CAP_MS) break;
       }
 
@@ -693,24 +723,17 @@ export default function SchedulePage({
         }
       }
 
-      // Yakuniy zichlash — "ora kunda", "asosiy fan" va kunlik limit saqlanadi
-      try {
-        const compacted = compactSchedule(classes, timeslots, lunchGroups, finalSch, classSubjects);
-        const okPlaced = countPlacedUnits(compacted) >= bestPlaced;
-        const okGaps = countGaps(compacted) <= countGaps(finalSch);
-        const okOver = countOverCap(compacted) <= countOverCap(finalSch);
-        if (okPlaced && okGaps && okOver) finalSch = compacted;
-      } catch {
-        /* zichlash ixtiyoriy — xato bo'lsa jadval o'z holicha qoladi */
-      }
+      // Yakuniy zichlash — oyna qolmasligi kafolati
+      finalSch = compactUntilClean(finalSch, bestPlaced);
 
       setSchedule(finalSch);
 
       const lockNote = keptLocked > 0 ? ` · ${keptLocked} ta qulflangan dars saqlandi 🔒` : "";
+      const gapNote = countGaps(finalSch) > 0 ? ` · ⚠️ ${countGaps(finalSch)} ta bo'sh soat qoldi` : "";
       if (requiredTotal === 0 || bestPlaced >= requiredTotal) {
-        toast?.(`Dars jadvali 100% tuzildi ✓${lockNote}`, "success");
+        toast?.(`Dars jadvali 100% tuzildi ✓${lockNote}${gapNote}`, gapNote ? "warning" : "success");
       } else {
-        toast?.(`Jadval tuzildi — ${requiredTotal - bestPlaced} soat tushmadi${lockNote}`, "warning");
+        toast?.(`Jadval tuzildi — ${requiredTotal - bestPlaced} soat tushmadi${lockNote}${gapNote}`, "warning");
       }
 
       setGenDone(true);
@@ -951,6 +974,20 @@ export default function SchedulePage({
       && classIdsOf(l).length === 1;
   }
 
+  // Sinfning shu kundagi darslari ketma-ketmi? Yangi dars kun oxiriga qo'yilsa
+  // oyna paydo bo'lmaydi — shuning uchun bo'sh kataklar shunga qarab tanlanadi.
+  function dayLoadOf(work, classId, day) {
+    return sortedTimeslots.reduce((n, ts) => (
+      isTeachingSlot(ts) && (work?.[day]?.[ts.id] || []).some((l) => classIdsOf(l).includes(classId)) ? n + 1 : n
+    ), 0);
+  }
+
+  // Kunlar kam yuklanganidan boshlab tartiblanadi — yangi soatlar bir kunga
+  // to'planib qolmasin.
+  function daysByLoad(work, classId) {
+    return [...DAYS].sort((a, b) => dayLoadOf(work, classId, a) - dayLoadOf(work, classId, b));
+  }
+
   function planResolutions(classId, subjectId, count) {
     const teachingSlots = sortedTimeslots.filter(isTeachingSlot);
     const work = {};
@@ -991,7 +1028,7 @@ export default function SchedulePage({
       const t2 = teacherMap.get(l.teacherId);
       const tOff2 = new Set(Array.isArray(t2?.offDays) ? t2.offDays : []);
       const cap2 = subjectDayCap(cid, l.subjectId);
-      for (const day of DAYS) {
+      for (const day of daysByLoad(work, cid)) {
         if (off2.has(day) || tOff2.has(day)) continue;
         if (subjOnDay(cid, l.subjectId, day) >= cap2) continue;
         for (const ts of teachingSlots) {
@@ -1026,7 +1063,7 @@ export default function SchedulePage({
       let done = false;
 
       // 1-bosqich — hech kimni bezovta qilmasdan
-      for (const day of DAYS) {
+      for (const day of daysByLoad(work, classId)) {
         if (done) break;
         if (classOff.has(day) || tOff.has(day)) continue;
         if (subjOnDay(classId, subjectId, day) >= cap) continue;
@@ -1042,7 +1079,7 @@ export default function SchedulePage({
       if (done) continue;
 
       // 2-bosqich — ustoz o'sha soatda boshqa sinfda band: o'sha darsni surish
-      for (const day of DAYS) {
+      for (const day of daysByLoad(work, classId)) {
         if (done) break;
         if (classOff.has(day) || tOff.has(day)) continue;
         if (subjOnDay(classId, subjectId, day) >= cap) continue;
@@ -1062,7 +1099,7 @@ export default function SchedulePage({
       if (done) continue;
 
       // 3-bosqich — sinfda dars bor: uni boshqa soatga surib joy ochish
-      for (const day of DAYS) {
+      for (const day of daysByLoad(work, classId)) {
         if (done) break;
         if (classOff.has(day) || tOff.has(day)) continue;
         if (subjOnDay(classId, subjectId, day) >= cap) continue;
@@ -1149,7 +1186,7 @@ export default function SchedulePage({
     ), 0);
 
     const freeSlot = (cid, sid, teacherList, classOff) => {
-      for (const day of DAYS) {
+      for (const day of daysByLoad(next, cid)) {
         if (classOff.has(day)) continue;
         if (subjOnDay(cid, sid, day) >= subjectDayCap(cid, sid)) continue;
         for (const ts of teachingSlots) {
@@ -1182,7 +1219,7 @@ export default function SchedulePage({
       const cObj = classes.find((c) => c.id === cid);
       const classOff2 = new Set(Array.isArray(cObj?.offDays) ? cObj.offDays : []);
       const cap2 = subjectDayCap(cid, l.subjectId);
-      for (const day of DAYS) {
+      for (const day of daysByLoad(next, cid)) {
         if (classOff2.has(day)) continue;
         if (l.teacherId && teacherOffHas(l.teacherId, day)) continue;
         if (subjOnDay(cid, l.subjectId, day) >= cap2) continue;
@@ -1206,7 +1243,7 @@ export default function SchedulePage({
       const cObj = classes.find((c) => c.id === cid);
       const classOff2 = new Set(Array.isArray(cObj?.offDays) ? cObj.offDays : []);
       const cap2 = subjectDayCap(cid, l.subjectId);
-      for (const day of DAYS) {
+      for (const day of daysByLoad(next, cid)) {
         if (classOff2.has(day)) continue;
         if (l.teacherId && teacherOffHas(l.teacherId, day)) continue;
         if (subjOnDay(cid, l.subjectId, day) >= cap2) continue;
@@ -1233,7 +1270,7 @@ export default function SchedulePage({
       if ((tLoad[t.id] || 0) + 1 > Number(t.maxWeeklyHours || 40)) return null;
       const tOff = new Set(Array.isArray(t.offDays) ? t.offDays : []);
       const cap = subjectDayCap(cid, sid);
-      for (const day of DAYS) {
+      for (const day of daysByLoad(next, cid)) {
         if (classOff.has(day) || tOff.has(day)) continue;
         if (subjOnDay(cid, sid, day) >= cap) continue;
         for (const ts of teachingSlots) {
@@ -1296,8 +1333,21 @@ export default function SchedulePage({
       toast?.("Bo'sh ustoz yoki vaqt topilmadi — bu fanlarga yana ustoz qo'shing", "warning");
       return;
     }
-    setSchedule(filled);
+    // To'ldirgandan keyin darhol zichlaymiz — oyna qolmasin
+    setSchedule(compactUntilClean(filled, countPlacedUnits(filled)));
     toast?.(`${placed} ta soat avtomatik joylashtirildi ✓`, "success");
+  }
+
+  // Qo'lda tahrirdan keyin ham oynani yopish tugmasi
+  function compactNow() {
+    if (!setSchedule) return;
+    const before = countGaps(schedule);
+    const next = compactUntilClean(schedule, countPlacedUnits(schedule));
+    const after = countGaps(next);
+    setSchedule(next);
+    if (after < before) toast?.(`Jadval zichlandi — ${before - after} ta bo'sh soat yopildi ✓`, "success");
+    else if (after === 0) toast?.("Kun o'rtasida bo'sh soat yo'q ✓", "success");
+    else toast?.(`${after} ta bo'sh soatni yopib bo'lmadi — ustoz bandligi to'sqinlik qilyapti`, "warning");
   }
 
   function addManualLesson() {
@@ -1386,6 +1436,7 @@ export default function SchedulePage({
   }
 
   const lockedTotal = setSchedule ? lockedCount() : 0;
+  const gapTotal = setSchedule ? countGaps(schedule) : 0;
 
   return (
     <div className="pretty-schedule-page">
@@ -1480,6 +1531,11 @@ export default function SchedulePage({
             {setSchedule && (
               <button className="sch-btn sch-btn-hero" onClick={handleGenerate} type="button" disabled={generating}>
                 {generating ? "⏳ Bajarilyapti…" : "⚡ Avtomatik jadval"}
+              </button>
+            )}
+            {setSchedule && gapTotal > 0 && (
+              <button className="sch-btn sch-btn-soft-blue" onClick={compactNow} type="button" title="Kun o'rtasidagi bo'sh soatlarni yopish">
+                🧲 Oynani yopish ({gapTotal})
               </button>
             )}
             {setSchedule && lockedTotal > 0 && (
