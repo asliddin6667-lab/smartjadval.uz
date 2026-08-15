@@ -1,20 +1,69 @@
-import { useState } from "react";
+import { useState, useMemo, useEffect } from "react";
 import ConfirmModal from "../components/ConfirmModal";
 import { genId } from "../utils/helpers";
 import { SUBJECT_COLORS, STANDARD_SUBJECTS, STANDARD_SUBJECTS_RU, EDU_LANGS } from "../utils/constants";
 
-export default function SubjectsPage({ subjects, setSubjects, toast }) {
+// ——— Standart fan nomlari to'plami (uz + ru) — eski ma'lumotni aniqlash uchun ———
+const STANDARD_NAME_SET = new Set(
+  [...STANDARD_SUBJECTS, ...STANDARD_SUBJECTS_RU].map(s => s.name.trim().toLowerCase())
+);
+
+function isStandardName(name) {
+  return STANDARD_NAME_SET.has(String(name || "").trim().toLowerCase());
+}
+
+// ——— Eski fanlarga source/ownerId maydonlarini qo'shish (bir martalik migratsiya) ———
+//  - Nomi standart ro'yxatda bo'lsa  -> source: "standard" (hammada ko'rinadi)
+//  - Aks holda                       -> source: "custom" + joriy foydalanuvchi egaligi
+function migrateSubject(s, currentUserId) {
+  if (s.source === "standard" || s.source === "custom") return s;
+  if (isStandardName(s.name)) return { ...s, source: "standard" };
+  return { ...s, source: "custom", ownerId: s.ownerId || currentUserId || null };
+}
+
+// ——— Fan shu foydalanuvchiga ko'rinadimi? ———
+//  Standart fanlar — hammaga. Qo'lda qo'shilgan fan — faqat egasiga.
+//  ownerId yoki currentUserId noma'lum bo'lsa, eski holat saqlanadi (ko'rinaveradi).
+export function subjectVisibleTo(s, currentUserId) {
+  if (!s) return false;
+  if (s.source !== "custom") return true;
+  if (!s.ownerId || !currentUserId) return true;
+  return s.ownerId === currentUserId;
+}
+
+export default function SubjectsPage({ subjects, setSubjects, toast, currentUser = null, currentUserId = null }) {
+  // Foydalanuvchi ID si: App.jsx `currentUser` ni pageProps orqali uzatadi
+  const uid = currentUserId || currentUser?.id || null;
+
   const [search, setSearch] = useState("");
   const [langFilter, setLangFilter] = useState("all"); // all | uz | ru
+  const [sourceFilter, setSourceFilter] = useState("all"); // all | standard | custom
   const [previewLang, setPreviewLang] = useState("uz"); // standart fanlar kartasi uchun
   const [showModal, setShowModal] = useState(false);
   const [editItem, setEditItem] = useState(null);
   const [deleteId, setDeleteId] = useState(null);
   const [form, setForm] = useState({ name: "", weeklyHours: 2, color: SUBJECT_COLORS[0], type: "Oddiy", allowDouble: false, lang: "uz" });
 
-  const filtered = subjects
+  // ——— Migratsiya: eski fanlarga source yozib qo'yamiz (faqat kerak bo'lsa) ———
+  useEffect(() => {
+    const needs = subjects.some(s => s.source !== "standard" && s.source !== "custom");
+    if (!needs) return;
+    setSubjects(subjects.map(s => migrateSubject(s, uid)));
+  }, [subjects, uid, setSubjects]);
+
+  // ——— Ko'rinadigan fanlar: boshqa foydalanuvchining qo'lda qo'shgan fani chiqmaydi ———
+  const visible = useMemo(
+    () => subjects.map(s => migrateSubject(s, uid)).filter(s => subjectVisibleTo(s, uid)),
+    [subjects, uid]
+  );
+
+  const customCount = visible.filter(s => s.source === "custom").length;
+  const standardCount = visible.length - customCount;
+
+  const filtered = visible
     .filter(s => s.name.toLowerCase().includes(search.toLowerCase()))
     .filter(s => langFilter === "all" || (s.lang || "uz") === langFilter)
+    .filter(s => sourceFilter === "all" || (s.source === "custom" ? "custom" : "standard") === sourceFilter)
     .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "uz", { numeric: true, sensitivity: "base" }));
 
   function openAdd() {
@@ -31,12 +80,31 @@ export default function SubjectsPage({ subjects, setSubjects, toast }) {
 
   function handleSave() {
     if (!form.name.trim()) return;
+
+    // Bir xil nomdagi fan takrorlanmasin (faqat ko'rinadigan fanlar orasida)
+    const dup = visible.some(s =>
+      s.id !== editItem?.id &&
+      s.name.trim().toLowerCase() === form.name.trim().toLowerCase() &&
+      (s.lang || "uz") === form.lang
+    );
+    if (dup) {
+      toast("Bu nomdagi fan allaqachon mavjud", "warning");
+      return;
+    }
+
     if (editItem) {
-      setSubjects(subjects.map(s => s.id === editItem.id ? { ...s, ...form } : s));
+      setSubjects(subjects.map(s => s.id === editItem.id ? { ...migrateSubject(s, uid), ...form } : s));
       toast("Fan yangilandi ✓", "success");
     } else {
-      setSubjects([...subjects, { id: genId(), ...form, createdAt: Date.now() }]);
-      toast("Fan qo'shildi ✓", "success");
+      // Qo'lda qo'shilgan fan — faqat shu foydalanuvchiga tegishli
+      setSubjects([...subjects, {
+        id: genId(),
+        ...form,
+        source: "custom",
+        ownerId: uid || null,
+        createdAt: Date.now()
+      }]);
+      toast("Fan qo'shildi ✓ (faqat sizning maktabingizda)", "success");
     }
     setShowModal(false);
   }
@@ -56,6 +124,7 @@ export default function SubjectsPage({ subjects, setSubjects, toast }) {
         id: genId(),
         ...s,
         lang,
+        source: "standard",
         color: SUBJECT_COLORS[(subjects.length + index) % SUBJECT_COLORS.length],
         allowDouble: Boolean(s.allowDouble),
         createdAt: Date.now() + index
@@ -90,7 +159,9 @@ export default function SubjectsPage({ subjects, setSubjects, toast }) {
             <div className="toolbar">
               <div>
                 <div style={{ fontWeight: 800, fontSize: 16 }}>📚 Standart fanlar</div>
-                <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>Ta'lim tiliga mos asosiy fanlarni avtomatik qo'shadi. Qo'lda fan qo'shish ham qoladi.</div>
+                <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                  Standart fanlar barcha maktablarda bir xil bo'ladi. Qo'lda qo'shgan faningiz esa faqat sizning maktabingizda ko'rinadi.
+                </div>
               </div>
               <div style={{ display: "flex", gap: 6 }}>
                 {EDU_LANGS.map(l => (
@@ -120,7 +191,12 @@ export default function SubjectsPage({ subjects, setSubjects, toast }) {
                 <span style={{ color: "var(--text-muted)" }}>🔍</span>
                 <input placeholder="Fan qidirish..." value={search} onChange={e => setSearch(e.target.value)} />
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <select className="form-control" style={{ width: "auto" }} value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}>
+                  <option value="all">Barcha fanlar</option>
+                  <option value="standard">📚 Standart ({standardCount})</option>
+                  <option value="custom">✍️ Qo'lda qo'shilgan ({customCount})</option>
+                </select>
                 <select className="form-control" style={{ width: "auto" }} value={langFilter} onChange={e => setLangFilter(e.target.value)}>
                   <option value="all">Barcha tillar</option>
                   <option value="uz">🇺🇿 O'zbek tili</option>
@@ -141,6 +217,7 @@ export default function SubjectsPage({ subjects, setSubjects, toast }) {
                   <tr>
                     <th>#</th>
                     <th>Fan nomi</th>
+                    <th>Manba</th>
                     <th>Ta'lim tili</th>
                     <th>Haftalik soat</th>
                     <th>Turi</th>
@@ -158,6 +235,16 @@ export default function SubjectsPage({ subjects, setSubjects, toast }) {
                           <span className="color-dot" style={{ background: s.color }} />
                           <strong>{s.name}</strong>
                         </div>
+                      </td>
+                      <td>
+                        <span
+                          className={`badge ${s.source === "custom" ? "badge-warning" : "badge-default"}`}
+                          title={s.source === "custom"
+                            ? "Siz qo'lda qo'shgansiz — faqat sizning maktabingizda ko'rinadi"
+                            : "Standart fan — barcha maktablarda mavjud"}
+                        >
+                          {s.source === "custom" ? "✍️ Qo'lda" : "📚 Standart"}
+                        </span>
                       </td>
                       <td>
                         <span className="badge badge-default">
@@ -203,6 +290,18 @@ export default function SubjectsPage({ subjects, setSubjects, toast }) {
               <button className="modal-close" onClick={() => setShowModal(false)}>×</button>
             </div>
             <div className="modal-body">
+              {!editItem && (
+                <div style={{
+                  background: "var(--bg-secondary, #f1f5f9)",
+                  borderRadius: 8,
+                  padding: "10px 12px",
+                  marginBottom: 14,
+                  fontSize: 12,
+                  color: "var(--text-secondary)"
+                }}>
+                  🔒 Bu fan <b>faqat sizning maktabingizda</b> ko'rinadi — boshqa foydalanuvchilarga o'tmaydi.
+                </div>
+              )}
               <div className="form-group">
                 <label className="form-label">Fan nomi *</label>
                 <input className="form-control" placeholder="Masalan: Matematika" value={form.name}
