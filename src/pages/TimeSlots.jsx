@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import ConfirmModal from "../components/ConfirmModal";
 import { genId } from "../utils/helpers";
 
@@ -7,6 +7,8 @@ const SLOT_TYPES = [
   { value: "lunch", label: "Obed", icon: "🍽️", badge: "badge-warning" },
   { value: "break", label: "Tanaffus", icon: "☕", badge: "badge-default" },
 ];
+
+const NO_SHIFT = "__none__";
 
 function slotTypeInfo(type) {
   return SLOT_TYPES.find(t => t.value === type) || SLOT_TYPES[0];
@@ -17,6 +19,9 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
   const [editItem, setEditItem] = useState(null);
   const [deleteId, setDeleteId] = useState(null);
   const [form, setForm] = useState({ lessonNumber: 1, startTime: "08:00", endTime: "08:45", type: "lesson", title: "", classIds: [] });
+
+  // ——— Smena bo'yicha ko'rish (filtr) ———
+  const [shiftFilter, setShiftFilter] = useState("all");
 
   // ——— Ommaviy biriktirish (smena sozlash) ———
   const [bulkOpen, setBulkOpen] = useState(false);
@@ -36,11 +41,57 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
 
   const classNameById = useMemo(() => new Map(classes.map(c => [c.id, c.name])), [classes]);
 
+  const sorted = useMemo(() => (
+    [...timeslots].sort((a, b) => Number(a.lessonNumber) - Number(b.lessonNumber))
+  ), [timeslots]);
+
+  // ——— SMENALARGA BO'LISH ———
+  // Har smena o'z ichida 1 dan boshlab raqamlanadi: 1-dars, 2-dars …
+  // (global lessonNumber ichkarida saqlanadi — generator shunga tayanadi)
+  const groups = useMemo(() => {
+    const map = new Map();
+    const none = [];
+    sorted.forEach(t => {
+      if (t.shiftId) {
+        if (!map.has(t.shiftId)) {
+          const sh = (shifts || []).find(s => s.id === t.shiftId);
+          map.set(t.shiftId, { id: t.shiftId, name: t.shiftName || sh?.name || "Smena", slots: [] });
+        }
+        map.get(t.shiftId).slots.push(t);
+      } else {
+        none.push(t);
+      }
+    });
+    // smenalar tartibi — shifts ro'yxati bo'yicha
+    const out = [];
+    (shifts || []).forEach(sh => { if (map.has(sh.id)) { out.push(map.get(sh.id)); map.delete(sh.id); } });
+    map.forEach(g => out.push(g));
+    if (none.length) out.push({ id: NO_SHIFT, name: "Umumiy vaqtlar (smenasiz)", slots: none });
+    return out;
+  }, [sorted, shifts]);
+
+  const visibleGroups = shiftFilter === "all" ? groups : groups.filter(g => g.id === shiftFilter);
+
+  function timeToMin(t) { const [h, m] = String(t).split(":").map(Number); return (h || 0) * 60 + (m || 0); }
+  function minToTime(x) { const v = ((x % 1440) + 1440) % 1440; return `${String(Math.floor(v / 60)).padStart(2, "0")}:${String(v % 60).padStart(2, "0")}`; }
+
+  function groupRange(slots) {
+    if (!slots.length) return "—";
+    const first = [...slots].sort((a, b) => timeToMin(a.startTime) - timeToMin(b.startTime))[0];
+    const last = [...slots].sort((a, b) => timeToMin(b.endTime) - timeToMin(a.endTime))[0];
+    return `${first.startTime}–${last.endTime}`;
+  }
+
+  // Smena ichidagi dars raqami (ro'yxatdagi o'rni bo'yicha)
+  function innerNumber(group, idx) {
+    return idx + 1;
+  }
+
   function openAdd(type = "lesson") {
-    const nextNum = timeslots.length + 1;
+    const maxNum = timeslots.reduce((mx, t) => Math.max(mx, Number(t.lessonNumber) || 0), 0);
     setEditItem(null);
     setForm({
-      lessonNumber: nextNum,
+      lessonNumber: maxNum + 1,
       startTime: type === "lunch" ? "12:30" : "08:00",
       endTime: type === "lunch" ? "13:10" : "08:45",
       type,
@@ -98,9 +149,6 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
   }
 
   // ——— Smena yordamchi funksiyalari ———
-  function timeToMin(t) { const [h, m] = String(t).split(":").map(Number); return (h || 0) * 60 + (m || 0); }
-  function minToTime(x) { const v = ((x % 1440) + 1440) % 1440; return `${String(Math.floor(v / 60)).padStart(2, "0")}:${String(v % 60).padStart(2, "0")}`; }
-
   function genShiftSlots(count, start, dur, brk) {
     const slots = [];
     let cur = timeToMin(start);
@@ -148,12 +196,12 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
     setShiftForm(f => ({ ...f, slots: f.slots.map((s, i) => i === idx ? { ...s, ...patch } : s) }));
   }
 
-  function addShiftSlot() {
+  function addShiftSlot(type = "lesson") {
     setShiftForm(f => {
       const last = f.slots[f.slots.length - 1];
       const startMin = last ? timeToMin(last.endTime) + (Number(f.gen.brk) || 5) : timeToMin(f.gen.start || "08:00");
-      const dur = Number(f.gen.dur) || 45;
-      return { ...f, slots: [...f.slots, { lessonNumber: f.slots.length + 1, startTime: minToTime(startMin), endTime: minToTime(startMin + dur), type: "lesson" }] };
+      const dur = type === "lunch" ? 40 : (Number(f.gen.dur) || 45);
+      return { ...f, slots: [...f.slots, { lessonNumber: f.slots.length + 1, startTime: minToTime(startMin), endTime: minToTime(startMin + dur), type }] };
     });
   }
 
@@ -174,7 +222,8 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
     if (typeof setShifts === "function") setShifts(nextShifts);
 
     // Bu smenaning eski vaqtlarini olib tashlab, yangilarini qo'shamiz.
-    // Global lessonNumber uzluksiz bo'ladi (generator to'g'ri tartiblashi uchun).
+    // Global lessonNumber uzluksiz bo'ladi (generator to'g'ri tartiblashi uchun),
+    // ekranda esa smena ichki raqami ko'rsatiladi: 1-dars, 2-dars …
     const withoutThisShift = timeslots.filter(t => t.shiftId !== shiftId);
     const maxLesson = withoutThisShift.reduce((mx, t) => Math.max(mx, Number(t.lessonNumber) || 0), 0);
     const newSlots = shiftForm.slots.map((s, i) => ({
@@ -184,7 +233,7 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
       startTime: s.startTime,
       endTime: s.endTime,
       type: s.type || "lesson",
-      title: "",
+      title: s.type === "lunch" ? "Obed vaqti" : s.type === "break" ? "Tanaffus" : "",
       classIds: [...shiftForm.classIds],     // smena sinflari — generator shu bo'yicha cheklaydi
       shiftId,
       shiftName: shiftForm.name.trim(),
@@ -192,6 +241,7 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
     setTimeslots([...withoutThisShift, ...newSlots]);
     toast(editShift ? "Smena yangilandi ✓" : `Smena yaratildi: ${newSlots.length} vaqt, ${shiftForm.classIds.length} sinf ✓`, "success");
     setShiftModalOpen(false);
+    setShiftFilter(shiftId);
   }
 
   function confirmDeleteShift() {
@@ -199,15 +249,14 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
     if (typeof setShifts === "function") setShifts((shifts || []).filter(s => s.id !== id));
     setTimeslots(timeslots.filter(t => t.shiftId !== id));
     setDeleteShiftId(null);
+    if (shiftFilter === id) setShiftFilter("all");
     toast("Smena o'chirildi", "error");
   }
 
   // Smena kartasi uchun statistika
   function shiftInfo(shift) {
     const slots = timeslots.filter(t => t.shiftId === shift.id);
-    const first = [...slots].sort((a, b) => timeToMin(a.startTime) - timeToMin(b.startTime))[0];
-    const last = [...slots].sort((a, b) => timeToMin(b.endTime) - timeToMin(a.endTime))[0];
-    return { count: slots.length, range: first && last ? `${first.startTime}–${last.endTime}` : "—", classCount: (shift.classIds || []).length };
+    return { count: slots.length, range: groupRange(slots), classCount: (shift.classIds || []).length };
   }
 
   function openBulk() {
@@ -274,8 +323,6 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
     );
   }
 
-  const sorted = [...timeslots].sort((a, b) => Number(a.lessonNumber) - Number(b.lessonNumber));
-
   return (
     <div>
       <div className="page-header">
@@ -297,6 +344,7 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
             <div className="alert alert-info" style={{ marginBottom: 0 }}>
               ℹ️ Avtomatik jadval obed va tanaffus qatorlarini tashlab o'tadi. Bu vaqtlarda sinf, ustoz va xona band qilinmaydi.
               Sinf biriktirilmagan vaqt <b>barcha sinflarga</b> tegishli bo'ladi; sinf biriktirilsa — faqat o'sha sinflar jadvalida ishlatiladi.
+              Har smena o'z ichida <b>1-dars, 2-dars…</b> deb raqamlanadi.
             </div>
           </div>
         </div>
@@ -313,8 +361,15 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
                   const inf = shiftInfo(sh);
                   const names = (sh.classIds || []).map(id => classNameById.get(id)).filter(Boolean)
                     .sort((a, b) => String(a).localeCompare(String(b), "uz", { numeric: true }));
+                  const activeCard = shiftFilter === sh.id;
                   return (
-                    <div key={sh.id} style={{ border: "1px solid var(--card-border, #e2e8f0)", borderRadius: 12, padding: 14, background: "var(--card-bg, #fff)" }}>
+                    <div key={sh.id}
+                      style={{
+                        border: activeCard ? "2px solid var(--accent, #6366f1)" : "1px solid var(--card-border, #e2e8f0)",
+                        borderRadius: 12, padding: 14, background: "var(--card-bg, #fff)", cursor: "pointer",
+                      }}
+                      onClick={() => setShiftFilter(activeCard ? "all" : sh.id)}
+                      title="Bosing — faqat shu smena vaqtlari ko'rsatiladi">
                       <div style={{ fontWeight: 800, fontSize: 16 }}>{sh.name}</div>
                       <div style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 6, lineHeight: 1.6 }}>
                         🕐 {inf.count} dars vaqti · {inf.range}<br />
@@ -324,8 +379,8 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
                         {names.length ? names.join(", ") : <span style={{ color: "#dc2626" }}>Sinf biriktirilmagan</span>}
                       </div>
                       <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
-                        <button className="btn btn-secondary btn-sm" onClick={() => openShiftEdit(sh)}>⚙️ Sozlash</button>
-                        <button className="btn btn-danger btn-sm" onClick={() => setDeleteShiftId(sh.id)}>🗑️</button>
+                        <button className="btn btn-secondary btn-sm" onClick={(e) => { e.stopPropagation(); openShiftEdit(sh); }}>⚙️ Sozlash</button>
+                        <button className="btn btn-danger btn-sm" onClick={(e) => { e.stopPropagation(); setDeleteShiftId(sh.id); }}>🗑️</button>
                       </div>
                     </div>
                   );
@@ -334,6 +389,38 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
             </div>
           </div>
         )}
+
+        {groups.length > 1 && (
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div className="card-body" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <span style={{ fontSize: 12.5, fontWeight: 800, letterSpacing: .5, textTransform: "uppercase", color: "var(--text-secondary)" }}>Ko'rsatish:</span>
+              <button type="button" onClick={() => setShiftFilter("all")}
+                style={{
+                  border: shiftFilter === "all" ? "1.5px solid var(--accent, #6366f1)" : "1.5px solid var(--card-border, #e2e8f0)",
+                  background: shiftFilter === "all" ? "var(--accent, #6366f1)" : "var(--card-bg, #fff)",
+                  color: shiftFilter === "all" ? "#fff" : "var(--text-secondary, #475569)",
+                  borderRadius: 9, padding: "6px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap"
+                }}>
+                Hammasi ({sorted.length})
+              </button>
+              {groups.map(g => {
+                const active = shiftFilter === g.id;
+                return (
+                  <button key={g.id} type="button" onClick={() => setShiftFilter(g.id)}
+                    style={{
+                      border: active ? "1.5px solid var(--accent, #6366f1)" : "1.5px solid var(--card-border, #e2e8f0)",
+                      background: active ? "var(--accent, #6366f1)" : "var(--card-bg, #fff)",
+                      color: active ? "#fff" : "var(--text-secondary, #475569)",
+                      borderRadius: 9, padding: "6px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap"
+                    }}>
+                    🕐 {g.name} ({g.slots.length})
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div className="card">
           <div className="card-body">
             {sorted.length === 0 ? (
@@ -357,39 +444,51 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
                   </tr>
                 </thead>
                 <tbody>
-                  {sorted.map(t => {
-                    const [sh, sm] = t.startTime.split(":").map(Number);
-                    const [eh, em] = t.endTime.split(":").map(Number);
-                    const dur = (eh * 60 + em) - (sh * 60 + sm);
-                    const info = slotTypeInfo(t.type || "lesson");
-                    return (
-                      <tr key={t.id} style={(t.type === "lunch" || t.type === "break") ? { background: "var(--warning-light)" } : undefined}>
-                        <td>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <div style={{ width: 28, height: 28, borderRadius: 8, background: "var(--accent-light)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, color: "var(--accent)" }}>
-                              {t.lessonNumber}
-                            </div>
-                            <span style={{ fontWeight: 600 }}>{t.lessonNumber}</span>
-                          </div>
-                        </td>
-                        <td><span className={`badge ${info.badge}`}>{info.icon} {info.label}</span></td>
-                        <td style={{ fontWeight: 600 }}>
-                          {t.title || (t.type === "lesson" || !t.type ? `${t.shiftLessonNumber || t.lessonNumber}-dars` : info.label)}
-                          {t.shiftName && <span className="badge badge-default" style={{ marginLeft: 6, fontSize: 11 }}>🕐 {t.shiftName}</span>}
-                        </td>
-                        <td style={{ fontWeight: 600, fontSize: 15 }}>{t.startTime}</td>
-                        <td style={{ fontWeight: 600, fontSize: 15 }}>{t.endTime}</td>
-                        <td><span className="badge badge-info">{dur} daqiqa</span></td>
-                        <td>{renderClassChips(t)}</td>
-                        <td>
-                          <div style={{ display: "flex", gap: 4 }}>
-                            <button className="btn btn-icon" onClick={() => openEdit(t)}>✏️</button>
-                            <button className="btn btn-icon" onClick={() => setDeleteId(t.id)}>🗑️</button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {visibleGroups.map(g => (
+                    <Fragment key={g.id}>
+                      {groups.length > 1 && (
+                        <tr>
+                          <td colSpan={8} style={{ background: "var(--accent-light, #eef2ff)", fontWeight: 800, color: "var(--accent, #4338ca)", fontSize: 14 }}>
+                            🕐 {g.name} · {g.slots.length} vaqt · {groupRange(g.slots)}
+                          </td>
+                        </tr>
+                      )}
+                      {g.slots.map((t, idx) => {
+                        const [sh, sm] = t.startTime.split(":").map(Number);
+                        const [eh, em] = t.endTime.split(":").map(Number);
+                        const dur = (eh * 60 + em) - (sh * 60 + sm);
+                        const info = slotTypeInfo(t.type || "lesson");
+                        const num = innerNumber(g, idx);
+                        return (
+                          <tr key={t.id} style={(t.type === "lunch" || t.type === "break") ? { background: "var(--warning-light)" } : undefined}>
+                            <td>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8 }} title={`Umumiy tartib: ${t.lessonNumber}`}>
+                                <div style={{ width: 28, height: 28, borderRadius: 8, background: "var(--accent-light)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, color: "var(--accent)" }}>
+                                  {num}
+                                </div>
+                                <span style={{ fontWeight: 600 }}>{num}</span>
+                              </div>
+                            </td>
+                            <td><span className={`badge ${info.badge}`}>{info.icon} {info.label}</span></td>
+                            <td style={{ fontWeight: 600 }}>
+                              {t.title || (t.type === "lesson" || !t.type ? `${num}-dars` : info.label)}
+                              {t.shiftName && <span className="badge badge-default" style={{ marginLeft: 6, fontSize: 11 }}>🕐 {t.shiftName}</span>}
+                            </td>
+                            <td style={{ fontWeight: 600, fontSize: 15 }}>{t.startTime}</td>
+                            <td style={{ fontWeight: 600, fontSize: 15 }}>{t.endTime}</td>
+                            <td><span className="badge badge-info">{dur} daqiqa</span></td>
+                            <td>{renderClassChips(t)}</td>
+                            <td>
+                              <div style={{ display: "flex", gap: 4 }}>
+                                <button className="btn btn-icon" onClick={() => openEdit(t)}>✏️</button>
+                                <button className="btn btn-icon" onClick={() => setDeleteId(t.id)}>🗑️</button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </Fragment>
+                  ))}
                 </tbody>
               </table>
             )}
@@ -407,7 +506,7 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
             <div className="modal-body">
               <div className="form-row">
                 <div className="form-group">
-                  <label className="form-label">Tartib raqami</label>
+                  <label className="form-label">Tartib raqami <span style={{ fontWeight: 400, color: "var(--text-secondary)" }}>(umumiy)</span></label>
                   <input className="form-control" type="number" min="1" value={form.lessonNumber}
                     onChange={e => setForm({ ...form, lessonNumber: parseInt(e.target.value) || 1 })} />
                 </div>
@@ -515,23 +614,36 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
                   <button type="button" className="btn btn-secondary" style={{ padding: "3px 10px", fontSize: 12 }}
                     onClick={() => setBulkSlotIds([])}>Tozalash</button>
                 </div>
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", maxHeight: 150, overflowY: "auto", padding: 8, border: "1px solid var(--card-border, #e2e8f0)", borderRadius: 10, background: "var(--bg-secondary, #f8fafc)" }}>
-                  {sorted.map(t => {
-                    const active = bulkSlotIds.includes(t.id);
-                    const info = slotTypeInfo(t.type || "lesson");
-                    return (
-                      <button key={t.id} type="button" onClick={() => toggleBulkSlot(t.id)}
-                        style={{
-                          border: active ? "1.5px solid var(--accent, #6366f1)" : "1.5px solid var(--card-border, #e2e8f0)",
-                          background: active ? "var(--accent, #6366f1)" : "var(--card-bg, #fff)",
-                          color: active ? "#fff" : "var(--text-secondary, #475569)",
-                          borderRadius: 9, padding: "5px 11px", fontSize: 13, fontWeight: 700,
-                          cursor: "pointer", transition: "all .15s", whiteSpace: "nowrap"
-                        }}>
-                        {info.icon} {t.lessonNumber}{(t.type === "lesson" || !t.type) ? "-dars" : ""} · {t.startTime}
-                      </button>
-                    );
-                  })}
+                <div style={{ maxHeight: 190, overflowY: "auto", padding: 8, border: "1px solid var(--card-border, #e2e8f0)", borderRadius: 10, background: "var(--bg-secondary, #f8fafc)" }}>
+                  {groups.map(g => (
+                    <div key={g.id} style={{ marginBottom: 10 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                        <span style={{ fontSize: 12.5, fontWeight: 800, color: "var(--accent)" }}>🕐 {g.name}</span>
+                        <button type="button" className="btn btn-secondary" style={{ padding: "2px 8px", fontSize: 11.5 }}
+                          onClick={() => setBulkSlotIds(prev => [...new Set([...prev, ...g.slots.map(s => s.id)])])}>
+                          Shu smenani tanlash
+                        </button>
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {g.slots.map((t, idx) => {
+                          const active = bulkSlotIds.includes(t.id);
+                          const info = slotTypeInfo(t.type || "lesson");
+                          return (
+                            <button key={t.id} type="button" onClick={() => toggleBulkSlot(t.id)}
+                              style={{
+                                border: active ? "1.5px solid var(--accent, #6366f1)" : "1.5px solid var(--card-border, #e2e8f0)",
+                                background: active ? "var(--accent, #6366f1)" : "var(--card-bg, #fff)",
+                                color: active ? "#fff" : "var(--text-secondary, #475569)",
+                                borderRadius: 9, padding: "5px 11px", fontSize: 13, fontWeight: 700,
+                                cursor: "pointer", transition: "all .15s", whiteSpace: "nowrap"
+                              }}>
+                              {info.icon} {idx + 1}{(t.type === "lesson" || !t.type) ? "-dars" : ""} · {t.startTime}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
 
@@ -639,13 +751,17 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
                 </div>
 
                 {/* Vaqtlar ro'yxati — qo'lda tahrir */}
-                <div style={{ border: "1px solid var(--card-border, #e2e8f0)", borderRadius: 10, padding: 10, maxHeight: 220, overflowY: "auto" }}>
+                <div style={{ border: "1px solid var(--card-border, #e2e8f0)", borderRadius: 10, padding: 10, maxHeight: 240, overflowY: "auto" }}>
                   {shiftForm.slots.length === 0 ? (
                     <div style={{ fontSize: 13, color: "var(--text-secondary)", textAlign: "center", padding: 10 }}>Hali dars vaqti yo'q. Yuqoridan "Tayyorlash" bosing yoki "Vaqt qo'shish".</div>
                   ) : (
                     shiftForm.slots.map((s, i) => (
                       <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
                         <span style={{ width: 26, height: 26, borderRadius: 7, background: "var(--accent-light)", color: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{i + 1}</span>
+                        <select className="form-control" value={s.type || "lesson"} style={{ maxWidth: 120 }}
+                          onChange={e => updateShiftSlot(i, { type: e.target.value })}>
+                          {SLOT_TYPES.map(t => <option key={t.value} value={t.value}>{t.icon} {t.label}</option>)}
+                        </select>
                         <input className="form-control" type="time" value={s.startTime} style={{ maxWidth: 130 }}
                           onChange={e => updateShiftSlot(i, { startTime: e.target.value })} />
                         <span style={{ color: "var(--text-secondary)" }}>—</span>
@@ -655,7 +771,11 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
                       </div>
                     ))
                   )}
-                  <button type="button" className="btn btn-secondary btn-sm" onClick={addShiftSlot} style={{ marginTop: 4 }}>＋ Vaqt qo'shish</button>
+                  <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => addShiftSlot("lesson")}>＋ Dars vaqti</button>
+                    <button type="button" className="btn btn-warning btn-sm" onClick={() => addShiftSlot("lunch")}>🍽️ Obed</button>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => addShiftSlot("break")}>☕ Tanaffus</button>
+                  </div>
                 </div>
               </div>
 
@@ -694,6 +814,7 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
                 )}
                 <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 6 }}>
                   Bu sinflar faqat shu smena vaqtlarida o'qiydi. Avtomatik jadval ularni boshqa smena vaqtiga qo'ymaydi.
+                  Excelga chiqarganda har smena <b>alohida list</b> bo'lib chiqadi.
                 </div>
               </div>
             </div>
