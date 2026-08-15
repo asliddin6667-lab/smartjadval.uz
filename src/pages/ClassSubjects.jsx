@@ -431,8 +431,8 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
       saveAssignments(current.filter(a => a.subjectId !== subjectId));
       if (openSettings === subjectId) setOpenSettings(null);
     } else {
-      const firstTeacher = teachersForSubject(subjectId)[0];
-      saveAssignments([...current, makeAssignment(subject, firstTeacher?.id || "")]);
+      // Ustoz avtomatik tanlanmaydi — foydalanuvchi o'zi tanlaydi
+      saveAssignments([...current, makeAssignment(subject)]);
     }
   }
 
@@ -527,7 +527,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
 
   function assignmentsFromPlan(rows) {
     return rows.map(({ subject, hours }) => ({
-      ...makeAssignment(subject, teachersForSubject(subject.id)[0]?.id || ""),
+      ...makeAssignment(subject), // ustoz bo'sh — o'zingiz tanlaysiz
       weeklyHours: hours,
     }));
   }
@@ -713,7 +713,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
     sameGradeClasses.forEach(c => {
       const list = next[c.id] || [];
       const idx = list.findIndex(a => a.subjectId === subjectId);
-      const base = idx >= 0 ? list[idx] : makeAssignment(subject, firstTeachers[0]?.id || "");
+      const base = idx >= 0 ? list[idx] : makeAssignment(subject);
       const updated = {
         ...base,
         ...cloneShared(pickShared(owner)),
@@ -738,13 +738,14 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
     const grade = getGradeFromClassName(selectedClass.name);
     const key = `${grade}-sinf ${subject?.name || "fan"} parallel dars`;
     const sameGradeClasses = sameLangClasses.filter(c => getGradeFromClassName(c.name) === grade);
-    const firstTeacher = teachersForSubject(subjectId)[0];
+    // Parallel darsda bitta ustoz — asosiy sinfda tanlangan ustoz olinadi
+    const ownerTeacherId = getAssignment(subjectId).teacherId || "";
 
     const next = { ...classSubjects };
     sameGradeClasses.forEach(c => {
       const list = next[c.id] || [];
       const idx = list.findIndex(a => a.subjectId === subjectId);
-      const base = idx >= 0 ? list[idx] : makeAssignment(subject, firstTeacher?.id || "");
+      const base = idx >= 0 ? list[idx] : makeAssignment(subject, ownerTeacherId);
       const updated = {
         ...base,
         parallelEnabled: true,
