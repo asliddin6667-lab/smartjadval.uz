@@ -194,7 +194,7 @@ export function computeVacancy(d) {
         slots = a.levelGroups.map((g) => (g && g.teacherId) || "");
       } else {
         slots = [a.teacherId || ""];
-        if (a.teacherId2) slots.push(a.teacherId2);
+        if (a.splitEnabled && a.teacherId2) slots.push(a.teacherId2);
       }
 
       const sig = poolSignature(a);
