@@ -4,6 +4,7 @@ import {
   PRIMARY_SUBJECT_NAMES_RU, MIDDLE_SUBJECT_NAMES_RU, HIGH_SUBJECT_NAMES_RU
 } from "../utils/constants";
 import { sortByName, cmpName } from "../utils/sortHelpers";
+import "../styles/cs-mobile.css";
 
 function teacherSubjectIds(teacher) {
   return Array.isArray(teacher.subjectIds) ? teacher.subjectIds : (teacher.subjectId ? [teacher.subjectId] : []);
@@ -829,29 +830,31 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
         {classes.length === 0 || subjects.length === 0 ? (
           <div className="card"><div className="empty-state"><div className="empty-state-icon">📚</div><div className="empty-state-title">Ma'lumot yetarli emas</div><div className="empty-state-desc">Avval Sinflar va Fanlar bo'limidan ma'lumot qo'shing</div></div></div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 16, height: "calc(100vh - 170px)", overflow: "hidden" }}>
-            <div className="card" style={{ overflowY: "auto", minHeight: 0, height: "100%" }}><div className="card-body">
-              <div style={{ fontWeight: 700, marginBottom: 12 }}>🏫 Sinflar</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div className="cs-layout">
+            <div className="card cs-classes-panel"><div className="card-body">
+              <div className="cs-classes-title">🏫 Sinflar</div>
+              <div className="cs-classes-list">
                 {sortedClasses.map(c => {
                   const count = (classSubjects[c.id] || []).length;
-                  return <button key={c.id} className={`nav-item ${selectedClassId === c.id ? "active" : ""}`} style={{ background: selectedClassId === c.id ? "var(--accent-light)" : "transparent", color: selectedClassId === c.id ? "#fff" : "var(--text-secondary)" }} onClick={() => setSelectedClassId(c.id)}>
-                    <span className="nav-icon">🏫</span><span className="nav-label" style={{ position: "relative", zIndex: 1 }}>{c.name}{classLangOf(c) === "ru" ? " 🇷🇺" : ""}</span><span style={{ marginLeft: "auto", position: "relative", zIndex: 1 }} className="badge badge-default">{count}</span>
+                  return <button key={c.id} className={`cs-class-btn ${selectedClassId === c.id ? "active" : ""}`} onClick={() => setSelectedClassId(c.id)}>
+                    <span className="cs-class-ic">🏫</span>
+                    <span className="cs-class-name">{c.name}{classLangOf(c) === "ru" ? " 🇷🇺" : ""}</span>
+                    <span className="cs-class-count">{count}</span>
                   </button>;
                 })}
               </div>
-              <div style={{ marginTop: 18, fontSize: 12, color: "var(--text-secondary)" }}>
+              <div className="cs-classes-total">
                 Tanlangan sinf jami: <b>{totalHours}</b> soat
               </div>
             </div></div>
 
-            <div style={{ display: "flex", flexDirection: "column", gap: 16, overflowY: "auto", minHeight: 0, height: "100%", paddingRight: 4 }}>
+            <div className="cs-main-panel">
               <div className="alert alert-info">
                 ℹ️ <b>Parallel va daraja guruhlari</b>: Jismoniy tarbiya kabi fanlarda 3-A va 3-B bir vaqtda bitta ustoz bilan o'tishi uchun "Parallel" yoqing. Ingliz tili kabi fanlarda bir nechta sinf o'quvchilari darajaga bo'linib, bir nechta ustoz parallel kirishi uchun "Daraja guruhlari"ni yoqing. Fan kunlar oralab (Du → Cho → Ju) o'tishi kerak bo'lsa "Ora kunda"ni yoqing. Har fanning ⚙️ tugmasidan qo'shimcha sozlamalarni oching.
               </div>
 
               <div className="card"><div className="card-body">
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
                   <div style={{ fontWeight: 700 }}>
                     📚 {selectedClass?.name || "Sinf"} fanlari{" "}
                     <span className={`badge ${classLang === "ru" ? "badge-warning" : "badge-default"}`}>
@@ -1035,7 +1038,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                             {a.splitEnabled && !a.levelGroupEnabled && (
                               <div className="cs-detail" style={{ background: "var(--content-bg)" }}>
                                 <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>✂️ 2 guruhga bo'lish</div>
-                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                                <div className="cs-grid-3">
                                   <input className="form-control" placeholder="1-guruh nomi" value={a.groupName1 || "1-guruh"} onChange={e => updateAssignment(s.id, { groupName1: e.target.value })} />
                                   <select className="form-control" disabled={a.swapEnabled} value={a.teacherId2 || ""} onChange={e => updateAssignment(s.id, { teacherId2: e.target.value })}>
                                     <option value="">— 2-guruh ustozi —</option>{availableTeachers.filter(t => t.id !== a.teacherId).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
@@ -1052,7 +1055,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                                       <div style={{ fontSize: 12, color: "var(--text-secondary)", margin: "8px 0" }}>
                                         1-guruh <b>{s.name}</b> (asosiy qatorda tanlangan ustoz/xona), 2-guruh esa quyidagi fanni o'qiydi. Keyingi soatda almashadi. <b>2-fanni alohida belgilamang</b> — soati shu yerdan olinadi.
                                       </div>
-                                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 4 }}>
+                                      <div className="cs-grid-3" style={{ marginTop: 4 }}>
                                         <input className="form-control" placeholder="2-guruh nomi" value={a.groupName2 || "2-guruh"} onChange={e => updateAssignment(s.id, { groupName2: e.target.value })} />
                                         <select className="form-control" value={a.swapSubjectId || ""} onChange={e => updateAssignment(s.id, { swapSubjectId: e.target.value, swapTeacherId: "" })}>
                                           <option value="">— 2-fan —</option>
@@ -1112,7 +1115,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                                     <button className="btn btn-secondary btn-sm" onClick={() => autoGroupSameGrade(s.id)}>⚡ Shu sinfning barcha parallellarini guruhlash</button>
                                   </div>
                                 </div>
-                                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 10 }}>
+                                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 10 }}>
                                   {levelGroups.map((g, i) => (
                                     <div key={i} style={{ border: "1px solid var(--card-border)", borderRadius: 10, padding: 10, background: "var(--card-bg)" }}>
                                       <input className="form-control" placeholder={`${i + 1}-guruh nomi`} value={g.name} onChange={e => updateLevelGroup(s.id, i, { name: e.target.value })} />
@@ -1136,7 +1139,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                                 <div style={{ fontSize: 12, color: "#6d28d9", marginBottom: 10 }}>
                                   Butun sinf birga o'tiradi (bo'linmaydi). Bir hafta <b>{s.name}</b>, keyingi hafta quyidagi fan. Asosiy fan ({s.name}) uchun ustoz/xona/soatni tepadagi asosiy qatordan tanlang.
                                 </div>
-                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                                <div className="cs-grid-2">
                                   <div>
                                     <label className="form-label">Almashadigan fan</label>
                                     <select className="form-control" value={a.weekAltSubjectId || ""} onChange={e => updateAssignment(s.id, { weekAltSubjectId: e.target.value, weekAltTeacherId: "" })}>
@@ -1152,7 +1155,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                                     </select>
                                   </div>
                                 </div>
-                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+                                <div className="cs-grid-2" style={{ marginTop: 8 }}>
                                   <div>
                                     <label className="form-label">Almashadigan fan xonasi (ixtiyoriy)</label>
                                     <select className="form-control" value={a.weekAltRoomId || ""} onChange={e => updateAssignment(s.id, { weekAltRoomId: e.target.value })}>
@@ -1192,7 +1195,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                 <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 12 }}>
                   🏊 Hovuz (daraja guruhi) va 🔁 parallel darslar <b>1 marta</b> hisoblanadi — 3 ta sinf bitta hovuzda bo'lsa, ustozga 3 soat emas, <b>1 soat</b> yoziladi.
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 10 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 10 }}>
                   {teacherLoads.map(t => {
                     const max = Number(t.maxWeeklyHours || 40);
                     const over = t.load > max;

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { login, registerUser } from "../services/authService";
 import { UZ_REGIONS, districtsOf } from "../utils/uzRegions";
 import "../styles/auth.css";
+import "../styles/auth-mobile.css";
 
 // =====================================================================
 //  KIRISH / RO'YXATDAN O'TISH
@@ -11,12 +12,15 @@ import "../styles/auth.css";
 //  - Parolni unutgan foydalanuvchini ADMIN tiklab beradi
 //  - Ro'yxatdan o'tishda VILOYAT va TUMAN tanlanadi —
 //    maktab avtomatik o'z tumaniga bog'lanadi (tuman admini ko'radi)
-//  - YANGI: Cloudflare Turnstile CAPTCHA — bot hujumlaridan himoya.
+//  - Cloudflare Turnstile CAPTCHA — bot hujumlaridan himoya.
 //    Widget login va ro'yxatdan o'tish formasida ko'rinadi; olingan
 //    token authService orqali Supabase'ga uzatiladi. Agar Turnstile
 //    skripti yuklanmasa (masalan, internet muammosi), forma baribir
 //    ishlashda davom etadi — token bo'sh ketadi (Supabase'da CAPTCHA
 //    yoqilgan bo'lsa, server o'zi rad etadi).
+//  - MOBIL: Turnstile "flexible" rejimda — kenglik konteynerga
+//    moslashadi (300px qotib qolmaydi); auth-mobile.css telefon
+//    ekranida kartani to'liq kenglikka moslaydi.
 // =====================================================================
 
 // Admin aloqa ma'lumotlari
@@ -89,6 +93,7 @@ export default function AuthPage({ onAuth, initialMode = "login", onBack }) {
           sitekey: TURNSTILE_SITE_KEY,
           theme: "light",
           language: "ru", // Turnstile'da o'zbekcha yo'q; eng yaqini
+          size: "flexible", // MOBIL: kenglik konteynerga moslashadi
           callback: (token) => { tokenRef.current = token; },
           "expired-callback": () => { tokenRef.current = ""; },
           "error-callback": () => { tokenRef.current = ""; },
@@ -421,9 +426,9 @@ export default function AuthPage({ onAuth, initialMode = "login", onBack }) {
             {/* ---------- CAPTCHA (Cloudflare Turnstile) ---------- */}
             <div
               ref={captchaRef}
+              className="edu-captcha"
               style={{
-                display: "flex",
-                justifyContent: "center",
+                width: "100%",
                 minHeight: 66,
                 margin: "4px 0 2px",
               }}

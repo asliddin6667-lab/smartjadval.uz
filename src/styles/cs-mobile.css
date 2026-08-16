@@ -1,0 +1,216 @@
+/* =====================================================================
+   SINF FANLARI — LAYOUT VA MOBIL MOSLASHUV (cs-mobile.css)
+   ClassSubjects.jsx ichida import qilinadi (global.css'dan keyin
+   yuklanadi, shuning uchun undagi qoidalarni bosib o'tadi).
+
+   MUAMMO SABABI: sinf tugmalari avval .nav-item/.nav-label klasslarini
+   ishlatardi. global.css'da telefon uchun `.nav-label { display: none }`
+   qoidasi bor (sidebar uchun yozilgan) — u sinf NOMLARINI ham yashirib
+   qo'yardi. Endi sinf tugmalari alohida .cs-class-btn klassida —
+   sidebar qoidalari ularga umuman tegmaydi.
+   ===================================================================== */
+
+/* ---------- Umumiy layout: [sinflar paneli] [asosiy panel] ---------- */
+.cs-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 16px;
+  height: calc(100vh - 170px);
+  overflow: hidden;
+}
+
+.cs-classes-panel {
+  overflow-y: auto;
+  min-height: 0;
+  height: 100%;
+}
+
+.cs-main-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+  min-height: 0;
+  height: 100%;
+  padding-right: 4px;
+}
+
+/* ---------- Sinflar ro'yxati ---------- */
+.cs-classes-title {
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+.cs-classes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cs-class-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 12px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font);
+  font-size: 14px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease, box-shadow .15s ease;
+}
+
+.cs-class-btn:hover {
+  background: var(--content-bg);
+  color: var(--text-primary);
+}
+
+.cs-class-btn.active {
+  background: linear-gradient(135deg, #2563eb, #7c3aed);
+  color: #ffffff;
+  box-shadow: 0 8px 20px rgba(99, 102, 241, .30);
+}
+
+.cs-class-ic {
+  font-size: 17px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+/* Sinf nomi — HAR DOIM ko'rinadi (telefonda ham) */
+.cs-class-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cs-class-count {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--content-bg);
+  color: var(--text-secondary);
+  border: 1px solid var(--card-border);
+}
+
+.cs-class-btn.active .cs-class-count {
+  background: rgba(255, 255, 255, .22);
+  color: #ffffff;
+  border-color: transparent;
+}
+
+.cs-classes-total {
+  margin-top: 18px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* ---------- Sozlama panellaridagi 2/3 ustunli gridlar ---------- */
+.cs-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.cs-grid-3 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+}
+
+/* ---------- Tungi rejim ---------- */
+body.dark-mode .cs-class-btn:hover { background: #181e2d; }
+body.dark-mode .cs-class-count {
+  background: #1a2030;
+  color: #aeb8cc;
+  border-color: #2a3350;
+}
+body.dark-mode .cs-class-btn.active .cs-class-count {
+  background: rgba(255, 255, 255, .18);
+  color: #fff;
+  border-color: transparent;
+}
+
+/* =====================================================================
+   MOBIL (≤ 900px): bitta ustun, sinflar — gorizontal aylanadigan chiplar
+   ===================================================================== */
+@media (max-width: 900px) {
+  .cs-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    height: auto;
+    overflow: visible;
+  }
+
+  .cs-classes-panel {
+    height: auto;
+    overflow: visible;
+  }
+
+  /* Sinf tugmalari yonma-yon, barmoq bilan aylantiriladi */
+  .cs-classes-list {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: 8px;
+    padding-bottom: 6px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
+
+  .cs-class-btn {
+    width: auto;
+    flex: 0 0 auto;
+    min-height: 38px;
+    padding: 8px 12px;
+    border-color: var(--card-border);
+    background: var(--card-bg);
+  }
+
+  /* Telefonda nom hech qachon qisqarmasin */
+  .cs-class-name {
+    overflow: visible;
+    text-overflow: clip;
+    max-width: none;
+  }
+
+  .cs-classes-total { margin-top: 10px; }
+
+  .cs-main-panel {
+    height: auto;
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  /* Sozlama gridlari telefon ekranida ustma-ust */
+  .cs-grid-2,
+  .cs-grid-3 {
+    grid-template-columns: 1fr;
+  }
+
+  /* Sahifa chetlari telefonda ixchamroq */
+  .page-header { padding: 18px 14px 0; }
+  .page-body { padding: 14px 14px 40px; }
+  .card-body { padding: 14px; }
+}
+
+body.dark-mode .cs-class-btn {
+  color: #aeb8cc;
+}
+@media (max-width: 900px) {
+  body.dark-mode .cs-class-btn {
+    background: #1a2030;
+    border-color: #2a3350;
+  }
+}
