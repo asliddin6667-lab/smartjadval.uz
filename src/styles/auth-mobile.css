@@ -1,14 +1,12 @@
 /* =====================================================================
-   AUTH — MOBIL MOSLASHUV (auth-mobile.css)
-   Bu fayl auth.css'dan KEYIN import qilinadi (Auth.jsx ichida), shuning
-   uchun desktop dizaynga tegmasdan faqat telefon ekranida ustunlik
-   qiladi. auth.css'ni O'ZGARTIRMANG — barcha mobil qoidalar shu yerda.
-   ===================================================================== */
+   AUTH — MOBIL MOSLASHUV (auth-mobile.css)  v2
+   Bu fayl auth.css'dan KEYIN import qilinadi (Auth.jsx ichida).
 
-/* Gorizontal siljish hech qachon bo'lmasin (bezaklar chetga chiqsa ham) */
-.edu-auth {
-  overflow-x: hidden;
-}
+   MUAMMO SABABI: auth.css'da `.edu-auth { position: fixed; inset: 0;
+   overflow: hidden; align-items: center; }` — karta telefon ekranidan
+   baland bo'lsa, tepa/pastki qismi KESILADI va aylantirib bo'lmaydi.
+   Yechim: telefonda konteyner vertikal SCROLL bo'ladi.
+   ===================================================================== */
 
 /* Turnstile (flexible rejim) konteynerdan chiqmasin */
 .edu-captcha,
@@ -16,77 +14,86 @@
   max-width: 100% !important;
 }
 
-/* ---------- Planshet va telefon (≤ 760px) ---------- */
+/* Past bo'yli ekranlarda (kichik noutbuk ham) karta kesilmasin —
+   markazlash o'rniga tepadan boshlab, aylantirish mumkin bo'ladi */
+@media (max-height: 780px) {
+  .edu-auth {
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    align-items: flex-start !important;
+    -webkit-overflow-scrolling: touch;
+  }
+  .edu-center { margin: 0 auto; padding: 12px 0 24px; }
+}
+
+/* ---------- Telefon (≤ 760px) ---------- */
 @media (max-width: 760px) {
 
-  /* 3D bezaklar va fon halqalari — telefonda joy egallamasin */
+  /* ASOSIY TUZATISH: kesilgan holat o'rniga vertikal scroll */
+  .edu-auth {
+    position: fixed !important;
+    inset: 0 !important;
+    display: block !important;          /* flex-markazlash kesishini yo'qotadi */
+    overflow-y: auto !important;        /* overflow:hidden ni bekor qiladi */
+    overflow-x: hidden !important;
+    -webkit-overflow-scrolling: touch;
+    padding: 0 !important;
+  }
+
+  /* 3D bezaklar va fon halqalari — telefonda kerak emas */
   .edu-deco,
   .edu-bg-ring,
   .edu-bg-circle {
     display: none !important;
   }
 
-  .edu-auth {
-    padding: 0 !important;
-    min-height: 100dvh;
-    display: block !important;
-  }
-
   .edu-center {
     width: 100% !important;
     max-width: 100% !important;
-    padding: 14px 12px 24px !important;
     margin: 0 !important;
+    padding: 14px 12px 30px !important;
   }
 
   /* Karta — ekran kengligiga to'liq moslashadi */
   .edu-card {
-    position: relative;
     width: 100% !important;
     max-width: 100% !important;
     min-width: 0 !important;
     margin: 0 !important;
-    padding: 56px 16px 22px !important; /* tepada "← Bosh sahifa" uchun joy */
+    padding: 54px 16px 22px !important; /* tepada "← Bosh sahifa" uchun joy */
     border-radius: 18px !important;
-    box-shadow: 0 12px 34px rgba(15, 17, 23, 0.14) !important;
+    box-shadow: 0 12px 34px rgba(96, 78, 190, 0.14) !important;
   }
 
   /* Logo ixchamroq */
   .edu-card__logoimg {
-    max-width: 190px !important;
-    height: auto !important;
+    max-width: 185px !important;
   }
 
-  /* Kirish / Ro'yxatdan o'tish tablari — ikkiga teng bo'linadi */
-  .edu-tabs {
-    width: 100% !important;
-  }
+  /* Kirish / Ro'yxatdan o'tish tablari */
   .edu-tabs__btn {
-    flex: 1 1 0 !important;
-    min-width: 0 !important;
-    padding: 10px 6px !important;
     font-size: 13.5px !important;
+    padding: 10px 4px !important;
     white-space: nowrap !important;
   }
 
-  /* Viloyat/Tuman yonma-yon emas — ustma-ust */
+  /* Viloyat/Tuman ustma-ust (auth.css'da 520px edi — 760px'ga kengaytirildi) */
   .edu-form-row {
-    display: grid !important;
     grid-template-columns: 1fr !important;
-    gap: 0 !important;
+    gap: 13px !important;
   }
+  .edu-form-row .edu-field__input {
+    padding-left: 42px !important;
+    font-size: 16px !important;
+  }
+  .edu-form-row .edu-field__icon { left: 14px !important; font-size: 15px !important; }
 
-  /* Inputlar to'liq kenglikda; 16px — iOS avtomatik zoom'ni o'chiradi */
-  .edu-field__wrap {
-    width: 100% !important;
-    max-width: 100% !important;
-  }
+  /* Inputlar: 16px — iOS avtomatik zoom'ni o'chiradi */
   .edu-field__input,
   .edu-field__wrap input,
   .edu-field__wrap select {
-    width: 100% !important;
-    min-width: 0 !important;
     font-size: 16px !important;
+    min-width: 0 !important;
   }
 
   .edu-submit {
@@ -102,16 +109,16 @@
   }
 
   .edu-footer {
+    margin-top: 18px !important;
     font-size: 11px !important;
-    text-align: center !important;
-    padding: 12px 10px 0 !important;
     line-height: 1.6 !important;
+    padding: 0 8px !important;
   }
 }
 
 /* ---------- Juda tor ekranlar (≤ 360px) ---------- */
 @media (max-width: 360px) {
-  .edu-center { padding: 10px 8px 20px !important; }
-  .edu-card { padding: 52px 12px 18px !important; border-radius: 14px !important; }
+  .edu-center { padding: 10px 8px 24px !important; }
+  .edu-card { padding: 50px 12px 18px !important; border-radius: 14px !important; }
   .edu-tabs__btn { font-size: 12.5px !important; }
 }
