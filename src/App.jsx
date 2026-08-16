@@ -28,7 +28,9 @@ import {
   getCurrentUser, logout, checkSubscription, refreshCurrentUser,
   isPasswordRecoveryUrl, completeForcedPasswordChange,
 } from "./services/authService";
-import { syncOnLogin, schedulePush, flushPush } from "./services/cloudSync";
+import {
+  syncOnLogin, schedulePush, flushPush, cleanupLegacyKeys, onSyncState,
+} from "./services/cloudSync";
 import { buildDemoSchoolData } from "./utils/demoData";
 
 const emptySettings = { schoolName: "", academicYear: "2024-2025" };
@@ -64,6 +66,50 @@ function initialPage() {
   return PAGE_IDS.includes(saved) ? saved : "dashboard";
 }
 
+// =====================================================================
+//  MAHALLIY MA'LUMOTNI O'QISH
+//  localStorage sinxron ishlaydi — bu bir necha millisekund oladi.
+//  Shuning uchun ilova bulutni kutmasdan darhol ochilishi mumkin.
+// =====================================================================
+function readLocalData(user) {
+  const uid = user.id;
+  const data = {
+    settings: loadUserData(uid, "settings", { ...emptySettings, schoolName: user.schoolName || "" }),
+    classes: loadUserData(uid, "classes", []),
+    subjects: loadUserData(uid, "subjects", []),
+    teachers: loadUserData(uid, "teachers", []),
+    classSubjects: loadUserData(uid, "classSubjects", {}),
+    rooms: loadUserData(uid, "rooms", []),
+    timeslots: loadUserData(uid, "timeslots", []),
+    lunchGroups: loadUserData(uid, "lunchGroups", []),
+    shifts: loadUserData(uid, "shifts", []),
+    schedule: loadUserData(uid, "schedule", {}),
+  };
+
+  // Demo foydalanuvchida ma'lumot bo'lmasa, platforma to'ldirilgan holda ochiladi.
+  if (user.email === "demo@smartjadval.uz" && !data.classes.length) {
+    const demo = buildDemoSchoolData();
+    return {
+      settings: demo.settings,
+      classes: demo.classes,
+      subjects: demo.subjects,
+      teachers: demo.teachers,
+      classSubjects: demo.classSubjects,
+      rooms: demo.rooms,
+      timeslots: demo.timeslots,
+      lunchGroups: demo.lunchGroups,
+      shifts: demo.shifts || [],
+      schedule: demo.schedule,
+    };
+  }
+
+  return data;
+}
+
+function hasRealData(d) {
+  return !!(d.classes?.length || d.teachers?.length || d.subjects?.length);
+}
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => getCurrentUser());
   const [activePage, setActivePage] = useState(() => initialPage());
@@ -90,7 +136,12 @@ export default function App() {
   const [shifts, setShifts] = useState([]);
   const [schedule, setSchedule] = useState({});
   const [dataReady, setDataReady] = useState(false);
-  const [syncing, setSyncing] = useState(false);
+
+  // Birinchi marta ochilayotgan qurilma — bulutni kutish shart
+  const [firstLoad, setFirstLoad] = useState(false);
+
+  // Fonda sinxronizatsiya ketyaptimi? (kichik indikator uchun)
+  const [bgSync, setBgSync] = useState(false);
 
   // ——— Mehmon rejimi holatlari ———
   const [paywallOpen, setPaywallOpen] = useState(false);
@@ -170,6 +221,13 @@ export default function App() {
     }
   }, []);
 
+  // ——— Sinxronizatsiya holati indikatori ———
+  useEffect(() => {
+    return onSyncState((s) => {
+      setBgSync(s.state === "saving" || s.state === "pending");
+    });
+  }, []);
+
   // ——— Sahifa yopilishidan oldin bulutga yuborish ———
   useEffect(() => {
     function onHide() {
@@ -203,7 +261,20 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
 
-  // ——— MA'LUMOTLARNI YUKLASH (avval bulut bilan sinxronlanadi) ———
+  // =====================================================================
+  //  MA'LUMOTLARNI YUKLASH — "LOCAL-FIRST"
+  //
+  //  Ilgari: bulut javob bermaguncha to'liq ekranli "yuklanmoqda"
+  //  turardi. Mumbay serveridan 2 MB blob kelguncha 3-8 soniya —
+  //  har safar kirganda.
+  //
+  //  Endi: localStorage'dan darhol o'qib, ilova OCHILADI. Bulut
+  //  sinxronizatsiyasi fonda ketadi va faqat haqiqatan yangi
+  //  ma'lumot kelgandagina ekran yangilanadi.
+  //
+  //  To'liq ekranli kutish faqat bitta holatda qoladi: bu qurilmada
+  //  hali hech qanday ma'lumot yo'q (birinchi kirish).
+  // =====================================================================
   useEffect(() => {
     if (!currentUser) return;
 
@@ -211,16 +282,60 @@ export default function App() {
     // sinxronizatsiya va localStorage yuklash unga kerak emas.
     if (currentUser.role === "district_admin") {
       setDataReady(false);
-      setSyncing(false);
+      setFirstLoad(false);
       return;
     }
 
     let cancelled = false;
-    setDataReady(false);
-    setSyncing(true);
 
+    function applyData(d) {
+      setSettings(d.settings);
+      setClasses(d.classes);
+      setSubjects(d.subjects);
+      setTeachers(d.teachers);
+      setClassSubjects(d.classSubjects);
+      setRooms(d.rooms);
+      setTimeslots(d.timeslots);
+      setLunchGroups(d.lunchGroups);
+      setShifts(d.shifts);
+      setSchedule(d.schedule);
+    }
+
+    function finishBoot() {
+      // Oxirgi ochilgan bo'lim tiklanadi (URL hash ustunroq).
+      // "users" faqat superadmin uchun — boshqasiga dashboard beriladi.
+      const restored = initialPage();
+      setActivePage(
+        restored === "users" && currentUser.role !== "superadmin" ? "dashboard" : restored
+      );
+      setPaywallOpen(false);
+      setShowPayPage(false);
+      setMobileNavOpen(false);
+    }
+
+    // ——— 1) MAHALLIY NUSXANI DARHOL KO'RSATAMIZ ———
+    const local = readLocalData(currentUser);
+    const localHasData = hasRealData(local);
+
+    if (localHasData) {
+      applyData(local);
+      setDataReady(true);
+      setFirstLoad(false);
+      finishBoot();
+    } else {
+      // Bu qurilmada ma'lumot yo'q — bulutni kutishdan boshqa chora yo'q
+      setDataReady(false);
+      setFirstLoad(true);
+    }
+
+    // ——— 2) BULUT BILAN SINXRONIZATSIYA — FONDA ———
     (async () => {
-      // 1) Bulut bilan sinxronizatsiya
+      // Eski `edujadval_` prefiksli kalitlar joyni behuda egallaydi
+      try {
+        const c = cleanupLegacyKeys();
+        if (c.removed) console.log(`🧹 ${c.removed} ta eski kalit tozalandi (${c.freedKb} KB)`);
+      } catch { /* ignore */ }
+
       let syncResult = { action: "skip" };
       try {
         syncResult = await syncOnLogin(currentUser);
@@ -229,61 +344,23 @@ export default function App() {
       }
       if (cancelled) return;
 
-      // 2) localStorage'dan sinxron o'qish (avvalgidek)
-      let loadedSettings = loadUserData(currentUser.id, "settings", { ...emptySettings, schoolName: currentUser.schoolName || "" });
-      let loadedClasses = loadUserData(currentUser.id, "classes", []);
-      let loadedSubjects = loadUserData(currentUser.id, "subjects", []);
-      let loadedTeachers = loadUserData(currentUser.id, "teachers", []);
-      let loadedClassSubjects = loadUserData(currentUser.id, "classSubjects", {});
-      let loadedRooms = loadUserData(currentUser.id, "rooms", []);
-      let loadedTimeslots = loadUserData(currentUser.id, "timeslots", []);
-      let loadedLunchGroups = loadUserData(currentUser.id, "lunchGroups", []);
-      let loadedShifts = loadUserData(currentUser.id, "shifts", []);
-      let loadedSchedule = loadUserData(currentUser.id, "schedule", {});
-
-      // Demo foydalanuvchida ma'lumot bo'lmasa, platforma to'ldirilgan holda ochiladi.
-      if (currentUser.email === "demo@smartjadval.uz" && !loadedClasses.length) {
-        const demo = buildDemoSchoolData();
-        loadedSettings = demo.settings;
-        loadedClasses = demo.classes;
-        loadedSubjects = demo.subjects;
-        loadedTeachers = demo.teachers;
-        loadedClassSubjects = demo.classSubjects;
-        loadedRooms = demo.rooms;
-        loadedTimeslots = demo.timeslots;
-        loadedLunchGroups = demo.lunchGroups;
-        loadedShifts = demo.shifts || [];
-        loadedSchedule = demo.schedule;
+      // Bulutdan yangi ma'lumot kelgan bo'lsa — ekranni yangilaymiz.
+      // Boshqa hollarda mahalliy nusxa allaqachon to'g'ri, tegmaymiz.
+      if (syncResult.action === "pulled" || !localHasData) {
+        const fresh = readLocalData(currentUser);
+        applyData(fresh);
+        if (!localHasData) finishBoot();
       }
 
-      if (cancelled) return;
-
-      setSettings(loadedSettings);
-      setClasses(loadedClasses);
-      setSubjects(loadedSubjects);
-      setTeachers(loadedTeachers);
-      setClassSubjects(loadedClassSubjects);
-      setRooms(loadedRooms);
-      setTimeslots(loadedTimeslots);
-      setLunchGroups(loadedLunchGroups);
-      setShifts(loadedShifts);
-      setSchedule(loadedSchedule);
       setDataReady(true);
-      setSyncing(false);
-
-      // Oxirgi ochilgan bo'lim tiklanadi (URL hash ustunroq).
-      // "users" faqat superadmin uchun — boshqasiga dashboard beriladi.
-      const restored = initialPage();
-      setActivePage(
-        restored === "users" && currentUser.role !== "superadmin" ? "dashboard" : restored
-      );
-
-      setPaywallOpen(false);
-      setShowPayPage(false);
-      setMobileNavOpen(false);
+      setFirstLoad(false);
 
       if (syncResult.action === "offline") {
         addToast("Internet yo'q — mahalliy nusxada ishlayapsiz", "warning");
+      } else if (syncResult.action === "recovered") {
+        addToast("Saqlanmagan o'zgarishlar bulutga yuborildi", "success");
+      } else if (syncResult.action === "pulled" && localHasData) {
+        addToast("Ma'lumotlar boshqa qurilmadan yangilandi", "info");
       }
     })();
 
@@ -327,6 +404,7 @@ export default function App() {
     logout();
     setCurrentUser(null);
     setDataReady(false);
+    setFirstLoad(false);
     setPaywallOpen(false);
     setShowPayPage(false);
     setMobileNavOpen(false);
@@ -401,8 +479,9 @@ export default function App() {
     );
   }
 
-  // ——— Sinxronizatsiya davomida qisqa yuklanish ekrani ———
-  if (syncing && !dataReady) {
+  // ——— BIRINCHI KIRISH: bu qurilmada ma'lumot yo'q, bulutni kutamiz ———
+  // Mahalliy nusxa bor bo'lsa bu ekran umuman ko'rsatilmaydi.
+  if (firstLoad && !dataReady) {
     return (
       <div style={{
         minHeight: "100vh", display: "flex", flexDirection: "column",
@@ -411,7 +490,7 @@ export default function App() {
       }}>
         <div style={{ fontSize: 40 }}>☁️</div>
         <div style={{ fontSize: 16, fontWeight: 700 }}>Ma'lumotlar yuklanmoqda...</div>
-        <div style={{ fontSize: 13, opacity: .7 }}>Bulut bilan sinxronlanmoqda</div>
+        <div style={{ fontSize: 13, opacity: .7 }}>Birinchi kirish — biroz vaqt oladi</div>
       </div>
     );
   }
@@ -487,7 +566,8 @@ export default function App() {
       case "schedule": return <SchedulePage {...pageProps} setSchedule={setSchedule} />;
       case "teacherReplace": return <TeacherReplacePage {...pageProps} setSchedule={setSchedule} setClassSubjects={setClassSubjects} />;
       case "analytics": return <AnalyticsPage {...pageProps} />;
-case "importExport": return <ImportExportPage {...pageProps} settings={settings} setSubjects={setSubjects} setTeachers={setTeachers} />;      case "users": return currentUser.role === "superadmin" ? <UsersPage {...pageProps} /> : <DashboardPage {...pageProps} setActivePage={handleNavigate} />;
+      case "importExport": return <ImportExportPage {...pageProps} settings={settings} setSubjects={setSubjects} setTeachers={setTeachers} />;
+      case "users": return currentUser.role === "superadmin" ? <UsersPage {...pageProps} /> : <DashboardPage {...pageProps} setActivePage={handleNavigate} />;
       case "settings": return (
         <SettingsPage
           settings={settings} setSettings={setSettings}
@@ -570,6 +650,21 @@ case "importExport": return <ImportExportPage {...pageProps} settings={settings}
           {renderPage()}
         </main>
       </div>
+
+      {/* Fonda saqlanmoqda — kichik, ishga xalaqit bermaydigan indikator */}
+      {bgSync && (
+        <div style={{
+          position: "fixed", bottom: 16, left: 16, zIndex: 2500,
+          display: "inline-flex", alignItems: "center", gap: 7,
+          height: 32, padding: "0 13px", borderRadius: 999,
+          background: "rgba(15,23,42,.82)", color: "#e2e8f0",
+          fontSize: 12, fontWeight: 700, pointerEvents: "none",
+          boxShadow: "0 4px 14px rgba(0,0,0,.25)",
+        }}>
+          <span style={{ fontSize: 12 }}>☁️</span>
+          Saqlanmoqda...
+        </div>
+      )}
 
       {paywallOpen && (
         <PaywallModal

@@ -1,24 +1,42 @@
 // =====================================================================
-//  smartjadval.UZ — BULUT SINXRONIZATSIYASI
+//  smartjadval.UZ — BULUT SINXRONIZATSIYASI  (v3)
 //
 //  Vazifasi: maktab ma'lumotlarini (sinflar, o'qituvchilar, jadval...)
 //  Supabase'dagi `schools` jadvalida saqlash, shunda foydalanuvchi
 //  ISTALGAN QURILMADAN kirsa ma'lumoti joyida turadi.
 //
-//  ARXITEKTURA: localStorage — kesh, Supabase — asosiy manba.
-//  - Kirishda: bulutdan tortiladi -> localStorage'ga yoziladi
-//  - O'zgarishda: localStorage darhol yoziladi + debounce bilan
-//    butun blob bulutga yuboriladi
-//  - Internet uzilsa: ilova localStorage'da ishlashda davom etadi,
-//    aloqa tiklangach avtomatik qayta urinadi
+//  ARXITEKTURA: localStorage — asosiy ish nusxasi, Supabase — zaxira
+//  va qurilmalararo ko'prik.
 //
-//  YANGI (v2):
-//  - Push muvaffaqiyatsiz bo'lsa 3 marta qayta urinadi (backoff bilan)
-//  - "dirty" bayrog'i localStorage'da saqlanadi -> brauzer yopilib
-//    qayta ochilsa ham yuborilmagan o'zgarish esda qoladi
-//  - Ma'lumot o'zgarmagan bo'lsa push umuman yuborilmaydi (hash)
-//  - online hodisasida kutilayotgan push avtomatik jo'natiladi
-//  - Push holatini kuzatish uchun onSyncState() obunasi
+//  v3 DAGI YANGILIKLAR:
+//
+//  1) MA'LUMOT YO'QOLISHI TUZATILDI (eng muhimi)
+//     Ilgari: foydalanuvchi tahrir qilib, 8 soniyalik debounce
+//     tugashidan oldin brauzerni yopsa — `dirty` bayrog'i yozilmay
+//     qolardi. Keyingi kirishda bulutdan ESKI nusxa tortilib,
+//     yuborilmagan o'zgarishlar ustidan yozilardi.
+//     Endi: kirishda mahalliy ma'lumotning hash'i `lastHash` bilan
+//     taqqoslanadi. Farq bo'lsa — yuborilmagan o'zgarish bor deb
+//     hisoblanadi va bulut ustidan yozilmaydi.
+//
+//  2) KIRISH TEZLASHTIRILDI
+//     Avval faqat `updated_at` so'raladi (bir necha bayt). Bulut
+//     oxirgi tortishdan beri o'zgarmagan bo'lsa — 2 MB blob umuman
+//     yuklab olinmaydi.
+//
+//  3) PAYLOAD KICHRAYTIRILDI (sparse serialization)
+//     `classSubjects` yozuvlarida 27 ta maydondan ~20 tasi doimo
+//     default qiymatda ("" yoki false) turadi va har yozuvda ~350
+//     bayt ortiqcha joy egallaydi. Bulutga yuborishdan oldin ular
+//     olib tashlanadi, tortib olganda qayta tiklanadi. Ma'lumot
+//     yo'qolmaydi — bu faqat "simdagi" ko'rinish.
+//
+//  4) DEBOUNCE'ga MAKSIMAL KUTISH QO'SHILDI
+//     Uzluksiz tahrirlashda 8 soniyalik taymer har safar qaytadan
+//     boshlanardi va push umuman ketmasligi mumkin edi. Endi
+//     birinchi o'zgarishdan 30 soniya o'tgach majburan yuboriladi.
+//
+//  5) ESKI `edujadval_` PREFIKSLI KALITLARNI TOZALASH
 // =====================================================================
 import { supabase } from "./supabaseClient";
 import { loadData, saveData, loadUserData, saveUserData } from "./storageService";
@@ -57,6 +75,116 @@ const DEMO_EMAIL = "demo@smartjadval.uz";
 const MAX_RETRY = 3;
 const RETRY_DELAYS = [3000, 8000, 20000]; // 3s -> 8s -> 20s
 
+// Debounce: oddiy kutish va majburiy yuborish oralig'i
+const PUSH_DELAY = 8000;
+const PUSH_MAX_WAIT = 30000;
+
+// Blob formati versiyasi — sparse ko'rinishni tanish uchun
+const WIRE_VERSION = 3;
+
+// ---------------------------------------------------------------------
+//  SPARSE SERIALIZATION
+//
+//  classSubjects tuzilishi:  { [classId]: [ {fan sozlamasi}, ... ] }
+//
+//  Har bir yozuvda quyidagi maydonlar deyarli doimo default qiymatda
+//  turadi. Bulutga yuborishda ular olib tashlanadi, qaytarishda
+//  qayta qo'yiladi — natija bayt-ma-bayt bir xil bo'ladi.
+// ---------------------------------------------------------------------
+const CS_DEFAULTS = {
+  isCore: false,
+  roomId: "",
+  roomId2: "",
+  groupKey: "",
+  groupName1: "1-guruh",
+  groupName2: "2-guruh",
+  spacedDays: false,
+  swapRoomId: "",
+  teacherId2: "",
+  allowDouble: true,
+  swapEnabled: false,
+  splitEnabled: false,
+  weekAltHours: 1,
+  swapSubjectId: "",
+  swapTeacherId: "",
+  weekAltRoomId: "",
+  weekAltEnabled: false,
+  parallelEnabled: false,
+  weekAltSubjectId: "",
+  weekAltTeacherId: "",
+  levelGroupEnabled: false,
+  levelGroupKey: "",
+  levelGroupCount: 0,
+};
+
+// Bo'sh massiv sifatida tashlanadigan maydonlar
+const CS_EMPTY_ARRAYS = ["levelGroups"];
+
+function encodeEntry(entry) {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry;
+  const out = {};
+  for (const k of Object.keys(entry)) {
+    const v = entry[k];
+    // Default qiymatga teng bo'lsa — tashlab ketamiz
+    if (Object.prototype.hasOwnProperty.call(CS_DEFAULTS, k) && v === CS_DEFAULTS[k]) continue;
+    // Bo'sh massiv bo'lsa — tashlab ketamiz
+    if (CS_EMPTY_ARRAYS.includes(k) && Array.isArray(v) && v.length === 0) continue;
+    // undefined ham keraksiz
+    if (v === undefined) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+function decodeEntry(entry) {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry;
+  const out = { ...CS_DEFAULTS };
+  for (const k of CS_EMPTY_ARRAYS) out[k] = [];
+  return Object.assign(out, entry);
+}
+
+function encodeClassSubjects(cs) {
+  if (!cs || typeof cs !== "object") return cs;
+  const out = {};
+  for (const classId of Object.keys(cs)) {
+    const list = cs[classId];
+    out[classId] = Array.isArray(list) ? list.map(encodeEntry) : list;
+  }
+  return out;
+}
+
+function decodeClassSubjects(cs) {
+  if (!cs || typeof cs !== "object") return cs;
+  const out = {};
+  for (const classId of Object.keys(cs)) {
+    const list = cs[classId];
+    out[classId] = Array.isArray(list) ? list.map(decodeEntry) : list;
+  }
+  return out;
+}
+
+// Butun blobni "sim uchun" siqish
+function encodeBlob(blob) {
+  return {
+    ...blob,
+    classSubjects: encodeClassSubjects(blob.classSubjects),
+    _v: WIRE_VERSION,
+  };
+}
+
+// Bulutdan kelgan blobni ochish (eski format ham qo'llab-quvvatlanadi)
+function decodeBlob(raw) {
+  if (!raw || typeof raw !== "object") return {};
+  const blob = { ...raw };
+  delete blob._v;
+  // v3 dan oldingi bloblar to'liq saqlangan — ochish shart emas,
+  // lekin decodeEntry ular uchun ham zararsiz (mavjud qiymatlar ustun).
+  if (raw._v === WIRE_VERSION) {
+    blob.classSubjects = decodeClassSubjects(blob.classSubjects);
+  }
+  return blob;
+}
+
 // ---------------------------------------------------------------------
 //  META — oxirgi yuborish vaqti, hash, "dirty" bayrog'i
 // ---------------------------------------------------------------------
@@ -68,6 +196,7 @@ function getMeta(userId) {
     lastPush: 0,
     lastPull: 0,
     lastHash: "",
+    cloudUpdatedAt: "",
     dirty: false,
   });
 }
@@ -130,10 +259,61 @@ function isEmptyBlob(blob) {
   return !(c?.length || t?.length || s?.length);
 }
 
+// Mahalliy nusxa bulutga yetkazilmagan o'zgarishni saqlayaptimi?
+// Bu `dirty` bayrog'idan ishonchliroq: brauzer debounce tugashidan
+// oldin yopilgan bo'lsa ham farqni topadi.
+function localDiffersFromLastPush(userId) {
+  const meta = getMeta(userId);
+  if (!meta.lastHash) return false; // hali hech qachon sinxronlanmagan
+  const hash = quickHash(JSON.stringify(collectLocal(userId)));
+  return hash !== meta.lastHash;
+}
+
+// ---------------------------------------------------------------------
+//  ESKI KALITLARNI TOZALASH
+//  Loyiha `edujadval` dan `smartjadval` ga o'tganda eski prefiksli
+//  nusxalar localStorage'da qolib ketgan — ular ~1 MB joy egallaydi
+//  va hech qachon o'qilmaydi.
+// ---------------------------------------------------------------------
+export function cleanupLegacyKeys() {
+  if (typeof localStorage === "undefined") return { removed: 0, freedKb: 0 };
+  const doomed = [];
+  let bytes = 0;
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith("edujadval_")) {
+      doomed.push(k);
+      bytes += (localStorage.getItem(k) || "").length;
+    }
+  }
+  for (const k of doomed) {
+    try { localStorage.removeItem(k); } catch { /* kvota xatosi — e'tibor bermaymiz */ }
+  }
+  return { removed: doomed.length, freedKb: Math.round(bytes / 1024) };
+}
+
 // ---------------------------------------------------------------------
 //  BULUTDAN TORTISH
+//
+//  `skipIfUnchanged` bilan avval faqat `updated_at` so'raladi.
+//  Bulut oxirgi tortishdan beri o'zgarmagan bo'lsa — katta blob
+//  umuman yuklab olinmaydi. Kirish shu tufayli sezilarli tezlashadi.
 // ---------------------------------------------------------------------
-export async function pullFromCloud(userId) {
+export async function pullFromCloud(userId, { skipIfUnchanged = false } = {}) {
+  const meta = getMeta(userId);
+
+  if (skipIfUnchanged && meta.cloudUpdatedAt) {
+    const head = await supabase
+      .from("schools")
+      .select("updated_at")
+      .eq("owner_id", userId)
+      .maybeSingle();
+
+    if (!head.error && head.data && head.data.updated_at === meta.cloudUpdatedAt) {
+      return { ok: true, reason: "unchanged", skipped: true, empty: false };
+    }
+  }
+
   const { data, error } = await supabase
     .from("schools")
     .select("data, updated_at")
@@ -143,7 +323,7 @@ export async function pullFromCloud(userId) {
   if (error) return { ok: false, reason: "error", message: error.message };
   if (!data) return { ok: false, reason: "empty" };
 
-  const blob = data.data || {};
+  const blob = decodeBlob(data.data);
   for (const k of SYNC_KEYS) {
     if (Object.prototype.hasOwnProperty.call(blob, k)) {
       saveUserData(userId, k, blob[k]);
@@ -157,6 +337,7 @@ export async function pullFromCloud(userId) {
     lastPull: Date.now(),
     lastPush: Date.now(),
     lastHash: quickHash(JSON.stringify(fresh)),
+    cloudUpdatedAt: data.updated_at || "",
     dirty: false,
   });
 
@@ -165,8 +346,6 @@ export async function pullFromCloud(userId) {
 
 // ---------------------------------------------------------------------
 //  BULUTGA YUBORISH (bir marta urinish)
-//  Eslatma: supabase-js v2 da .select() chaqirilmasa javob bo'sh
-//  qaytadi — bu egress trafigini tejaydi.
 // ---------------------------------------------------------------------
 export async function pushToCloud(userId, { force = false } = {}) {
   if (!userId) return { ok: false, reason: "no-user" };
@@ -185,16 +364,23 @@ export async function pushToCloud(userId, { force = false } = {}) {
   setMeta(userId, { dirty: true });
   emitState("saving");
 
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("schools")
-    .upsert({ owner_id: userId, data: blob }, { onConflict: "owner_id" });
+    .upsert({ owner_id: userId, data: encodeBlob(blob) }, { onConflict: "owner_id" })
+    .select("updated_at")
+    .maybeSingle();
 
   if (error) {
     emitState("error", error.message);
     return { ok: false, reason: "error", message: error.message };
   }
 
-  setMeta(userId, { lastPush: Date.now(), lastHash: hash, dirty: false });
+  setMeta(userId, {
+    lastPush: Date.now(),
+    lastHash: hash,
+    cloudUpdatedAt: data?.updated_at || "",
+    dirty: false,
+  });
   emitState("saved");
   return { ok: true };
 }
@@ -228,24 +414,39 @@ async function pushWithRetry(userId) {
 
 // ---------------------------------------------------------------------
 //  DEBOUNCE — tez-tez o'zgarishda serverni bombardimon qilmaslik uchun
-//  8 soniya: jadval tahrirlashda o'nlab push o'rniga bittasi ketadi.
+//
+//  8 soniya kutiladi, lekin birinchi o'zgarishdan 30 soniya o'tsa
+//  majburan yuboriladi. Aks holda uzluksiz tahrirlashda (jadvalni
+//  surib chiqishda) taymer cheksiz qayta boshlanib, push umuman
+//  ketmay qolardi.
 // ---------------------------------------------------------------------
 let pushTimer = null;
 let pendingUserId = null;
+let pendingSince = 0;
 let inFlight = null; // hozir ketayotgan push (Promise)
 
-export function schedulePush(userId, delay = 8000) {
+function firePush() {
+  pushTimer = null;
+  pendingSince = 0;
+  const uid = pendingUserId;
+  pendingUserId = null;
+  if (!uid) return;
+  inFlight = pushWithRetry(uid).finally(() => { inFlight = null; });
+}
+
+export function schedulePush(userId, delay = PUSH_DELAY) {
   if (!userId) return;
+
   pendingUserId = userId;
+  if (!pendingSince) pendingSince = Date.now();
   emitState("pending");
+
+  const waited = Date.now() - pendingSince;
+  const remaining = Math.max(0, PUSH_MAX_WAIT - waited);
+  const wait = Math.min(delay, remaining);
+
   if (pushTimer) clearTimeout(pushTimer);
-  pushTimer = setTimeout(() => {
-    pushTimer = null;
-    const uid = pendingUserId;
-    pendingUserId = null;
-    if (!uid) return;
-    inFlight = pushWithRetry(uid).finally(() => { inFlight = null; });
-  }, delay);
+  pushTimer = setTimeout(firePush, wait);
 }
 
 // Kutilayotgan yuborishni darhol bajarish (chiqishdan/yopishdan oldin)
@@ -254,6 +455,7 @@ export async function flushPush() {
     clearTimeout(pushTimer);
     pushTimer = null;
   }
+  pendingSince = 0;
 
   const uid = pendingUserId;
   pendingUserId = null;
@@ -282,7 +484,9 @@ export function hasPendingPush() {
 // Bulutga yetkazilmagan o'zgarish bormi? (brauzer yopilib ochilsa ham biladi)
 export function hasUnsyncedChanges(userId) {
   if (!userId) return false;
-  return getMeta(userId).dirty === true;
+  if (getMeta(userId).dirty === true) return true;
+  // Bayroq yozilmay qolgan bo'lsa ham — mazmunni taqqoslaymiz
+  return localDiffersFromLastPush(userId);
 }
 
 // ---------------------------------------------------------------------
@@ -315,7 +519,8 @@ export function unbindOnlineRetry() {
 //  KIRISHDA SINXRONIZATSIYA
 //  Qaror mantiqi:
 //   - Yuborilmagan o'zgarish bor    -> avval uni bulutga yuboramiz
-//     (oldingi seansda internet uzilgan bo'lsa)
+//     (oldingi seansda internet uzilgan yoki brauzer erta yopilgan)
+//   - Bulut o'zgarmagan            -> hech nima yuklab olinmaydi
 //   - Bulut bo'sh, mahalliy to'la   -> mahalliyni bulutga yuboramiz
 //   - Bulut to'la                   -> bulutdan tortamiz
 //   - Ikkalasi ham bo'sh            -> hech nima qilmaymiz
@@ -333,7 +538,7 @@ export async function syncOnLogin(user) {
   const unsynced = hasUnsyncedChanges(user.id);
 
   try {
-    // ——— Oldingi seansdan yuborilmagan o'zgarish bo'lsa, u ustun ———
+    // ——— Yuborilmagan o'zgarish bo'lsa, u ustun ———
     // Bulutdan tortib olsak, o'sha o'zgarishlar ustidan yozilib ketardi.
     if (unsynced && localHasData) {
       const res = await pushWithRetry(user.id);
@@ -342,7 +547,10 @@ export async function syncOnLogin(user) {
       return { action: "offline", message: "Yuborilmagan o'zgarishlar bor" };
     }
 
-    const pulled = await pullFromCloud(user.id);
+    // Mahalliy nusxa bor va bulut o'zgarmagan bo'lsa — yuklab olmaymiz
+    const pulled = await pullFromCloud(user.id, { skipIfUnchanged: localHasData });
+
+    if (pulled.skipped) return { action: "fresh" };
 
     // Bulutda ma'lumot bor va bo'sh emas -> tortdik, tamom
     if (pulled.ok && !pulled.empty) {

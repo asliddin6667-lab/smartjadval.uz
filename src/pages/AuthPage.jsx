@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { login, registerUser } from "../services/authService";
 import { UZ_REGIONS, districtsOf } from "../utils/uzRegions";
 import "../styles/auth.css";
@@ -9,14 +9,45 @@ import "../styles/auth.css";
 //  - Qurilma cheklovi YO'Q: istalgan kompyuter/telefondan kiriladi
 //  - Email tasdiqlash YO'Q: ro'yxatdan o'tgan zahoti tizimga kiradi
 //  - Parolni unutgan foydalanuvchini ADMIN tiklab beradi
-//  - YANGI: ro'yxatdan o'tishda VILOYAT va TUMAN tanlanadi —
+//  - Ro'yxatdan o'tishda VILOYAT va TUMAN tanlanadi —
 //    maktab avtomatik o'z tumaniga bog'lanadi (tuman admini ko'radi)
+//  - YANGI: Cloudflare Turnstile CAPTCHA — bot hujumlaridan himoya.
+//    Widget login va ro'yxatdan o'tish formasida ko'rinadi; olingan
+//    token authService orqali Supabase'ga uzatiladi. Agar Turnstile
+//    skripti yuklanmasa (masalan, internet muammosi), forma baribir
+//    ishlashda davom etadi — token bo'sh ketadi (Supabase'da CAPTCHA
+//    yoqilgan bo'lsa, server o'zi rad etadi).
 // =====================================================================
 
 // Admin aloqa ma'lumotlari
 const ADMIN_TELEGRAM = "https://t.me/+998941366667";
 const ADMIN_PHONE = "+998 94 136 66 67";
 const ADMIN_NAME = "Asliddin_Muhiddinovich";
+
+// Cloudflare Turnstile — ochiq (public) Site Key.
+// Secret Key BU YERGA YOZILMAYDI — u faqat Supabase Dashboard'da turadi.
+const TURNSTILE_SITE_KEY = "0x4AAAAAAERW7IJFAHCeOSD9";
+const TURNSTILE_SRC =
+  "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+
+// Turnstile skriptini bir marta yuklaydi (bir nechta render'da ham)
+let turnstilePromise = null;
+function loadTurnstile() {
+  if (window.turnstile) return Promise.resolve(window.turnstile);
+  if (turnstilePromise) return turnstilePromise;
+  turnstilePromise = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = TURNSTILE_SRC;
+    s.async = true;
+    s.onload = () => resolve(window.turnstile);
+    s.onerror = () => {
+      turnstilePromise = null;
+      reject(new Error("Turnstile yuklanmadi"));
+    };
+    document.head.appendChild(s);
+  });
+  return turnstilePromise;
+}
 
 // Telefon raqamni yozayotganda chiroyli ajratadi: 90 123 45 67
 function formatLocalPhone(value) {
@@ -41,6 +72,41 @@ export default function AuthPage({ onAuth, initialMode = "login", onBack }) {
   const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+
+  // ---------------- Turnstile CAPTCHA holati ----------------
+  const captchaRef = useRef(null);        // widget joylashadigan div
+  const widgetIdRef = useRef(null);       // render qilingan widget ID
+  const tokenRef = useRef("");            // oxirgi olingan token
+
+  useEffect(() => {
+    let cancelled = false;
+    loadTurnstile()
+      .then((ts) => {
+        if (cancelled || !captchaRef.current) return;
+        // Qayta render'dan saqlanish (StrictMode/HMR)
+        if (widgetIdRef.current !== null) return;
+        widgetIdRef.current = ts.render(captchaRef.current, {
+          sitekey: TURNSTILE_SITE_KEY,
+          theme: "light",
+          language: "ru", // Turnstile'da o'zbekcha yo'q; eng yaqini
+          callback: (token) => { tokenRef.current = token; },
+          "expired-callback": () => { tokenRef.current = ""; },
+          "error-callback": () => { tokenRef.current = ""; },
+        });
+      })
+      .catch(() => {
+        // Skript yuklanmadi — forma token'siz davom etadi
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Har bir urinishdan keyin token bir martalik — yangilash kerak
+  const resetCaptcha = useCallback(() => {
+    tokenRef.current = "";
+    if (window.turnstile && widgetIdRef.current !== null) {
+      try { window.turnstile.reset(widgetIdRef.current); } catch { /* jim */ }
+    }
+  }, []);
 
   function clearMsgs() {
     setError("");
@@ -71,12 +137,13 @@ export default function AuthPage({ onAuth, initialMode = "login", onBack }) {
     setLoading(true);
     setError("");
     try {
-      const user = await login(form.email, form.password);
+      const user = await login(form.email, form.password, tokenRef.current);
       if (remember) localStorage.setItem("edu_remember_email", form.email);
       else localStorage.removeItem("edu_remember_email");
       onAuth(user);
     } catch (err) {
       setError(err.message);
+      resetCaptcha();
     } finally {
       setLoading(false);
     }
@@ -88,12 +155,14 @@ export default function AuthPage({ onAuth, initialMode = "login", onBack }) {
     setLoading(true);
     setError("");
     try {
-      await registerUser(form);
+      await registerUser(form, tokenRef.current);
       setMode("login");
       setSuccess("Ro'yxatdan o'tdingiz. Endi login qiling.");
       setForm(prev => ({ ...prev, password: "" }));
+      resetCaptcha();
     } catch (err) {
       setError(err.message);
+      resetCaptcha();
     } finally {
       setLoading(false);
     }
@@ -348,6 +417,17 @@ export default function AuthPage({ onAuth, initialMode = "login", onBack }) {
                 </button>
               </div>
             )}
+
+            {/* ---------- CAPTCHA (Cloudflare Turnstile) ---------- */}
+            <div
+              ref={captchaRef}
+              style={{
+                display: "flex",
+                justifyContent: "center",
+                minHeight: 66,
+                margin: "4px 0 2px",
+              }}
+            />
 
             <button className="edu-submit" type="submit" disabled={loading}>
               {isLogin

@@ -17,6 +17,14 @@
 //    unda .catch() metodi yo'q ("Oa.rpc(...).catch is not a function").
 //    Endi await + { error } tekshiruvi bilan yozilgan.
 //
+//  YANGI (v3.2) — CAPTCHA (Cloudflare Turnstile):
+//  - login() va registerUser() endi ixtiyoriy captchaToken qabul qiladi
+//    va uni Supabase'ga options.captchaToken sifatida uzatadi.
+//  - sendPasswordReset() ham ixtiyoriy token oladi (Supabase'da CAPTCHA
+//    yoqilganda parol tiklash so'rovi ham token talab qiladi).
+//  - Token bo'sh bo'lsa options'ga qo'shilmaydi — Supabase'da CAPTCHA
+//    hali yoqilmagan bo'lsa hamma narsa avvalgidek ishlaydi.
+//
 //  Sessiya kesh: profil ma'lumotlari localStorage'da keshlanadi, shu
 //  sababli getCurrentUser() va checkSubscription() SINXRON qolgan —
 //  App.jsx va boshqa sahifalar o'zgarishsiz ishlayveradi.
@@ -43,6 +51,13 @@ function genUid() {
   for (let i = 0; i < 6; i++) s += chars[Math.floor(Math.random() * chars.length)];
   return `EDU-${s}`;
 }
+
+// CAPTCHA xatolarini foydalanuvchiga tushunarli qilish
+function isCaptchaError(msg) {
+  return /captcha/i.test(String(msg || ""));
+}
+const CAPTCHA_ERR_MSG =
+  "Xavfsizlik tekshiruvi (CAPTCHA) o'tmadi. Sahifani yangilab, qaytadan urinib ko'ring.";
 
 // ---------------------------------------------------------------------
 //  Profil (serverdagi qator) -> ilova ishlatadigan user obyekti
@@ -125,16 +140,21 @@ export function logout() {
 
 // ---------------------------------------------------------------------
 //  KIRISH — endi qurilma cheklovisiz
+//  captchaToken — Turnstile widget'idan kelgan token (ixtiyoriy).
 // ---------------------------------------------------------------------
-export async function login(email, password) {
+export async function login(email, password, captchaToken) {
   const normalized = email.trim().toLowerCase();
 
   const { data, error } = await supabase.auth.signInWithPassword({
     email: normalized,
     password,
+    ...(captchaToken ? { options: { captchaToken } } : {}),
   });
 
   if (error) {
+    if (isCaptchaError(error.message)) {
+      throw new Error(CAPTCHA_ERR_MSG);
+    }
     if (/invalid login credentials/i.test(error.message)) {
       throw new Error("Email yoki parol noto'g'ri");
     }
@@ -163,8 +183,12 @@ export async function login(email, password) {
 
 // ---------------------------------------------------------------------
 //  RO'YXATDAN O'TISH
+//  captchaToken — Turnstile widget'idan kelgan token (ixtiyoriy).
 // ---------------------------------------------------------------------
-export async function registerUser({ name, email, password, schoolName, phone, region, district }) {
+export async function registerUser(
+  { name, email, password, schoolName, phone, region, district },
+  captchaToken
+) {
   const normalized = email.trim().toLowerCase();
 
   if (!schoolName?.trim()) throw new Error("Maktab nomini kiriting");
@@ -182,6 +206,7 @@ export async function registerUser({ name, email, password, schoolName, phone, r
     email: normalized,
     password,
     options: {
+      ...(captchaToken ? { captchaToken } : {}),
       data: {
         // Ism maydoni ro'yxatdan o'tishda so'ralmaydi — maktab nomi
         // ishlatiladi. Superadmin keyin "Tahrirlash" orqali o'zgartiradi.
@@ -197,6 +222,9 @@ export async function registerUser({ name, email, password, schoolName, phone, r
   });
 
   if (error) {
+    if (isCaptchaError(error.message)) {
+      throw new Error(CAPTCHA_ERR_MSG);
+    }
     if (/already registered|already exists/i.test(error.message)) {
       throw new Error("Bu email oldin ro'yxatdan o'tgan");
     }
@@ -261,15 +289,20 @@ export async function registerUser({ name, email, password, schoolName, phone, r
 // Foydalanuvchi emailiga tiklash havolasini yuboradi.
 // Havola bosilganda sayt ?mode=reset bilan ochiladi va
 // Supabase avtomatik vaqtinchalik sessiya beradi.
-export async function sendPasswordReset(email) {
+// captchaToken — Supabase'da CAPTCHA yoqilgan bo'lsa talab qilinadi.
+export async function sendPasswordReset(email, captchaToken) {
   const normalized = (email || "").trim().toLowerCase();
   if (!normalized.includes("@")) throw new Error("Email noto'g'ri");
 
   const { error } = await supabase.auth.resetPasswordForEmail(normalized, {
     redirectTo: getResetRedirectUrl(),
+    ...(captchaToken ? { captchaToken } : {}),
   });
 
   if (error) {
+    if (isCaptchaError(error.message)) {
+      throw new Error(CAPTCHA_ERR_MSG);
+    }
     if (/rate limit|too many/i.test(error.message)) {
       throw new Error("Juda ko'p urinish. Bir necha daqiqadan so'ng qayta urinib ko'ring.");
     }
