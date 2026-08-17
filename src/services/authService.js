@@ -25,6 +25,19 @@
 //  - Token bo'sh bo'lsa options'ga qo'shilmaydi — Supabase'da CAPTCHA
 //    hali yoqilmagan bo'lsa hamma narsa avvalgidek ishlaydi.
 //
+//  TUZATISH (v3.3) — "Sessiya yaroqsiz. Qayta kiring" muammosi:
+//  - SABAB: ilova profilni localStorage keshidan ko'rsatadi, shuning
+//    uchun Supabase sessiyasi (access token ~1 soatda eskiradi) tugagan
+//    bo'lsa ham superadmin paneli ochiq turaveradi. Shu holatda
+//    functions.invoke() yaroqli token yubormaydi va Edge Function
+//    "Sessiya yaroqsiz" deb rad etadi.
+//  - YECHIM: getFreshSession() yordamchisi qo'shildi — har bir himoya-
+//    langan chaqiruvdan OLDIN supabase.auth.getSession() orqali yaroqli
+//    sessiya olinadi (eskirgan token refresh token bilan avtomatik
+//    yangilanadi). Token endi Authorization header'ida ANIQ yuboriladi.
+//  - Sessiya umuman tiklanmasa — foydalanuvchiga tushunarli xabar:
+//    "Sessiyangiz muddati tugagan. Sahifani yangilab, qaytadan kiring."
+//
 //  Sessiya kesh: profil ma'lumotlari localStorage'da keshlanadi, shu
 //  sababli getCurrentUser() va checkSubscription() SINXRON qolgan —
 //  App.jsx va boshqa sahifalar o'zgarishsiz ishlayveradi.
@@ -58,6 +71,35 @@ function isCaptchaError(msg) {
 }
 const CAPTCHA_ERR_MSG =
   "Xavfsizlik tekshiruvi (CAPTCHA) o'tmadi. Sahifani yangilab, qaytadan urinib ko'ring.";
+
+// ---------------------------------------------------------------------
+//  YANGI (v3.3): YAROQLI SESSIYA OLISH
+//  getSession() eskirgan access tokenni refresh token orqali avtomatik
+//  yangilaydi. Muddati tugashiga 60 soniyadan kam qolgan bo'lsa ham
+//  oldindan yangilab qo'yamiz — Edge Function'ga doim "yangi" token
+//  boradi. Sessiya umuman bo'lmasa (refresh token ham eskirgan) —
+//  aniq xabar bilan to'xtatamiz.
+// ---------------------------------------------------------------------
+async function getFreshSession() {
+  const { data } = await supabase.auth.getSession();
+  let session = data?.session || null;
+
+  // Muddati tugagan/tugash arafasidagi tokenni majburan yangilaymiz
+  const expMs = session?.expires_at ? session.expires_at * 1000 : 0;
+  if (session && expMs && expMs - Date.now() < 60000) {
+    const { data: refreshed } = await supabase.auth.refreshSession();
+    if (refreshed?.session) session = refreshed.session;
+  }
+
+  if (!session) {
+    // Panel localStorage keshi tufayli ochiq turgan, lekin Supabase
+    // sessiyasi tugagan — qayta kirish shart.
+    throw new Error(
+      "Sessiyangiz muddati tugagan. Sahifani yangilab, qaytadan kiring."
+    );
+  }
+  return session;
+}
 
 // ---------------------------------------------------------------------
 //  Profil (serverdagi qator) -> ilova ishlatadigan user obyekti
@@ -531,20 +573,33 @@ export async function adminCreateUser({ name, email, password, schoolName, role 
 //  o'rnatish uchun service_role kaliti kerak — uni brauzerga qo'yish
 //  MUMKIN EMAS. Funksiya "quick-handler" nomi bilan deploy qilingan.
 //
-//  TUZATISH: avvalgi versiyada
-//    supabase.rpc(...).catch(() => {})
-//  yozilgan edi — rpc() qaytaradigan obyektda .catch() yo'q, shuning
-//  uchun "Oa.rpc(...).catch is not a function" xatosi chiqardi.
+//  TUZATISH (v3.3): "Sessiya yaroqsiz. Qayta kiring" xatosining sababi —
+//  invoke() sessiya eskirganda yaroqli token yubormasdi. Endi:
+//    1) getFreshSession() bilan yaroqli (kerak bo'lsa yangilangan)
+//       sessiya olinadi;
+//    2) token Authorization header'ida ANIQ yuboriladi;
+//    3) sessiya tiklanmasa — foydalanuvchiga tushunarli xabar chiqadi.
 // =====================================================================
 export async function adminResetPassword(targetUserId, newPassword) {
   if (!newPassword || newPassword.length < 6) {
     throw new Error("Parol kamida 6 ta belgi bo'lsin");
   }
 
+  // MUHIM: avval yaroqli sessiya olamiz. Eskirgan access token refresh
+  // token orqali shu yerda avtomatik yangilanadi. Sessiya umuman
+  // bo'lmasa — Edge Function'ga borishdan oldin aniq xabar bilan
+  // to'xtaymiz.
+  const session = await getFreshSession();
+
   // Ikkala nom uslubida ham yuboramiz — Edge Function snake_case
   // (target_user_id) yoki camelCase (targetUserId) qaysi birini
   // o'qisa ham ishlayveradi.
   const { data, error } = await supabase.functions.invoke(RESET_PASSWORD_FN, {
+    headers: {
+      // Yangi tokenni aniq yuboramiz — invoke ba'zan eski/keshdagi
+      // sessiyani ishlatib qolishi mumkin edi.
+      Authorization: `Bearer ${session.access_token}`,
+    },
     body: {
       target_user_id: targetUserId,
       new_password: newPassword,
@@ -566,7 +621,9 @@ export async function adminResetPassword(targetUserId, newPassword) {
     } catch {
       /* jim */
     }
-    if (/fetch|network/i.test(msg)) {
+    if (/jwt|token|expired|sessiya|unauthorized|401/i.test(msg)) {
+      msg = "Sessiyangiz muddati tugagan. Sahifani yangilab, qaytadan kiring.";
+    } else if (/fetch|network/i.test(msg)) {
       msg = "Server bilan aloqa yo'q. Internetni tekshiring.";
     }
     throw new Error(msg);
