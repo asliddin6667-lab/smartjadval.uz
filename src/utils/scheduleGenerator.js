@@ -297,6 +297,26 @@ function splitHoursToBlocks(hours, allowDouble) {
   return blocks;
 }
 
+// ——— KELAJAK SOATI: nom bo'yicha avtomatik aniqlash ———
+// Nomi "Kelajak soati" (yoki ruscha "Час будущего") bo'lgan fan hech qanday
+// sozlamasiz avtomatik ravishda DUSHANBA kunining 1-DARSIGA qo'yiladi.
+// Katta-kichik harf, ortiqcha probel va apostrof turlari farq qilmaydi.
+const FIXED_MONDAY_NAMES = new Set([
+  "kelajak soati",
+  "час будущего",
+  "келажак соати",
+]);
+function normSubjName(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/[\u2018\u2019\u02bc`]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+export function isFixedMondaySubject(subject) {
+  return FIXED_MONDAY_NAMES.has(normSubjName(subject?.name));
+}
+
 function attemptSchedule(
   classes, subjects, teachers, rooms, timeslots,
   classSubjects = {}, lunchGroups = [], lockedSchedule = null, options = {}
@@ -336,6 +356,11 @@ function attemptSchedule(
   const cIdxOf = new Map(classes.map((c, i) => [c.id, i]));
   const tIdxOf = new Map(teachers.map((t, i) => [t.id, i]));
   const sIdxOf = new Map(subjects.map((s, i) => [s.id, i]));
+  // ——— KELAJAK SOATI: dushanba indeksi va shu fan ID'lari ———
+  const MONDAY_D = Math.max(0, DAYS.indexOf("Dushanba"));
+  const fixedMondaySubj = new Set(
+    subjects.filter((s) => isFixedMondaySubject(s)).map((s) => s.id)
+  );
   const classOffMask = new Uint8Array(C * D);
   const classOffSet = {};
   classes.forEach((c, ci) => {
@@ -768,6 +793,17 @@ function attemptSchedule(
     req.constrained = multiResource || otherConstrained;
     req.tier = multiResource ? 0 : (otherConstrained ? 1 : 2);
     if (req.isCore) req.priority = (req.priority || 0) + 12;
+    // ——— KELAJAK SOATI (QATTIQ): faqat DUSHANBA, 1-DARS ———
+    // Bu fan boshqa kunga hech qachon tushmaydi. 1-dars sharti faqat oxirgi
+    // chorada (fixedRelax) yumshatiladi — kun esa doim dushanba qoladi.
+    if (fixedMondaySubj.has(req.subjectId)) {
+      req.fixedDay = MONDAY_D;
+      req.fixedFirst = true;
+      req.fixedRelax = 0;
+      req.constrained = true;
+      req.tier = -1; // hamma darsdan oldin joylanadi
+      req.priority = (req.priority || 0) + 500;
+    }
     pending.push(req);
   }
   // Kun ichida qayta tartiblash paytida kun darajasidagi cheklovlar
@@ -845,6 +881,8 @@ function attemptSchedule(
     const dom = [];
     if (req.roomDup) return dom;
     for (let d = 0; d < D; d++) {
+      // KELAJAK SOATI: domen faqat belgilangan kundan iborat
+      if (req.fixedDay !== undefined && d !== req.fixedDay) continue;
       let dayOk = true;
       for (const ci of req.cIdxs) if (classOffMask[ci * D + d]) { dayOk = false; break; }
       if (dayOk) for (const ti of req.tIdxs) if (teacherOffMask[ti * D + d]) { dayOk = false; break; }
@@ -890,6 +928,15 @@ function attemptSchedule(
     req.affected = [...set];
   });
   function fitsAt(req, d, i) {
+    // ——— KELAJAK SOATI (QATTIQ): kun va 1-dars sharti ———
+    // dayRearrange rejimida ham buzilmaydi — zichlash/qayta yig'ish bosqichlari
+    // bu darsni boshqa katakka sura olmaydi.
+    if (req.fixedDay !== undefined && d !== req.fixedDay) return false;
+    if (req.fixedFirst && !req.fixedRelax) {
+      for (const ci of req.cIdxs) {
+        if (slotRank[ci * DT + d * T + i] !== 0) return false;
+      }
+    }
     if (!subjDayOk(req, d)) return false;
     if (!spacedDayOk(req, d)) return false;
     if (!balanceOk(req, d)) return false;
@@ -989,6 +1036,9 @@ function attemptSchedule(
       slots.push(ts);
       const cell = schedule[day][ts.id];
       const es = buildEntries(req, o);
+      // KELAJAK SOATI: yozuvga belgi — keyinchalik zichlash (compactSchedule)
+      // bu darsni joyidan qo'zg'atmasligi uchun
+      if (req.fixedDay !== undefined) es.forEach((e) => { e.fixedMonday = true; });
       es.forEach((e) => cell.push(e));
       entries.push(...es);
       const off = base + o;
@@ -1139,9 +1189,18 @@ function attemptSchedule(
         corePenalty += (3 - r) * NONCORE_EARLY_W;
       }
     }
+    // KELAJAK SOATI: 1-darsdan uzoqlashgani sari juda og'ir jarima
+    // (fixedRelax rejimida ham imkon qadar erta soatga tortadi)
+    let fixedPen = 0;
+    if (req.fixedFirst) {
+      for (const ci of req.cIdxs) {
+        const r = slotRank[ci * DT + d * T + i];
+        if (r > 0) fixedPen += r * 100000;
+      }
+    }
     const spacedPen = spacedPenalty(req, d);
     const randomPenalty = rng() * RAND_W;
-    return compactPenalty + repeatPenalty + classLoadPenalty + teacherPenalty + spreadPenalty + corePenalty + adjacencyPenalty + dayCapPenalty + spacedPen + randomPenalty;
+    return compactPenalty + repeatPenalty + classLoadPenalty + teacherPenalty + spreadPenalty + corePenalty + adjacencyPenalty + dayCapPenalty + spacedPen + fixedPen + randomPenalty;
   }
   function bestCandidate(req, withForwardCheck) {
     let best = null;
@@ -1324,6 +1383,9 @@ function attemptSchedule(
       for (const r of deferred) {
         r.capRelax = Math.min(2, (r.capRelax || 0) + 1);
         r.spacedRelax = Math.min(2, (r.spacedRelax || 0) + 1);
+        // KELAJAK SOATI: 1-dars band bo'lsa (masalan qo'lda qulflangan dars),
+        // dushanbaning boshqa soatiga ruxsat — kun baribir dushanba qoladi
+        if (r.fixedFirst) r.fixedRelax = 1;
       }
     }
     const still = [];
@@ -1406,6 +1468,8 @@ function attemptSchedule(
         placedRef: null, failed: false, done: true, dirty: true,
         swappedFrom: req.teacherId, spacedRelax: Math.max(1, req.spacedRelax || 0),
         balRelax: Math.max(1, req.balRelax || 0),
+        // KELAJAK SOATI: boshqa ustoz bilan ham faqat dushanbaga tushadi
+        fixedRelax: req.fixedFirst ? 1 : req.fixedRelax,
       };
       clone.domain = buildDomain(clone);
       if (!clone.domain.length) continue;
@@ -1433,6 +1497,7 @@ function attemptSchedule(
       req.spacedRelax = 2;
       req.capRelax = Math.min(2, (req.capRelax || 0) + 1);
       req.balRelax = 3;
+      if (req.fixedFirst) req.fixedRelax = 1; // kun baribir dushanba qoladi
       refreshFeas(req);
       const cand = req.feasCount > 0 ? bestCandidate(req, false) : null;
       if (cand) { place(req, cand.d, cand.i); markAffected(req); continue; }
@@ -1473,6 +1538,12 @@ function attemptSchedule(
           dayCap: dayCapFor([ciFill].filter((x) => x !== undefined), sIdxFill, 1), capRelax: 1,
           balRelax: 1,
         };
+        // KELAJAK SOATI: to'ldirish bosqichida ham faqat dushanba
+        if (fixedMondaySubj.has(a.subjectId)) {
+          fReq.fixedDay = MONDAY_D;
+          fReq.fixedFirst = true;
+          fReq.fixedRelax = 1;
+        }
         fReq.domain = buildDomain(fReq);
         let cand = bestCandidate(fReq, false);
         if (!cand) {
@@ -2892,6 +2963,8 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
           if (l.altTeacherId) tSet.add(l.altTeacherId);
           if (l.roomId) rSet.add(l.roomId);
           if (l.manual) locked = true;
+          // KELAJAK SOATI: dushanba 1-darsga biriktirilgan — zichlashda qo'zg'almaydi
+          if (l.fixedMonday) locked = true;
         }
         const cIdxs = [...cSet].map((cid) => cIdxOf.get(cid)).filter((x) => x !== undefined);
         if (!cIdxs.length) locked = true;
@@ -3612,4 +3685,4 @@ export function generateSchedule(...args) {
     console.log(line);
   }
   return best.schedule;
-}
+} 
