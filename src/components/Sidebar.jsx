@@ -35,6 +35,12 @@ const ICONS = {
       <circle cx="12" cy="7" r="4" />
     </svg>
   ),
+  teacherAvailability: (
+    <svg {...svgProps}>
+      <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </svg>
+  ),
   classSubjects: (
     <svg {...svgProps}>
       <polygon points="12 2 2 7 12 12 22 7 12 2" />
@@ -136,6 +142,7 @@ const NAV_ITEMS = [
   { id: "classes", label: "Sinflar" },
   { id: "subjects", label: "Fanlar" },
   { id: "teachers", label: "O'qituvchilar" },
+  { id: "teacherAvailability", label: "Ustoz setkasi" },
   { id: "classSubjects", label: "Sinf fanlari" },
   { id: "rooms", label: "Xonalar" },
   { id: "timeslots", label: "Dars vaqtlari" },
@@ -264,6 +271,7 @@ export default function Sidebar({
               "classes",
               "subjects",
               "teachers",
+              "teacherAvailability",
               "classSubjects",
               "rooms",
               "timeslots",

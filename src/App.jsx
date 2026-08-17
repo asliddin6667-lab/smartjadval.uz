@@ -17,6 +17,7 @@ import TimeslotsPage from "./pages/TimeSlots";
 import LunchGroupsPage from "./pages/LunchGroups";
 import SchedulePage from "./pages/Schedule";
 import TeacherReplacePage from "./pages/TeacherReplace";
+import TeacherAvailabilityPage from "./pages/TeacherAvailability";
 import AnalyticsPage from "./pages/Analytics";
 import ImportExportPage from "./pages/ImportExport";
 import UsersPage from "./pages/Users";
@@ -48,7 +49,7 @@ const emptySettings = { schoolName: "", academicYear: "2024-2025" };
 //  qayta yo'naltirish yo'q — `/smartjadval.uz/schedule` 404 berardi.
 // =====================================================================
 const PAGE_IDS = [
-  "dashboard", "classes", "subjects", "teachers", "classSubjects",
+  "dashboard", "classes", "subjects", "teachers", "teacherAvailability", "classSubjects",
   "rooms", "timeslots", "lunchGroups", "schedule", "teacherReplace",
   "analytics", "importExport", "users", "settings",
 ];
@@ -559,6 +560,7 @@ export default function App() {
       case "classes": return <ClassesPage {...pageProps} setClasses={setClasses} />;
       case "subjects": return <SubjectsPage {...pageProps} setSubjects={setSubjects} />;
       case "teachers": return <TeachersPage {...pageProps} setTeachers={setTeachers} />;
+      case "teacherAvailability": return <TeacherAvailabilityPage {...pageProps} setTeachers={setTeachers} />;
       case "classSubjects": return <ClassSubjectsPage {...pageProps} setClassSubjects={setClassSubjects} />;
       case "rooms": return <RoomsPage {...pageProps} setRooms={setRooms} />;
       case "timeslots": return <TimeslotsPage {...pageProps} setTimeslots={setTimeslots} shifts={shifts} setShifts={setShifts} />;

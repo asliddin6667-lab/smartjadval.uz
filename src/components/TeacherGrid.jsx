@@ -68,6 +68,19 @@ export default function TeacherGrid({
   const teacher = teachers.find((t) => t.id === teacherId) || null;
   const offDays = new Set(Array.isArray(teacher?.offDays) ? teacher.offDays : []);
 
+  // ——— USTOZ SETKASI: qulflangan soatlar (teacher.blockedSlots) ———
+  // Bu kataklar "Ustoz setkasi" sahifasida boshqariladi; shu yerda faqat
+  // ko'rsatiladi va ularga dars qo'yish/ko'chirish taqiqlanadi.
+  const blockedSlots = teacher?.blockedSlots && typeof teacher.blockedSlots === "object"
+    ? teacher.blockedSlots : {};
+  const isBlockedCell = (day, slotId) =>
+    Array.isArray(blockedSlots[day]) && blockedSlots[day].includes(slotId);
+  const blockedTotal = DAYS.reduce((n, day) => {
+    if (offDays.has(day)) return n;
+    const list = Array.isArray(blockedSlots[day]) ? blockedSlots[day] : [];
+    return n + list.filter((sid) => sortedTimeslots.some((ts) => ts.id === sid && isTeachingSlot(ts))).length;
+  }, 0);
+
   const ctx = {
     schedule, classes, subjects, teachers, rooms,
     timeslots: sortedTimeslots, lunchGroups, classSubjects,
@@ -141,7 +154,8 @@ export default function TeacherGrid({
   function cellState(day, slot) {
     if (offDays.has(day)) return "off";
     if (!isTeachingSlot(slot)) return "nonteaching";
-    return cardsAt(day, slot.id).length ? "busy" : "free";
+    if (cardsAt(day, slot.id).length) return "busy";
+    return isBlockedCell(day, slot.id) ? "blocked" : "free";
   }
 
   // ═══ KO'CHIRISH: sudrash (drag) va bosib tanlash (pick) ═══
@@ -187,6 +201,7 @@ export default function TeacherGrid({
     if (!active) return null;
     if (active.day === day && active.slotId === slot.id) return { kind: "self" };
     if (offDays.has(day)) return { kind: "off" };
+    if (isBlockedCell(day, slot.id)) return { kind: "blocked" };
     if (!isTeachingSlot(slot)) return { kind: "nt" };
 
     const srcTs = sortedTimeslots.find((s) => s.id === active.slotId);
@@ -414,6 +429,12 @@ export default function TeacherGrid({
                 🌙 Dam olish kunlari: <b>{[...offDays].join(", ")}</b> — bu kunlarga dars qo'yib bo'lmaydi.
               </div>
             )}
+            {blockedTotal > 0 && (
+              <div className="tgr-offnote">
+                🔒 Ustoz setkasida <b>{blockedTotal}</b> ta soat qulflangan — u kataklarga dars qo'yilmaydi.
+                Qulflarni «Ustoz setkasi» sahifasida boshqarasiz.
+              </div>
+            )}
             {picked && (
               <div className="tgr-offnote" style={{ background: "rgba(124,58,237,.14)", borderColor: "rgba(124,58,237,.45)", color: "#5b21b6", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                 <span>✋ <b>{unitLabel(ctx, picked.unit)}</b> ({slotLabel(ctx, picked.day, picked.slotId)}) tanlandi — endi qo'yiladigan katakni bosing.</span>
@@ -455,11 +476,11 @@ export default function TeacherGrid({
                         const kind = info?.kind || null;
                         const cls = [
                           "tgr-cell",
-                          state === "off" ? "tgr-cell-off" : "",
+                          state === "off" || state === "blocked" ? "tgr-cell-off" : "",
                           state === "nonteaching" ? "tgr-cell-nt" : "",
                           kind === "move" || kind === "swap" ? "tgr-drop-ok" : "",
                           kind === "no" || kind === "nt" ? "tgr-drop-no" : "",
-                          kind === "off" ? "tgr-drop-blocked" : "",
+                          kind === "off" || kind === "blocked" ? "tgr-drop-blocked" : "",
                         ].filter(Boolean).join(" ");
                         return (
                           <td
@@ -474,6 +495,7 @@ export default function TeacherGrid({
                             onClick={() => { if (picked && kind && kind !== "self") commitMove(day, slot); }}
                           >
                             {state === "off" && <div className="tgr-blocked">🌙 Dam</div>}
+                            {state === "blocked" && <div className="tgr-blocked">🔒 Qulflangan soat</div>}
                             {state === "nonteaching" && (
                               <div className="tgr-blocked">{slot.type === "lunch" ? "🍽️ Obed" : "Tanaffus"}</div>
                             )}

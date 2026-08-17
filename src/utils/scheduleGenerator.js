@@ -350,6 +350,24 @@ function attemptSchedule(
     teacherOffSet[t.id] = off;
     DAYS.forEach((day, d) => { if (off.has(day)) teacherOffMask[ti * D + d] = 1; });
   });
+  // ——— USTOZ SETKASI: qulflangan soatlar (QATTIQ cheklov) ———
+  // teacher.blockedSlots = { [kun]: [timeslotId, ...] } — shu kataklarga
+  // avtomatik generator hech qachon dars qo'ymaydi. Qo'lda qo'yilgan
+  // (manual/locked) darslar bundan mustasno — foydalanuvchi o'zi hal qiladi.
+  const teacherBlockGrid = new Uint8Array(TT * DT);
+  const teacherBlockedMap = {};
+  teachers.forEach((t, ti) => {
+    const bs = t && t.blockedSlots && typeof t.blockedSlots === "object" ? t.blockedSlots : null;
+    teacherBlockedMap[t.id] = bs;
+    if (!bs) return;
+    DAYS.forEach((day, d) => {
+      const list = Array.isArray(bs[day]) ? bs[day] : [];
+      list.forEach((sid) => {
+        const i = teachIdxById.get(sid);
+        if (i !== undefined) teacherBlockGrid[ti * DT + d * T + i] = 1;
+      });
+    });
+  });
   const lunchGrid = new Uint8Array(C * DT);
   classes.forEach((c, ci) => {
     DAYS.forEach((day, d) => {
@@ -677,13 +695,17 @@ function attemptSchedule(
     const tids = (r.teacherIds || [r.teacherId]).filter(Boolean);
     const maxTeacherLoad = tids.reduce((mx, id) => Math.max(mx, teacherTotalReq[id] || 0), 0);
     const teacherOff = tids.some((id) => teacherOffSet[id] && teacherOffSet[id].size) ? 8 : 0;
+    const teacherBlk = tids.some((id) => {
+      const bs = teacherBlockedMap[id];
+      return bs && DAYS.some((day) => Array.isArray(bs[day]) && bs[day].length);
+    }) ? 8 : 0;
     const classOff = (r.classIds || []).some((cid) => classOffSet[cid] && classOffSet[cid].size) ? 5 : 0;
     const multiClass = (r.classIds?.length || 1) >= 2 ? 4 : 0;
     const multiTeacher = tids.length >= 2 ? tids.length * 12 : 0;
     const spaced = r.spacedDays ? 7 : 0;
     const core = r.isCore ? 6 : 0;
     const block = (r.blockSize || 1) >= 2 ? 10 : 0;
-    return maxTeacherLoad + (r.blockSize || 1) * 2 + teacherOff + classOff + multiClass + multiTeacher + spaced + core + block;
+    return maxTeacherLoad + (r.blockSize || 1) * 2 + teacherOff + teacherBlk + classOff + multiClass + multiTeacher + spaced + core + block;
   }
   function isValidRequest(req) {
     const reqTeacherIds = (req.teacherIds || [req.teacherId]).filter(Boolean);
@@ -833,6 +855,9 @@ function attemptSchedule(
           if (o > 0 && !nextConsecutive[i + o - 1]) { ok = false; break; }
           for (const ci of req.cIdxs) { if (lunchGrid[ci * DT + d * T + i + o] || slotClassBlock[ci * DT + d * T + i + o]) { ok = false; break; } }
           if (!ok) break;
+          // Ustoz setkasida qulflangan soat — bu katak umuman ishlatilmaydi
+          for (const ti of req.tIdxs) { if (teacherBlockGrid[ti * DT + d * T + i + o]) { ok = false; break; } }
+          if (!ok) break;
         }
         if (ok) dom.push({ d, i });
       }
@@ -872,7 +897,7 @@ function attemptSchedule(
     for (let o = 0; o < req.blockSize; o++) {
       const off = base + o;
       for (const ci of req.cIdxs) if (classGrid[ci * DT + off]) return false;
-      for (const ti of req.tIdxs) if (teacherGrid[ti * DT + off]) return false;
+      for (const ti of req.tIdxs) if (teacherGrid[ti * DT + off] || teacherBlockGrid[ti * DT + off]) return false;
       for (const rg of req.roomArrs) if (rg[off]) return false;
     }
     return true;
@@ -2612,7 +2637,7 @@ function attemptSchedule(
   for (const p of placements) { soft += scoreCandidate(p.req, p.d, p.startIdx); }
   const report = buildValidationReport({
     schedule, classes, subjects, teachers, timeslots: allSortedTs, classSubjects,
-    lunchGroups, classOffSet, teacherOffSet, entryToPlacement,
+    lunchGroups, classOffSet, teacherOffSet, teacherBlockedMap, entryToPlacement,
   });
   report.gaps = gaps;
   report.imbalance = imbalance;
@@ -2624,13 +2649,18 @@ function attemptSchedule(
 function buildValidationReport(ctx) {
   const {
     schedule, classes, subjects, teachers, timeslots, classSubjects,
-    lunchGroups, classOffSet, teacherOffSet, entryToPlacement,
+    lunchGroups, classOffSet, teacherOffSet, teacherBlockedMap, entryToPlacement,
   } = ctx;
   const teacherConflicts = [];
   const roomConflicts = [];
   const classConflicts = [];
   const lunchConflicts = [];
   const offDayConflicts = [];
+  const blockedSlotConflicts = [];
+  const isBlockedFor = (tid, day, tsId) => {
+    const bs = teacherBlockedMap?.[tid];
+    return Boolean(bs && Array.isArray(bs[day]) && bs[day].includes(tsId));
+  };
   const placedPerKey = {};
   DAYS.forEach((day) => {
     timeslots.forEach((ts) => {
@@ -2665,6 +2695,9 @@ function buildValidationReport(ctx) {
           if (!l.manual && classOffSet?.[cid]?.has(day)) offDayConflicts.push({ day, tsId: ts.id, classId: cid });
         });
         if (!l.manual && l.teacherId && teacherOffSet?.[l.teacherId]?.has(day)) offDayConflicts.push({ day, tsId: ts.id, teacherId: l.teacherId });
+        // ——— Ustoz setkasida qulflangan soatga (manual bo'lmagan) dars tushmasin ———
+        if (!l.manual && l.teacherId && isBlockedFor(l.teacherId, day, ts.id)) blockedSlotConflicts.push({ day, tsId: ts.id, teacherId: l.teacherId });
+        if (!l.manual && l.alternating && l.altTeacherId && isBlockedFor(l.altTeacherId, day, ts.id)) blockedSlotConflicts.push({ day, tsId: ts.id, teacherId: l.altTeacherId });
       });
       if (isTeachingSlot(ts)) {
         const uniq = new Set();
@@ -2692,9 +2725,10 @@ function buildValidationReport(ctx) {
   });
   return {
     requiredTotal, placedTotal, remainingTotal: Math.max(0, requiredTotal - placedTotal), remainingList,
-    teacherConflicts, roomConflicts, classConflicts, lunchConflicts, offDayConflicts,
+    teacherConflicts, roomConflicts, classConflicts, lunchConflicts, offDayConflicts, blockedSlotConflicts,
     ok: requiredTotal === placedTotal && !teacherConflicts.length && !roomConflicts.length &&
-      !classConflicts.length && !lunchConflicts.length && !offDayConflicts.length,
+      !classConflicts.length && !lunchConflicts.length && !offDayConflicts.length &&
+      !blockedSlotConflicts.length,
   };
 }
 
@@ -2703,7 +2737,9 @@ function buildValidationReport(ctx) {
 // Blok (2 soat) darslar butunligicha ko'chadi, bir kunda bir fan limiti saqlanadi.
 // Yakunda kun o'rtasida bo'sh soat qolmasligi uchun prefiks qayta yig'ish
 // (backtracking) ishlaydi — darslar kun boshidan uzluksiz turadi.
-export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], schedule = {}, classSubjects = {}) {
+// YANGI: `teachers` (ixtiyoriy) berilsa, ustoz setkasida qulflangan
+// soatlarga (teacher.blockedSlots) zichlash paytida ham dars surilmaydi.
+export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], schedule = {}, classSubjects = {}, teachers = []) {
   const D = DAYS.length;
   const allTs = [...timeslots].sort((a, b) => Number(a.lessonNumber) - Number(b.lessonNumber));
   const teachingTs = allTs.filter(isTeachingSlot);
@@ -2713,10 +2749,28 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
   const C = classes.length;
   const cIdxOf = new Map(classes.map((c, i) => [c.id, i]));
   const allIdxById = new Map(allTs.map((ts, i) => [ts.id, i]));
+  const teachIdxById = new Map(teachingTs.map((ts, i) => [ts.id, i]));
   const nextConsecutive = new Array(Math.max(0, T - 1)).fill(false);
   for (let i = 0; i < T - 1; i++) {
     nextConsecutive[i] = allIdxById.get(teachingTs[i + 1].id) === allIdxById.get(teachingTs[i].id) + 1;
   }
+
+  // ——— USTOZ SETKASI: qulflangan soatlar (zichlashda ham hurmat qilinadi) ———
+  const tBlockedMap = new Map(); // teacherId -> Uint8Array(DT)
+  (Array.isArray(teachers) ? teachers : []).forEach((t) => {
+    const bs = t && t.blockedSlots && typeof t.blockedSlots === "object" ? t.blockedSlots : null;
+    if (!bs) return;
+    const g = new Uint8Array(DT);
+    let any = false;
+    DAYS.forEach((day, d) => {
+      const list = Array.isArray(bs[day]) ? bs[day] : [];
+      list.forEach((sid) => {
+        const i = teachIdxById.get(sid);
+        if (i !== undefined) { g[d * T + i] = 1; any = true; }
+      });
+    });
+    if (any) tBlockedMap.set(t.id, g);
+  });
 
   // "Ora kunda", "Asosiy fan" va haftalik soat ma'lumotlari
   const spacedSet = new Set();
@@ -2906,7 +2960,11 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
       if (o > 0 && !nextConsecutive[i + o - 1]) return false;
       const off = d * T + i + o;
       for (const ci of u.cIdxs) if (blocked[ci * DT + off] || classGrid[ci * DT + off]) return false;
-      for (const id of u.tids) if (gridOf(tGrid, id)[off]) return false;
+      for (const id of u.tids) {
+        if (gridOf(tGrid, id)[off]) return false;
+        const bg = tBlockedMap.get(id);
+        if (bg && bg[off]) return false;
+      }
       for (const id of u.rids) if (gridOf(rGrid, id)[off]) return false;
     }
     return true;
@@ -2919,6 +2977,11 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
         for (let o = 0; o < u.len && ok; o++) {
           if (o > 0 && !nextConsecutive[i + o - 1]) ok = false;
           for (const ci of u.cIdxs) if (blocked[ci * DT + d * T + i + o]) { ok = false; break; }
+          if (!ok) break;
+          for (const id of u.tids) {
+            const bg = tBlockedMap.get(id);
+            if (bg && bg[d * T + i + o]) { ok = false; break; }
+          }
         }
         if (ok) dom.push({ d, i });
       }
@@ -2927,10 +2990,12 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
   });
 
   const BAL_W = 900;
-  const REPEAT_W = 260;
+  const REPEAT_W = 45;
   const SPACED_W = 600;
-  const CORE_W = 220;
+  const CORE_W = 420;
 
+  // Kunlik me'yor: sinfning haftalik soati ish kunlariga teng bo'linadi
+  // (24 soat / 6 kun => kuniga aynan 4 ta).
   const balLo = new Int16Array(C);
   const balHi = new Int16Array(C);
   const dayUsable = new Uint8Array(C * D);
@@ -2950,6 +3015,7 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
     balHi[ci] = total - base * ud > 0 ? base + 1 : base;
   }
 
+  // Taqqoslash LEKSIKOGRAFIK: avval oynalar soni, keyin me'yordan chetlanish
   let _gap = 0;
   const costOf = (cIdxs) => {
     let cost = 0;
@@ -3004,6 +3070,7 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
     return gap;
   };
   const repeatAt = (u, dd, oldD) => {
+    if (!u.subjectId) return 0;
     let c = 0;
     for (const ci of u.cIdxs) {
       let n = subjDay.get(`${ci}|${dd}|${u.subjectId}`) || 0;
@@ -3013,7 +3080,7 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
     return c;
   };
   const spacedAt = (u, dd, oldD) => {
-    if (!u.spaced) return 0;
+    if (!u.spaced || !u.subjectId) return 0;
     let c = 0;
     for (const ci of u.cIdxs) {
       for (let k = -1; k <= 1; k++) {
@@ -3289,16 +3356,16 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
     }
   }
 
-  // ——— ASOSIY FANLAR TARTIBI ———
-  const coreStop = Date.now() + 900;
-  for (let round = 0; round < 8 && Date.now() < coreStop; round++) {
+  // ——— ASOSIY FANLARNI KUN BOSHIGA TARTIBLASH ———
+  const coreStop = Date.now() + 1200;
+  for (let round = 0; round < 6 && Date.now() < coreStop; round++) {
     let swapped = 0;
     for (let ci = 0; ci < C; ci++) {
       for (let d = 0; d < D; d++) {
         if (Date.now() > coreStop) break;
         let guard = 0;
         let again = true;
-        while (again && guard < 10) {
+        while (again && guard < 8) {
           guard += 1;
           again = false;
           const list = units
@@ -3308,13 +3375,18 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
           for (let x = 0; x < list.length; x++) {
             const a = list[x];
             if (a.core) continue;
+            let coreLater = false;
+            for (let y = x + 1; y < list.length; y++) {
+              if (list[y].core) { coreLater = true; break; }
+            }
+            if (!coreLater) continue;
             for (let y = x + 1; y < list.length; y++) {
               const b = list[y];
-              if (!b.core || a.len !== b.len) continue;
-              const uni = unionArr(a.cIdxs, b.cIdxs);
-              costOf(uni);
-              const gap0 = _gap;
+              if (!b.core) continue;
+              if (a.len !== b.len) continue;
               const ad = a.d, ai = a.i, bd2 = b.d, bi2 = b.i;
+              const uni = unionArr(a.cIdxs, b.cIdxs);
+              // 1-strategiya: to'g'ridan-to'g'ri o'rin almashtirish
               setBits(a, ad, ai, 0);
               setBits(b, bd2, bi2, 0);
               let ok = false;
@@ -3322,12 +3394,7 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
                 setBits(a, bd2, bi2, 1);
                 if (fits(b, ad, ai)) {
                   setBits(b, ad, ai, 1);
-                  costOf(uni);
-                  ok = _gap <= gap0;
-                  if (!ok) {
-                    setBits(b, ad, ai, 0);
-                    setBits(a, bd2, bi2, 0);
-                  }
+                  ok = true;
                 } else {
                   setBits(a, bd2, bi2, 0);
                 }
@@ -3347,6 +3414,8 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
               }
               setBits(a, ad, ai, 1);
               setBits(b, bd2, bi2, 1);
+              // 2-strategiya: oddiy fanni boshqa katakka ko'chirib (evict),
+              // asosiy fanni bo'shagan erta o'ringa qo'yamiz
               const evBefore = costOf(uni) + repeatAt(a, ad, ad) + spacedAt(a, ad, ad);
               const evGap = _gap;
               let evicted = false;
@@ -3538,10 +3607,9 @@ export function generateSchedule(...args) {
   if (!options.quiet && typeof console !== "undefined" && r) {
     const pct = r.requiredTotal ? ((r.placedTotal / r.requiredTotal) * 100).toFixed(1) : "0";
     const conf = r.teacherConflicts.length + r.roomConflicts.length + r.classConflicts.length
-      + r.lunchConflicts.length + r.offDayConflicts.length;
-    const line = `📊 #${__genCall} · ${r.placedTotal}/${r.requiredTotal} (${pct}%) · oyna ${r.gaps ?? 0} · nomutanosib ${r.imbalance ?? 0}${conf ? ` · ⛔ ${conf} ziddiyat` : ""} · ${Date.now() - start}ms`;
-    if (r.remainingTotal === 0 && !conf) console.log(line);
-    else console.warn(line, { qolgan: r.remainingList, teacherHints: r.teacherHints });
+      + r.lunchConflicts.length + r.offDayConflicts.length + (r.blockedSlotConflicts?.length || 0);
+    const line = `📊 #${__genCall} · ${r.placedTotal}/${r.requiredTotal} (${pct}%) · oyna ${r.gaps ?? 0} · nomutanosib ${r.imbalance ?? 0}${conf ? ` · ⚠️ ziddiyat ${conf}` : ""}`;
+    console.log(line);
   }
   return best.schedule;
 }

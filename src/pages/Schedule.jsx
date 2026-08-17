@@ -134,6 +134,15 @@ export default function SchedulePage({
     return map.get(id)?.name || fallback;
   }
 
+  // Ustoz setkasida (teacher.blockedSlots) shu katak qulflanganmi?
+  // Qulflangan katakka avtomatik joylashtirish yo'llari dars qo'ymaydi;
+  // qo'lda qo'shishda esa faqat ogohlantiriladi (foydalanuvchi o'zi hal qiladi).
+  function teacherBlockedAt(teacherId, day, slotId) {
+    if (!teacherId) return false;
+    const bs = teacherMap.get(teacherId)?.blockedSlots;
+    return Boolean(bs && Array.isArray(bs[day]) && bs[day].includes(slotId));
+  }
+
   function getClassLessons(day, timeSlotId, classId) {
     const cell = schedule?.[day]?.[timeSlotId];
     if (!Array.isArray(cell)) return [];
@@ -621,7 +630,7 @@ export default function SchedulePage({
     for (let k = 0; k < 4; k++) {
       let next;
       try {
-        next = compactSchedule(classes, timeslots, lunchGroups, best, classSubjects);
+        next = compactSchedule(classes, timeslots, lunchGroups, best, classSubjects, teachers);
       } catch {
         break;
       }
@@ -827,6 +836,9 @@ export default function SchedulePage({
       if (Array.isArray(t?.offDays) && t.offDays.includes(day)) {
         warns.push(`⛔ ${t.name}: ${day} — ustozning dam olish kuni, dars qo'yib bo'lmaydi`);
       }
+      if (teacherBlockedAt(teacherId, day, slotId)) {
+        warns.push(`⚠️ ${getName(teacherMap, teacherId)}: bu soat Ustoz setkasida qulflangan — qo'lda qo'shsangiz shu dars mustasno sifatida qoladi`);
+      }
     }
     if (roomId) {
       const rConf = cell.find((l) => l.roomId === roomId);
@@ -881,6 +893,9 @@ export default function SchedulePage({
       const t = teacherMap.get(g.teacherId);
       if (Array.isArray(t?.offDays) && t.offDays.includes(day)) {
         warns.push(`⛔ ${t.name}: ${day} — dam olish kuni`);
+      }
+      if (teacherBlockedAt(g.teacherId, day, slotId)) {
+        warns.push(`⚠️ ${getName(teacherMap, g.teacherId)}: bu soat Ustoz setkasida qulflangan`);
       }
     });
     const classHas = (classIds || []).some((cid) => cell.some((l) => classIdsOf(l).includes(cid)));
@@ -954,6 +969,7 @@ export default function SchedulePage({
   //   3) sinfda dars bor → o'sha darsni boshqa soatga surib, joy bo'shatish
   // 2 va 3-bosqichda boshqa dars ko'chiriladi, shuning uchun foydalanuvchidan
   // ALBATTA tasdiq so'raladi (modal oynada nima ko'chishi aniq yozib beriladi).
+  // Ustoz setkasida qulflangan kataklar barcha bosqichlarda chetlab o'tiladi.
 
   function slotNumOf(slotId) {
     return sortedTimeslots.find((s) => s.id === slotId)?.lessonNumber ?? "?";
@@ -1036,6 +1052,7 @@ export default function SchedulePage({
           if (!slotUsable(cid, day, ts)) continue;
           if (!classFree(cid, day, ts.id)) continue;
           if (!teacherFree(l.teacherId, day, ts.id)) continue;
+          if (l.teacherId && teacherBlockedAt(l.teacherId, day, ts.id)) continue;
           if (!roomFree(l.roomId, day, ts.id)) continue;
           return { day, tsId: ts.id };
         }
@@ -1071,6 +1088,7 @@ export default function SchedulePage({
           if (!slotUsable(classId, day, ts)) continue;
           if (!classFree(classId, day, ts.id)) continue;
           if (!teacherFree(teacherId, day, ts.id)) continue;
+          if (teacherBlockedAt(teacherId, day, ts.id)) continue;
           doPlace(day, ts.id);
           done = true;
           break;
@@ -1086,6 +1104,7 @@ export default function SchedulePage({
         for (const ts of teachingSlots) {
           if (!slotUsable(classId, day, ts)) continue;
           if (!classFree(classId, day, ts.id)) continue;
+          if (teacherBlockedAt(teacherId, day, ts.id)) continue;
           const busy = (work[day][ts.id] || []).filter((l) => l.teacherId === teacherId || l.altTeacherId === teacherId);
           if (busy.length !== 1 || !isMovableLesson(busy[0])) continue;
           const home = homeFor(busy[0], day, ts.id);
@@ -1106,6 +1125,7 @@ export default function SchedulePage({
         for (const ts of teachingSlots) {
           if (!slotUsable(classId, day, ts)) continue;
           if (!teacherFree(teacherId, day, ts.id)) continue;
+          if (teacherBlockedAt(teacherId, day, ts.id)) continue;
           const here = (work[day][ts.id] || []).filter((l) => classIdsOf(l).includes(classId));
           if (here.length !== 1 || !isMovableLesson(here[0])) continue;
           const home = homeFor(here[0], day, ts.id);
@@ -1197,6 +1217,7 @@ export default function SchedulePage({
           for (const t of teacherList) {
             const tOff = new Set(Array.isArray(t.offDays) ? t.offDays : []);
             if (tOff.has(day)) continue;
+            if (teacherBlockedAt(t.id, day, ts.id)) continue;
             if (cell.some((l) => l.teacherId === t.id)) continue;
             if ((tLoad[t.id] || 0) + 1 > Number(t.maxWeeklyHours || 40)) continue;
             return { day, tsId: ts.id, teacherId: t.id };
@@ -1227,6 +1248,7 @@ export default function SchedulePage({
           if (day === exDay && ts.id === exTs) continue;
           if (!slotAllowsClass(ts, cid)) continue;
           if (classesHaveLunchAt(ts, [cid], lunchGroups, day)) continue;
+          if (l.teacherId && teacherBlockedAt(l.teacherId, day, ts.id)) continue;
           const cell = next[day][ts.id];
           if (cell.some((x) => classIdsOf(x).includes(cid))) continue;
           if (l.teacherId && cell.some((x) => x.teacherId === l.teacherId)) continue;
@@ -1251,6 +1273,7 @@ export default function SchedulePage({
           if (day === exDay && ts.id === exTs) continue;
           if (!slotAllowsClass(ts, cid)) continue;
           if (classesHaveLunchAt(ts, [cid], lunchGroups, day)) continue;
+          if (l.teacherId && teacherBlockedAt(l.teacherId, day, ts.id)) continue;
           const cell = next[day][ts.id];
           const classB = cell.find((x) => classIdsOf(x).includes(cid));
           const teacherB = l.teacherId ? cell.find((x) => x.teacherId === l.teacherId) : null;
@@ -1276,6 +1299,7 @@ export default function SchedulePage({
         for (const ts of teachingSlots) {
           if (!slotAllowsClass(ts, cid)) continue;
           if (classesHaveLunchAt(ts, [cid], lunchGroups, day)) continue;
+          if (teacherBlockedAt(t.id, day, ts.id)) continue;
           const cell = next[day][ts.id];
           if (cell.some((l) => l.teacherId === t.id)) continue;
           const blocker = cell.find((l) => classIdsOf(l).includes(cid));

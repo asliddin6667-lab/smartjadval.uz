@@ -142,6 +142,11 @@ export function checkPlace(ctx, unit, day, slot, ignore = new Set()) {
     if (Array.isArray(t?.offDays) && t.offDays.includes(day)) {
       errs.push({ code: "TEACHER_OFF", msg: `${tName(tid)}: ${day} — ustozning dam olish kuni` });
     }
+    // Ustoz setkasida qulflangan soat — bu katakka dars qo'yilmaydi
+    const bs = t?.blockedSlots;
+    if (bs && Array.isArray(bs[day]) && bs[day].includes(slot.id)) {
+      errs.push({ code: "TEACHER_BLOCKED", msg: `${tName(tid)}: bu soat Ustoz setkasida qulflangan — dars qo'yilmaydi` });
+    }
   });
 
   const cell = schedule?.[day]?.[slot.id] || [];
@@ -737,7 +742,7 @@ function buildSuggestions(ctx, src, dst, reasonObjs) {
   const srcTs = (ctx.timeslots || []).find((s) => s.id === src.slotId);
 
   const hardStop = reasonObjs.some((r) =>
-    ["NOT_TEACHING", "SHIFT", "CLASS_OFF", "TEACHER_OFF", "LUNCH", "NO_SLOT"].includes(r.code)
+    ["NOT_TEACHING", "SHIFT", "CLASS_OFF", "TEACHER_OFF", "TEACHER_BLOCKED", "LUNCH", "NO_SLOT"].includes(r.code)
   );
 
   if (!hardStop && dstTs && srcTs) {

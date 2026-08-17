@@ -1,0 +1,412 @@
+/* ————— USTOZ SETKASI (tav-) ————— */
+
+.tav-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tav-subtitle {
+  margin: 6px 0 0;
+  color: #64748b;
+  font-size: 14px;
+  max-width: 720px;
+}
+
+.tav-card {
+  padding: 18px;
+}
+
+.tav-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.tav-select-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.tav-select {
+  min-width: 260px;
+  padding: 9px 12px;
+  border: 2px solid #7c3aed;
+  border-radius: 10px;
+  font-size: 15px;
+  background: #fff;
+  color: #1e293b;
+  cursor: pointer;
+}
+
+.tav-btn-clear {
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  color: #334155;
+  border-radius: 10px;
+  padding: 9px 14px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.tav-btn-clear:hover {
+  background: #e2e8f0;
+}
+
+.tav-empty {
+  padding: 34px 16px;
+  text-align: center;
+  color: #64748b;
+  font-size: 15px;
+}
+
+/* ——— Statistika ——— */
+.tav-stats {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.tav-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 120px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.tav-stat-num {
+  font-size: 22px;
+  font-weight: 800;
+  color: #7c3aed;
+}
+
+.tav-stat-label {
+  font-size: 12px;
+  color: #64748b;
+  text-align: center;
+}
+
+.tav-warning {
+  background: #fef3c7;
+  border: 1px solid #f59e0b;
+  color: #92400e;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 14px;
+  margin-bottom: 12px;
+}
+
+/* ——— Setka jadvali ——— */
+.tav-grid-wrap {
+  overflow-x: auto;
+}
+
+.tav-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 4px;
+  min-width: 760px;
+}
+
+.tav-table th {
+  background: #f1f5f9;
+  border-radius: 10px;
+  padding: 8px 6px;
+  font-size: 13px;
+  color: #334155;
+  vertical-align: top;
+}
+
+.tav-th-slot {
+  width: 110px;
+}
+
+.tav-th-day {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.tav-th-off {
+  background: #f3f4f6;
+  color: #9ca3af;
+}
+
+.tav-th-note {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.tav-day-btn {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  border-radius: 8px;
+  padding: 3px 8px;
+  font-size: 11.5px;
+  cursor: pointer;
+  color: #475569;
+}
+.tav-day-btn:hover {
+  background: #ede9fe;
+  border-color: #7c3aed;
+  color: #6d28d9;
+}
+
+.tav-td-slot {
+  background: #f8fafc;
+  border-radius: 10px;
+  padding: 8px;
+  font-size: 12.5px;
+  color: #334155;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.tav-td-time {
+  display: block;
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 2px;
+}
+
+.tav-row-break .tav-td-break {
+  background: #fff7ed;
+  border: 1px dashed #fdba74;
+  border-radius: 10px;
+  text-align: center;
+  color: #c2410c;
+  font-size: 12.5px;
+  padding: 6px;
+}
+
+.tav-cell {
+  border-radius: 10px;
+  padding: 8px 6px;
+  min-width: 96px;
+  vertical-align: top;
+  cursor: pointer;
+  transition: box-shadow 0.15s, transform 0.08s;
+  user-select: none;
+}
+.tav-cell:active {
+  transform: scale(0.98);
+}
+
+.tav-cell-open {
+  background: #f0fdf4;
+  border: 1.5px solid #bbf7d0;
+}
+.tav-cell-open:hover {
+  box-shadow: 0 0 0 2px #86efac inset;
+}
+
+.tav-cell-locked {
+  background: #fef2f2;
+  border: 1.5px solid #fecaca;
+}
+.tav-cell-locked:hover {
+  box-shadow: 0 0 0 2px #fca5a5 inset;
+}
+
+.tav-cell-off {
+  background: #f3f4f6;
+  border: 1.5px solid #e5e7eb;
+  color: #9ca3af;
+  text-align: center;
+  cursor: default;
+}
+
+.tav-cell-top {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 4px;
+}
+
+.tav-lock-icon {
+  font-size: 13px;
+}
+
+.tav-lock-text {
+  font-size: 11px;
+  font-weight: 700;
+  color: #b91c1c;
+}
+
+.tav-lesson-chip {
+  background: #ede9fe;
+  border: 1px solid #ddd6fe;
+  color: #5b21b6;
+  border-radius: 7px;
+  padding: 2px 6px;
+  font-size: 11px;
+  margin-top: 3px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.tav-lesson-note {
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: #b91c1c;
+  font-style: italic;
+}
+
+/* ——— Legenda ——— */
+.tav-legend {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 14px;
+  font-size: 12.5px;
+  color: #475569;
+}
+
+.tav-dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 4px;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+
+.tav-dot-open {
+  background: #f0fdf4;
+  border: 1.5px solid #86efac;
+}
+
+.tav-dot-locked {
+  background: #fef2f2;
+  border: 1.5px solid #fca5a5;
+}
+
+.tav-dot-off {
+  background: #f3f4f6;
+  border: 1.5px solid #d1d5db;
+}
+
+.tav-legend-note {
+  color: #94a3b8;
+  font-style: italic;
+}
+
+/* ——— Mobil ——— */
+@media (max-width: 720px) {
+  .tav-card {
+    padding: 12px;
+  }
+  .tav-select {
+    min-width: 0;
+    width: 100%;
+  }
+  .tav-select-label {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+  }
+  .tav-stats {
+    gap: 8px;
+  }
+  .tav-stat {
+    min-width: 0;
+    flex: 1 1 40%;
+    padding: 8px 10px;
+  }
+  .tav-table {
+    min-width: 640px;
+  }
+  .tav-cell {
+    min-width: 84px;
+  }
+}
+
+/* ——— Dark mode ——— */
+body.dark-mode .tav-subtitle { color: #94a3b8; }
+body.dark-mode .tav-select {
+  background: #1e293b;
+  color: #e2e8f0;
+  border-color: #8b5cf6;
+}
+body.dark-mode .tav-btn-clear {
+  background: #1e293b;
+  border-color: #334155;
+  color: #cbd5e1;
+}
+body.dark-mode .tav-btn-clear:hover { background: #273548; }
+body.dark-mode .tav-empty { color: #94a3b8; }
+body.dark-mode .tav-stat {
+  background: #1e293b;
+  border-color: #334155;
+}
+body.dark-mode .tav-stat-num { color: #a78bfa; }
+body.dark-mode .tav-stat-label { color: #94a3b8; }
+body.dark-mode .tav-warning {
+  background: #3b2f10;
+  border-color: #b45309;
+  color: #fcd34d;
+}
+body.dark-mode .tav-table th {
+  background: #1e293b;
+  color: #cbd5e1;
+}
+body.dark-mode .tav-th-off {
+  background: #16202e;
+  color: #64748b;
+}
+body.dark-mode .tav-day-btn {
+  background: #0f172a;
+  border-color: #334155;
+  color: #94a3b8;
+}
+body.dark-mode .tav-day-btn:hover {
+  background: #2e1065;
+  border-color: #8b5cf6;
+  color: #c4b5fd;
+}
+body.dark-mode .tav-td-slot {
+  background: #1e293b;
+  color: #cbd5e1;
+}
+body.dark-mode .tav-td-time { color: #64748b; }
+body.dark-mode .tav-row-break .tav-td-break {
+  background: #2b1c0e;
+  border-color: #9a3412;
+  color: #fdba74;
+}
+body.dark-mode .tav-cell-open {
+  background: #0c2416;
+  border-color: #14532d;
+}
+body.dark-mode .tav-cell-open:hover { box-shadow: 0 0 0 2px #166534 inset; }
+body.dark-mode .tav-cell-locked {
+  background: #2a1215;
+  border-color: #7f1d1d;
+}
+body.dark-mode .tav-cell-locked:hover { box-shadow: 0 0 0 2px #991b1b inset; }
+body.dark-mode .tav-cell-off {
+  background: #16202e;
+  border-color: #1f2a3a;
+  color: #64748b;
+}
+body.dark-mode .tav-lock-text { color: #f87171; }
+body.dark-mode .tav-lesson-chip {
+  background: #2e1065;
+  border-color: #4c1d95;
+  color: #c4b5fd;
+}
+body.dark-mode .tav-lesson-note { color: #f87171; }
+body.dark-mode .tav-legend { color: #94a3b8; }
+body.dark-mode .tav-dot-open { background: #0c2416; border-color: #166534; }
+body.dark-mode .tav-dot-locked { background: #2a1215; border-color: #991b1b; }
+body.dark-mode .tav-dot-off { background: #16202e; border-color: #334155; }
+body.dark-mode .tav-legend-note { color: #64748b; }
