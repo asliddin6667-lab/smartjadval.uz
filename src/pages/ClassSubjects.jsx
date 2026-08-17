@@ -812,7 +812,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button className="btn btn-primary" onClick={() => { setPoolForm({ subjectId: langSubjects[0]?.id || sortedAllSubjects[0]?.id || "", classIds: [], teacherIds: [], weeklyHours: 5 }); setPoolOpen(true); }} disabled={!classes.length || !subjects.length}>🏊 Hovuz (daraja guruhi)</button>
           <button className="btn btn-secondary" onClick={applySmartForSelected} disabled={!selectedClassId || !subjects.length}>⚡ Mos fanlar</button>
-          <button className="btn btn-success" onClick={applySmartForAllClasses} disabled={!classes.length || !subjects.length}>⚡ Hammaga mos</button>
+          <button className="btn btn-success" onClick={applySmartForAllClasses} disabled={!classes.length || !subjects.length}>⚡ Standart soatlar</button>
           <button className="btn btn-primary" onClick={copyToAllClasses} disabled={!selectedClassId || !classes.length}>↗ Nusxalash</button>
           <button
             className="btn"
