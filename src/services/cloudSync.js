@@ -76,8 +76,8 @@ const MAX_RETRY = 3;
 const RETRY_DELAYS = [3000, 8000, 20000]; // 3s -> 8s -> 20s
 
 // Debounce: oddiy kutish va majburiy yuborish oralig'i
-const PUSH_DELAY = 8000;
-const PUSH_MAX_WAIT = 30000;
+const PUSH_DELAY = 1000;
+const PUSH_MAX_WAIT = 3000;
 
 // Blob formati versiyasi — sparse ko'rinishni tanish uchun
 const WIRE_VERSION = 3;
