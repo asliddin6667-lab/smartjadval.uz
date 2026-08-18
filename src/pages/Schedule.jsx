@@ -92,6 +92,7 @@ export default function SchedulePage({
   lunchGroups = [],
   schedule = {},
   classSubjects = {},
+  settings = {},
   setSchedule,
   toast,
 }) {
@@ -1455,6 +1456,8 @@ export default function SchedulePage({
       timeslots,
       lunchGroups,
       schedule,
+      schoolName: settings?.schoolName,
+      academicYear: settings?.academicYear,
       toast,
     });
   }

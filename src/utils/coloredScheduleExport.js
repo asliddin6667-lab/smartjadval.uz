@@ -6,17 +6,41 @@
 // Format talablari:
 //   - HAR SMENA — ALOHIDA LIST (varaq). Listda faqat o'sha smenaning sinflari
 //     va o'sha smenaning dars vaqtlari bo'ladi (bo'sh ustunlar chiqmaydi)
+//   - HAR SINF — BITTA USTUN. Xona uchun alohida ustun YO'Q: xona raqami
+//     fan nomi yonida qavs ichida, o'qituvchi bilan bitta katakda turadi:
+//         Matematika (12)
+//         Aliyev Ali
+//   - Sinf ustunlari qalin vertikal chiziq bilan bir-biridan ajratiladi
 //   - Dars raqami smena ichidagi tartib bilan: 1-dars, 2-dars … (global emas)
-//   - Bo'sh kataklar KO'RINMAYDI (chegarasiz, oq fon — setka chizilmaydi)
+//   - Bo'sh kataklar ichi ko'rinmaydi (oq fon), faqat sinf ajratkichi chiziladi
 //   - Butunlay bo'sh soat qatorlari chiqmaydi
 //   - Har kun boshida rangli ajratuvchi qator, kun nomi KATTA shriftda
 //   - Kun nomi chap chekkada VERTIKAL (qiya) yozuvda ham chiqadi
 //   - Obed/Tanaffus qatorlari faqat darslar orasida bo'lsa chiqadi
-//   - Har fan o'z rangida, guruhli darslar kichik qatorlarga bo'linadi
+//   - Chop etishga tayyor: sarlavha bandi, tor chekkalar, har betda takrorlanadigan
+//     sarlavha qatorlari (Print_Titles)
 
 import { DAYS } from './constants';
 import { loadStyledXLSX, hexToExcelRGB, readableTextRGB } from './excelUtils';
 import { isTeachingSlot, classHasLunchAt } from './scheduleGenerator';
+
+// ——— Chegara va rang palitrasi ———
+const HAIR = { style: 'thin', color: { rgb: 'CBD5E1' } };   // ichki nozik chiziq
+const SEP = { style: 'medium', color: { rgb: '1E293B' } };  // sinf ajratkichi
+const TITLE_BG = '0F172A';   // sarlavha bandi — to'q ko'k
+const SUB_BG = '1D4ED8';     // ostki sarlavha
+const DAY_BG = '4338CA';     // kun ajratuvchi qator
+const LEAD_BG = 'F1F5F9';    // Soat / Vaqt ustunlari foni
+
+// Sinf sarlavhalari — navbat bilan almashadigan to'q ranglar
+const CLASS_HEADS = [
+  { bg: '1E40AF', fg: 'FFFFFF' },
+  { bg: '047857', fg: 'FFFFFF' },
+  { bg: 'B45309', fg: 'FFFFFF' },
+  { bg: '7E22CE', fg: 'FFFFFF' },
+  { bg: 'BE123C', fg: 'FFFFFF' },
+  { bg: '0E7490', fg: 'FFFFFF' },
+];
 
 function lessonClassIds(lesson) {
   return Array.isArray(lesson.classIds) ? lesson.classIds : [lesson.classId].filter(Boolean);
@@ -104,7 +128,10 @@ function buildGroups(classes, timeslots) {
 
 // ——— Bitta varaq (bitta smena) yasash ———
 // Dars bo'lmasa null qaytaradi (bo'sh varaq qo'shilmaydi).
-function buildSheet(XLSX, { classes, timeslots, subjects, teachers, rooms, lunchGroups, schedule }) {
+function buildSheet(XLSX, {
+  classes, timeslots, subjects, teachers, rooms, lunchGroups, schedule,
+  title, subtitle,
+}) {
   const sortedTimeslots = [...timeslots].sort(
     (a, b) => Number(a.lessonNumber || 0) - Number(b.lessonNumber || 0)
   );
@@ -135,32 +162,36 @@ function buildSheet(XLSX, { classes, timeslots, subjects, teachers, rooms, lunch
   );
   if (!anyLesson) return null;
 
-  const LEAD = 3; // Kun | Soat | Vaqt
-  const totalCols = LEAD + classes.length * 2;
+  const LEAD = 3;                             // Kun | Soat | Vaqt
+  const HEAD_ROWS = 3;                        // sarlavha + ostki sarlavha + ustun nomlari
+  const totalCols = LEAD + classes.length;    // har sinf — BITTA ustun
   const aoa = [];
   const merges = [];
-  const fills = [];          // fan/xona/label kataklari { r, c, bg, fg }
+  const fills = [];          // fan/label kataklari { r, c, bg, fg }
   const bandRows = [];       // Obed/Tanaffus/Uyqu bandlari { r, bg, fg }
   const dayHeaderRows = [];  // kun ajratuvchi rangli qatorlar { r }
   const dayLabelSpans = [];  // chap chekkadagi vertikal kun yozuvi { start, end }
   const rowHpt = [];         // qator balandliklari
 
-  // 2 qatorli sarlavha: Kun | Soat | Vaqt | [har sinf: Fan/O'qituvchi | Auditoriya]
-  const h0 = ['Kun', 'Soat', 'Vaqt'];
-  const h1 = ['', '', ''];
-  classes.forEach((c) => {
-    h0.push(c.name, '');
-    h1.push("Fan / O'qituvchi", 'Auditoriya');
-  });
-  aoa.push(h0, h1);
-  rowHpt.push(24, 24);
-  for (let c = 0; c < LEAD; c++) merges.push({ s: { r: 0, c }, e: { r: 1, c } });
-  classes.forEach((_, ci) => {
-    const col = LEAD + ci * 2;
-    merges.push({ s: { r: 0, c: col }, e: { r: 0, c: col + 1 } });
-  });
+  // 0-qator: maktab nomi / hujjat sarlavhasi (butun en bo'ylab)
+  const titleRow = new Array(totalCols).fill('');
+  titleRow[0] = title;
+  aoa.push(titleRow);
+  rowHpt.push(34);
+  merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: totalCols - 1 } });
 
-  let r = 2;
+  // 1-qator: smena nomi / o'quv yili
+  const subRow = new Array(totalCols).fill('');
+  subRow[0] = subtitle;
+  aoa.push(subRow);
+  rowHpt.push(22);
+  merges.push({ s: { r: 1, c: 0 }, e: { r: 1, c: totalCols - 1 } });
+
+  // 2-qator: ustun nomlari — Kun | Soat | Vaqt | <sinflar>
+  aoa.push(['Kun', 'Soat', 'Vaqt', ...classes.map((c) => c.name)]);
+  rowHpt.push(28);
+
+  let r = HEAD_ROWS;
   DAYS.forEach((day) => {
     // Shu kunda qaysi soatlarda dars bor / obed belgisi bor
     const hasLesson = sortedTimeslots.map(
@@ -202,7 +233,7 @@ function buildSheet(XLSX, { classes, timeslots, subjects, teachers, rooms, lunch
         row[2] = timeLabel;
         row[LEAD] = ts.title || (ts.type === 'lunch' ? 'Tushlik vaqti' : 'Tanaffus');
         aoa.push(row);
-        rowHpt.push(24);
+        rowHpt.push(22);
         merges.push({ s: { r, c: LEAD }, e: { r, c: totalCols - 1 } });
         bandRows.push({ r, ...bandColor(ts) });
         r += 1;
@@ -228,12 +259,11 @@ function buildSheet(XLSX, { classes, timeslots, subjects, teachers, rooms, lunch
           items: sorted.map((l) => {
             const subj = getSubject(l.subjectId);
             const tName = getTeacher(l.teacherId)?.name || '';
+            const room = getRoom(l.roomId)?.name || '';
             const gp = (sorted.length > 1 && l.groupPart) ? l.groupPart + ': ' : '';
-            return {
-              fan: gp + (subj?.name || '') + (tName ? '\n' + tName : ''),
-              room: getRoom(l.roomId)?.name || '',
-              fill: subjColor(l),
-            };
+            // BITTA KATAK: 1-satr — fan (+ xona qavs ichida), 2-satr — o'qituvchi
+            const head = gp + (subj?.name || '') + (room ? ` (${room})` : '');
+            return { text: tName ? head + '\n' + tName : head, fill: subjColor(l) };
           }),
         };
       });
@@ -249,23 +279,19 @@ function buildSheet(XLSX, { classes, timeslots, subjects, teachers, rooms, lunch
           row[2] = timeLabel;
         }
         plans.forEach((p, ci) => {
-          const colFan = LEAD + ci * 2;
-          const colRoom = colFan + 1;
+          const col = LEAD + ci;
           if (p.kind === 'lessons') {
             if (sub < p.items.length) {
-              row[colFan] = p.items[sub].fan;
-              row[colRoom] = p.items[sub].room;
-              fills.push({ r: blockStart + sub, c: colFan, ...p.items[sub].fill });
-              fills.push({ r: blockStart + sub, c: colRoom, bg: 'FFFFFF', fg: '1F2937' });
+              row[col] = p.items[sub].text;
+              fills.push({ r: blockStart + sub, c: col, ...p.items[sub].fill });
             }
           } else if (sub === 0 && p.kind === 'label') {
-            row[colFan] = p.text;
-            fills.push({ r: blockStart, c: colFan, ...p.fill });
-            fills.push({ r: blockStart, c: colRoom, ...p.fill });
+            row[col] = p.text;
+            fills.push({ r: blockStart, c: col, ...p.fill });
           }
         });
         aoa.push(row);
-        rowHpt.push(42);
+        rowHpt.push(maxG > 1 ? 34 : 40);
       }
 
       if (maxG > 1) {
@@ -273,19 +299,14 @@ function buildSheet(XLSX, { classes, timeslots, subjects, teachers, rooms, lunch
         merges.push({ s: { r: blockStart, c: 2 }, e: { r: blockStart + maxG - 1, c: 2 } });
       }
       plans.forEach((p, ci) => {
-        const colFan = LEAD + ci * 2;
-        const colRoom = colFan + 1;
+        const col = LEAD + ci;
+        if (maxG <= 1) return;
         const gc = p.kind === 'lessons' ? p.items.length : 1;
-        if (p.kind === 'empty' && maxG > 1) {
-          // bo'sh katak — butun blok bo'ylab bitta ko'rinmas katak
-          merges.push({ s: { r: blockStart, c: colFan }, e: { r: blockStart + maxG - 1, c: colFan } });
-          merges.push({ s: { r: blockStart, c: colRoom }, e: { r: blockStart + maxG - 1, c: colRoom } });
-        } else if (gc <= 1 && p.kind !== 'empty' && maxG > 1) {
-          merges.push({ s: { r: blockStart, c: colFan }, e: { r: blockStart + maxG - 1, c: colFan } });
-          merges.push({ s: { r: blockStart, c: colRoom }, e: { r: blockStart + maxG - 1, c: colRoom } });
-        } else if (gc > 1 && gc < maxG) {
-          merges.push({ s: { r: blockStart + gc, c: colFan }, e: { r: blockStart + maxG - 1, c: colFan } });
-          merges.push({ s: { r: blockStart + gc, c: colRoom }, e: { r: blockStart + maxG - 1, c: colRoom } });
+        if (p.kind !== 'lessons' || gc <= 1) {
+          // bo'sh katak yoki bitta dars — butun blok bo'ylab yagona katak
+          merges.push({ s: { r: blockStart, c: col }, e: { r: blockStart + maxG - 1, c: col } });
+        } else if (gc < maxG) {
+          merges.push({ s: { r: blockStart + gc, c: col }, e: { r: blockStart + maxG - 1, c: col } });
         }
       });
       r += maxG;
@@ -303,91 +324,133 @@ function buildSheet(XLSX, { classes, timeslots, subjects, teachers, rooms, lunch
 
   // ——— Uslublar ———
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  const thin = { style: 'thin', color: { rgb: '9CA3AF' } };
-  const border = { top: thin, bottom: thin, left: thin, right: thin };
   const range = XLSX.utils.decode_range(ws['!ref']);
+  const cell = (R, C) => {
+    const ref = XLSX.utils.encode_cell({ r: R, c: C });
+    if (!ws[ref]) ws[ref] = { t: 's', v: '' };
+    return ws[ref];
+  };
+  const mid = { horizontal: 'center', vertical: 'center', wrapText: true };
 
-  // Baza uslub — CHEGARASIZ, oq fon (bo'sh kataklar ko'rinmaydi, setka yo'q)
-  for (let R = range.s.r; R <= range.e.r; R++) {
+  // Baza uslub: jadval oq fonda, gorizontal setka chizilmaydi.
+  // Sinf ustunlari esa har doim qalin vertikal chiziq bilan ajratiladi —
+  // katak bo'sh bo'lsa ham ustun chegarasi ko'rinib turadi.
+  for (let R = HEAD_ROWS; R <= range.e.r; R++) {
     for (let C = range.s.c; C <= range.e.c; C++) {
-      const ref = XLSX.utils.encode_cell({ r: R, c: C });
-      if (!ws[ref]) ws[ref] = { t: 's', v: '' };
-      ws[ref].s = { alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, font: { sz: 11 }, fill: { patternType: 'solid', fgColor: { rgb: 'FFFFFF' } } };
+      cell(R, C).s = {
+        alignment: mid,
+        font: { sz: 11 },
+        fill: { patternType: 'solid', fgColor: { rgb: 'FFFFFF' } },
+        border: C >= LEAD ? { left: SEP, right: SEP } : {},
+      };
     }
   }
 
-  // Sarlavha 0-qatori (havorang)
+  // 0-qator — hujjat sarlavhasi (to'q ko'k fon, katta oq shrift)
   for (let C = range.s.c; C <= range.e.c; C++) {
-    const ref = XLSX.utils.encode_cell({ r: 0, c: C });
-    ws[ref].s = { alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border, font: { bold: true, sz: 12, color: { rgb: '0F3D5C' } }, fill: { patternType: 'solid', fgColor: { rgb: '35E0F2' } } };
+    cell(0, C).s = {
+      alignment: { horizontal: 'center', vertical: 'center', wrapText: false },
+      font: { bold: true, sz: 18, color: { rgb: 'FFFFFF' } },
+      fill: { patternType: 'solid', fgColor: { rgb: TITLE_BG } },
+    };
   }
-  // 1-qator: Kun/Soat/Vaqt (havorang) + sub-sarlavhalar (sariq)
+  // 1-qator — ostki sarlavha (smena, o'quv yili)
+  for (let C = range.s.c; C <= range.e.c; C++) {
+    cell(1, C).s = {
+      alignment: { horizontal: 'center', vertical: 'center', wrapText: false },
+      font: { bold: true, sz: 12, color: { rgb: 'FFFFFF' } },
+      fill: { patternType: 'solid', fgColor: { rgb: SUB_BG } },
+    };
+  }
+  // 2-qator — ustun nomlari. Kun/Soat/Vaqt to'q kulrang, har sinf o'z rangida.
   for (let C = 0; C < LEAD; C++) {
-    const ref = XLSX.utils.encode_cell({ r: 1, c: C });
-    if (!ws[ref]) ws[ref] = { t: 's', v: '' };
-    ws[ref].s = { alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border, font: { bold: true, sz: 12, color: { rgb: '0F3D5C' } }, fill: { patternType: 'solid', fgColor: { rgb: '35E0F2' } } };
+    cell(2, C).s = {
+      alignment: mid,
+      border: { top: SEP, bottom: SEP, left: HAIR, right: HAIR },
+      font: { bold: true, sz: 12, color: { rgb: 'FFFFFF' } },
+      fill: { patternType: 'solid', fgColor: { rgb: '334155' } },
+    };
   }
-  for (let C = LEAD; C <= range.e.c; C++) {
-    const ref = XLSX.utils.encode_cell({ r: 1, c: C });
-    if (!ws[ref]) ws[ref] = { t: 's', v: '' };
-    ws[ref].s = { alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border, font: { bold: true, sz: 11, color: { rgb: '7A6A00' } }, fill: { patternType: 'solid', fgColor: { rgb: 'FFF200' } } };
-  }
+  classes.forEach((_, ci) => {
+    const head = CLASS_HEADS[ci % CLASS_HEADS.length];
+    cell(2, LEAD + ci).s = {
+      alignment: mid,
+      border: { top: SEP, bottom: SEP, left: SEP, right: SEP },
+      font: { bold: true, sz: 13, color: { rgb: head.fg } },
+      fill: { patternType: 'solid', fgColor: { rgb: head.bg } },
+    };
+  });
 
-  // Soat va Vaqt ustunlari — chegarali (sarlavhadan pastdagi barcha qatorlar)
-  for (let R = 2; R <= range.e.r; R++) {
+  // Soat va Vaqt ustunlari — chegarali, och fonda
+  for (let R = HEAD_ROWS; R <= range.e.r; R++) {
     for (let C = 1; C <= 2; C++) {
-      const ref = XLSX.utils.encode_cell({ r: R, c: C });
-      if (!ws[ref]) ws[ref] = { t: 's', v: '' };
-      ws[ref].s = { alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border, font: { bold: true, sz: 11, color: { rgb: '1F2937' } }, fill: { patternType: 'solid', fgColor: { rgb: 'F8FAFC' } } };
+      cell(R, C).s = {
+        alignment: mid,
+        border: { top: HAIR, bottom: HAIR, left: HAIR, right: SEP },
+        font: { bold: true, sz: 11, color: { rgb: '1F2937' } },
+        fill: { patternType: 'solid', fgColor: { rgb: LEAD_BG } },
+      };
     }
   }
 
   // Chap chekkadagi VERTIKAL kun yozuvi (och sariq, 90° buralgan, katta shrift)
   dayLabelSpans.forEach(({ start, end }) => {
     for (let R = start; R <= end; R++) {
-      const ref = XLSX.utils.encode_cell({ r: R, c: 0 });
-      if (!ws[ref]) ws[ref] = { t: 's', v: '' };
-      ws[ref].s = { alignment: { horizontal: 'center', vertical: 'center', textRotation: 90, wrapText: false }, border, font: { bold: true, sz: 14, color: { rgb: '92400E' } }, fill: { patternType: 'solid', fgColor: { rgb: 'FDE68A' } } };
+      cell(R, 0).s = {
+        alignment: { horizontal: 'center', vertical: 'center', textRotation: 90, wrapText: false },
+        border: { top: HAIR, bottom: HAIR, left: SEP, right: SEP },
+        font: { bold: true, sz: 14, color: { rgb: '92400E' } },
+        fill: { patternType: 'solid', fgColor: { rgb: 'FDE68A' } },
+      };
     }
   });
 
-  // Fan / xona / label kataklari (rangli, chegarali)
+  // Dars kataklari — fan rangida, ustun ajratkichi saqlanadi
   fills.forEach(({ r: R, c: C, bg, fg }) => {
-    const ref = XLSX.utils.encode_cell({ r: R, c: C });
-    if (!ws[ref]) ws[ref] = { t: 's', v: '' };
-    ws[ref].s = { alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border, font: { bold: true, sz: 11, color: { rgb: fg } }, fill: { patternType: 'solid', fgColor: { rgb: bg } } };
+    cell(R, C).s = {
+      alignment: mid,
+      border: { top: HAIR, bottom: HAIR, left: SEP, right: SEP },
+      font: { bold: true, sz: 11, color: { rgb: fg } },
+      fill: { patternType: 'solid', fgColor: { rgb: bg } },
+    };
   });
 
   // Obed / Tanaffus / Uyqu bandlari (butun en bo'ylab)
   bandRows.forEach(({ r: R, bg, fg }) => {
     for (let C = LEAD; C <= range.e.c; C++) {
-      const ref = XLSX.utils.encode_cell({ r: R, c: C });
-      if (!ws[ref]) ws[ref] = { t: 's', v: '' };
-      ws[ref].s = { alignment: { horizontal: 'center', vertical: 'center', wrapText: false }, border, font: { bold: true, sz: 14, color: { rgb: fg } }, fill: { patternType: 'solid', fgColor: { rgb: bg } } };
+      cell(R, C).s = {
+        alignment: { horizontal: 'center', vertical: 'center', wrapText: false },
+        border: { top: HAIR, bottom: HAIR, left: SEP, right: SEP },
+        font: { bold: true, sz: 12, color: { rgb: fg } },
+        fill: { patternType: 'solid', fgColor: { rgb: bg } },
+      };
     }
   });
 
   // KUN AJRATUVCHI QATORLAR — to'q ko'k fon, oq KATTA shrift (butun en bo'ylab)
   dayHeaderRows.forEach(({ r: R }) => {
     for (let C = range.s.c; C <= range.e.c; C++) {
-      const ref = XLSX.utils.encode_cell({ r: R, c: C });
-      if (!ws[ref]) ws[ref] = { t: 's', v: '' };
-      ws[ref].s = { alignment: { horizontal: 'center', vertical: 'center', wrapText: false }, border, font: { bold: true, sz: 16, color: { rgb: 'FFFFFF' } }, fill: { patternType: 'solid', fgColor: { rgb: '4338CA' } } };
+      cell(R, C).s = {
+        alignment: { horizontal: 'center', vertical: 'center', wrapText: false },
+        border: { top: SEP, bottom: SEP },
+        font: { bold: true, sz: 16, color: { rgb: 'FFFFFF' } },
+        fill: { patternType: 'solid', fgColor: { rgb: DAY_BG } },
+      };
     }
   });
 
   ws['!merges'] = merges;
   ws['!cols'] = [
+    { wch: 5 },
     { wch: 6 },
-    { wch: 6 },
-    { wch: 13 },
-    ...classes.flatMap((c) => [
-      { wch: Math.min(Math.max(String(c.name).length + 2, 20), 26) },
-      { wch: 14 },
-    ]),
+    { wch: 12 },
+    ...classes.map((c) => ({ wch: Math.min(Math.max(String(c.name).length + 6, 19), 24) })),
   ];
   ws['!rows'] = rowHpt.map((h) => ({ hpt: h }));
-  ws['!freeze'] = { xSplit: 3, ySplit: 2 };
+  // Eslatma: xlsx-js-style muzlatilgan panellarni (`!freeze`) YOZMAYDI — shuning
+  // uchun sarlavha qatorlari o'rniga Print_Titles bilan har betda takrorlanadi.
+  // Chop etish: tor chekkalar — bir betga ko'proq sinf sig'adi
+  ws['!margins'] = { left: 0.25, right: 0.25, top: 0.4, bottom: 0.4, header: 0.15, footer: 0.15 };
   return ws;
 }
 
@@ -399,6 +462,8 @@ export async function exportColoredSchedule({
   timeslots = [],
   lunchGroups = [],
   schedule = {},
+  schoolName = '',
+  academicYear = '',
   toast,
 }) {
   try {
@@ -418,16 +483,29 @@ export async function exportColoredSchedule({
     const wb = XLSX.utils.book_new();
     const used = new Set();
     const groups = buildGroups(classes, timeslots);
+    const title = String(schoolName || '').trim().toUpperCase() || 'DARS JADVALI';
+    const names = [];
     let added = 0;
 
     groups.forEach((g) => {
+      const parts = [g.name];
+      if (academicYear) parts.push(`${academicYear} o'quv yili`);
       const ws = buildSheet(XLSX, {
         classes: g.classes,
         timeslots: g.slots,
         subjects, teachers, rooms, lunchGroups, schedule,
+        title,
+        subtitle: parts.join(' · '),
       });
       if (!ws) return;
-      XLSX.utils.book_append_sheet(wb, ws, sheetName(g.name, used));
+      const name = sheetName(g.name, used);
+      XLSX.utils.book_append_sheet(wb, ws, name);
+      // Har bosma betda sarlavha qatorlari (1-3) qayta chiqsin
+      names.push({
+        Name: '_xlnm.Print_Titles',
+        Sheet: added,
+        Ref: `'${name.replace(/'/g, "''")}'!$1:$3`,
+      });
       added += 1;
     });
 
@@ -436,6 +514,7 @@ export async function exportColoredSchedule({
       return;
     }
 
+    wb.Workbook = { ...(wb.Workbook || {}), Names: names };
     XLSX.writeFile(wb, `dars_jadvali_rangli_${safeFileDate()}.xlsx`);
     toast?.(added > 1 ? `Excelga yuklandi — ${added} ta smena listi ✓` : 'Rangli jadval Excelga yuklandi ✓', 'success');
   } catch (e) {

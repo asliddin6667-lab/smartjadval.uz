@@ -240,6 +240,8 @@ export default function ImportExportPage({
   async function exportColoredMatrix() {
     await exportColoredSchedule({
       classes, subjects, teachers, rooms, timeslots, lunchGroups, schedule, toast,
+      schoolName: settings.schoolName || schoolName,
+      academicYear: settings.academicYear,
     });
   }
 

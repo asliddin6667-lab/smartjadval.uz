@@ -573,7 +573,7 @@ export default function App() {
       case "rooms": return <RoomsPage {...pageProps} setRooms={setRooms} />;
       case "timeslots": return <TimeslotsPage {...pageProps} setTimeslots={setTimeslots} shifts={shifts} setShifts={setShifts} />;
       case "lunchGroups": return <LunchGroupsPage {...pageProps} setLunchGroups={setLunchGroups} />;
-      case "schedule": return <SchedulePage {...pageProps} setSchedule={setSchedule} />;
+      case "schedule": return <SchedulePage {...pageProps} settings={settings} setSchedule={setSchedule} />;
       case "teacherReplace": return <TeacherReplacePage {...pageProps} setSchedule={setSchedule} setClassSubjects={setClassSubjects} />;
       case "analytics": return <AnalyticsPage {...pageProps} />;
       case "importExport": return <ImportExportPage {...pageProps} settings={settings} setSubjects={setSubjects} setTeachers={setTeachers} />;
