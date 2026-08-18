@@ -605,4 +605,4 @@ export function clearLocalCopy(userId) {
   for (const k of SYNC_KEYS) saveUserData(userId, k, EMPTY[k]);
 }
 
-export { SYNC_KEYS };
+export { SYNC_KEYS, EMPTY };
