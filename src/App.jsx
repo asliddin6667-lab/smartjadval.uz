@@ -33,8 +33,13 @@ import {
   syncOnLogin, schedulePush, flushPush, cleanupLegacyKeys, onSyncState,
 } from "./services/cloudSync";
 import { buildDemoSchoolData } from "./utils/demoData";
+import { isLocalOnly, announceMode } from "./services/devMode";
 
 const emptySettings = { schoolName: "", academicYear: "2024-2025" };
+
+// Lokal rejim (npm run dev) — bulut uzilgan, ma'lumot faqat shu brauzerda.
+// Qarang: src/services/devMode.js
+const LOCAL_ONLY = isLocalOnly();
 
 // =====================================================================
 //  NAVIGATSIYA (URL hash bilan)
@@ -208,6 +213,9 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [mobileNavOpen]);
+
+  // ——— Qaysi rejimda ishlayapmiz? (konsolga bir marta yoziladi) ———
+  useEffect(() => { announceMode(); }, []);
 
   // ——— Doimiy saqlash (persistent storage) ———
   useEffect(() => {
@@ -652,6 +660,23 @@ export default function App() {
           {renderPage()}
         </main>
       </div>
+
+      {/* Lokal rejim — bulut uzilgan. Faqat `npm run dev` da ko'rinadi. */}
+      {LOCAL_ONLY && (
+        <div
+          title="Ma'lumotlar faqat shu brauzerda saqlanmoqda. Supabase'dagi haqiqiy ma'lumotga tegilmaydi."
+          style={{
+            position: "fixed", bottom: 16, left: 16, zIndex: 2600,
+            display: "inline-flex", alignItems: "center", gap: 7,
+            height: 32, padding: "0 13px", borderRadius: 999,
+            background: "linear-gradient(135deg,#7c3aed,#4f46e5)", color: "#fff",
+            fontSize: 12, fontWeight: 800, pointerEvents: "none",
+            boxShadow: "0 4px 14px rgba(79,70,229,.35)",
+          }}
+        >
+          🔌 Lokal rejim — bulut uzilgan
+        </div>
+      )}
 
       {/* Fonda saqlanmoqda — kichik, ishga xalaqit bermaydigan indikator */}
       {bgSync && (

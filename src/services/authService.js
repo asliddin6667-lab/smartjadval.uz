@@ -224,6 +224,33 @@ export async function login(email, password, captchaToken) {
 }
 
 // ---------------------------------------------------------------------
+//  "HISOB ALLAQACHON BOR" HOLATINI ANIQLASH
+//
+//  MUAMMO: signUp so'rovi serverda BAJARILIB, javobi yo'lda yo'qolishi
+//  mumkin (mobil internet uzilishi, brauzer so'rovni qayta yuborishi).
+//  Bunda hisob YARATILGAN bo'ladi, lekin ilova xato ko'radi. Foydalanuvchi
+//  qayta bosadi va "Bu email oldin ro'yxatdan o'tgan" xabarini oladi —
+//  holbuki hisob aynan o'sha payt, o'sha so'rovdan yaratilgan.
+//
+//  YECHIM: aynan shu email+parol bilan kirib ko'ramiz. Kirsa — hisob
+//  shu foydalanuvchiniki, ro'yxatdan o'tish MUVAFFAQIYATLI hisoblanadi.
+//  Kirmasa — email haqiqatan boshqa birov tomonidan band qilingan.
+//
+//  ESLATMA: Supabase'da CAPTCHA yoqilgan bo'lsa bu tekshiruv ishlamaydi
+//  (Turnstile tokeni bir martalik, signUp'da sarflangan) — u holda
+//  avvalgidek oddiy xato xabari ko'rsatiladi.
+// ---------------------------------------------------------------------
+async function claimExistingAccount(email, password) {
+  try {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error || !data?.user?.id) return null;
+    return data.user.id;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------
 //  RO'YXATDAN O'TISH
 //  captchaToken — Turnstile widget'idan kelgan token (ixtiyoriy).
 // ---------------------------------------------------------------------
@@ -263,40 +290,62 @@ export async function registerUser(
     },
   });
 
+  const ALREADY_MSG =
+    "Bu email oldin ro'yxatdan o'tgan. \"Kirish\" bo'limidan kiring — " +
+    "parolni eslay olmasangiz, \"Parolni unutdingizmi?\" dan foydalaning.";
+
+  // Hisob egasining ID'si. signUp ishlamay qolgan, lekin hisob baribir
+  // yaratilgan holatlarda claimExistingAccount() uni topib beradi.
+  let userId = data?.user?.id || null;
+
   if (error) {
     if (isCaptchaError(error.message)) {
       throw new Error(CAPTCHA_ERR_MSG);
     }
-    if (/already registered|already exists/i.test(error.message)) {
-      throw new Error("Bu email oldin ro'yxatdan o'tgan");
+    if (/already registered|already exists|user_already_exists/i.test(error.message)) {
+      // Ehtimol hisobni AYNAN SHU ro'yxatdan o'tish yaratgan (javob yo'qolgan
+      // yoki so'rov qayta yuborilgan). Shu parol bilan kira olsak — hisob
+      // foydalanuvchiniki, ro'yxatdan o'tish muvaffaqiyatli.
+      userId = await claimExistingAccount(normalized, password);
+      if (!userId) throw new Error(ALREADY_MSG);
+    } else if (/fetch|network/i.test(error.message)) {
+      // Aloqa uzilgan — hisob serverda yaratilgan bo'lishi mumkin
+      userId = await claimExistingAccount(normalized, password);
+      if (!userId) throw new Error("Server bilan aloqa yo'q. Internetni tekshiring.");
+    } else {
+      throw new Error(error.message);
     }
-    if (/fetch|network/i.test(error.message)) {
-      throw new Error("Server bilan aloqa yo'q. Internetni tekshiring.");
-    }
-    throw new Error(error.message);
+  } else if (data?.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+    // Supabase'da "Confirm email" YOQIQ bo'lsa, mavjud email uchun xato
+    // qaytmaydi — email ro'yxatini fosh qilmaslik uchun identities'i bo'sh
+    // "soxta" user qaytariladi. Bu ham "hisob allaqachon bor" degani.
+    userId = await claimExistingAccount(normalized, password);
+    if (!userId) throw new Error(ALREADY_MSG);
   }
 
-  // Telefon + viloyat/tuman ma'lumotlarini profil qatoriga yozamiz.
-  // signUp foydalanuvchini vaqtincha kirgizib qo'yadi, shu sababli
-  // o'z qatorini yangilashga RLS ruxsat beradi.
-  if (data?.user?.id) {
-    // Telefon — asosiy ma'lumot, alohida yozamiz (viloyat ustunlari
-    // hali yaratilmagan bo'lsa ham telefon yo'qolmasin)
-    await supabase
-      .from("profiles")
-      .update({ phone: tel })
-      .eq("id", data.user.id);
-
-    // Viloyat/tuman — ustunlar mavjud bo'lsa yoziladi
-    const locPatch = {
-      region_name: region.trim(),
-      district_name: district.trim(),
-    };
-
-    // Agar shu tuman tizimda allaqachon yaratilgan bo'lsa —
-    // foydalanuvchini darhol o'sha tumanga bog'laymiz. Shunda tuman
-    // admini yangi maktabni hech qanday qo'shimcha ishsiz ko'radi.
+  // ——— Bu nuqtadan keyin hisob ANIQ mavjud ———
+  // Shu sababli quyidagi hech bir xato ro'yxatdan o'tishni "muvaffaqiyatsiz"
+  // qilib ko'rsatmasligi kerak: aks holda foydalanuvchi qayta urinadi va
+  // "bu email allaqachon ro'yxatdan o'tgan" xabariga duch keladi.
+  // Yozilmagan maydonlarni superadmin "Tahrirlash" orqali to'ldiradi.
+  if (userId) {
     try {
+      // Telefon — asosiy ma'lumot, alohida yozamiz (viloyat ustunlari
+      // hali yaratilmagan bo'lsa ham telefon yo'qolmasin)
+      await supabase
+        .from("profiles")
+        .update({ phone: tel })
+        .eq("id", userId);
+
+      // Viloyat/tuman — ustunlar mavjud bo'lsa yoziladi
+      const locPatch = {
+        region_name: region.trim(),
+        district_name: district.trim(),
+      };
+
+      // Agar shu tuman tizimda allaqachon yaratilgan bo'lsa —
+      // foydalanuvchini darhol o'sha tumanga bog'laymiz. Shunda tuman
+      // admini yangi maktabni hech qanday qo'shimcha ishsiz ko'radi.
       const { data: dRow } = await supabase
         .from("districts")
         .select("id")
@@ -304,23 +353,23 @@ export async function registerUser(
         .eq("region", region.trim())
         .maybeSingle();
       if (dRow?.id) locPatch.district_id = dRow.id;
-    } catch {
-      /* topilmasa — superadmin keyin qo'lda biriktiradi */
-    }
 
-    const { error: locErr } = await supabase
-      .from("profiles")
-      .update(locPatch)
-      .eq("id", data.user.id);
-    if (locErr) {
-      // Yozilmasa ro'yxatdan o'tish baribir muvaffaqiyatli —
-      // superadmin keyin "Tahrirlash" orqali o'rnatadi.
-      console.warn("Viloyat/tuman yozilmadi:", locErr.message);
+      const { error: locErr } = await supabase
+        .from("profiles")
+        .update(locPatch)
+        .eq("id", userId);
+      if (locErr) console.warn("Viloyat/tuman yozilmadi:", locErr.message);
+    } catch (e) {
+      console.warn("Profil ma'lumotlari to'liq yozilmadi:", e);
     }
   }
 
   // Eski oqim saqlansin: "Ro'yxatdan o'tdingiz, endi login qiling"
-  await supabase.auth.signOut();
+  try {
+    await supabase.auth.signOut();
+  } catch {
+    /* chiqolmasa ham ro'yxatdan o'tish muvaffaqiyatli */
+  }
   return true;
 }
 

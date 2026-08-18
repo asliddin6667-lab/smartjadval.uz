@@ -40,6 +40,7 @@
 // =====================================================================
 import { supabase } from "./supabaseClient";
 import { loadData, saveData, loadUserData, saveUserData } from "./storageService";
+import { isLocalOnly } from "./devMode";
 
 // Sinxronlanadigan kalitlar — App.jsx dagi saveUserData kalitlari bilan bir xil
 const SYNC_KEYS = [
@@ -300,6 +301,10 @@ export function cleanupLegacyKeys() {
 //  umuman yuklab olinmaydi. Kirish shu tufayli sezilarli tezlashadi.
 // ---------------------------------------------------------------------
 export async function pullFromCloud(userId, { skipIfUnchanged = false } = {}) {
+  // LOKAL REJIM: bulutga umuman so'rov yubormaymiz — mahalliy nusxa
+  // bulutdagi ma'lumot bilan ustidan yozilmasin.
+  if (isLocalOnly()) return { ok: false, reason: "local-only" };
+
   const meta = getMeta(userId);
 
   if (skipIfUnchanged && meta.cloudUpdatedAt) {
@@ -349,6 +354,13 @@ export async function pullFromCloud(userId, { skipIfUnchanged = false } = {}) {
 // ---------------------------------------------------------------------
 export async function pushToCloud(userId, { force = false } = {}) {
   if (!userId) return { ok: false, reason: "no-user" };
+
+  // LOKAL REJIM: yozish butunlay to'xtatiladi. `dirty` bayrog'iga ham
+  // tegilmaydi — bulutdagi ma'lumot o'z holicha, tegilmagan qoladi.
+  if (isLocalOnly()) {
+    emitState("idle");
+    return { ok: true, reason: "local-only" };
+  }
 
   const blob = collectLocal(userId);
   const hash = quickHash(JSON.stringify(blob));
@@ -437,6 +449,9 @@ function firePush() {
 export function schedulePush(userId, delay = PUSH_DELAY) {
   if (!userId) return;
 
+  // LOKAL REJIM: taymer ham qo'yilmaydi ("Saqlanmoqda..." chiqmaydi)
+  if (isLocalOnly()) return;
+
   pendingUserId = userId;
   if (!pendingSince) pendingSince = Date.now();
   emitState("pending");
@@ -451,6 +466,8 @@ export function schedulePush(userId, delay = PUSH_DELAY) {
 
 // Kutilayotgan yuborishni darhol bajarish (chiqishdan/yopishdan oldin)
 export async function flushPush() {
+  if (isLocalOnly()) return { ok: true, reason: "local-only" };
+
   if (pushTimer) {
     clearTimeout(pushTimer);
     pushTimer = null;
@@ -502,6 +519,7 @@ function handleOnline() {
 }
 
 export function bindOnlineRetry(userId) {
+  if (isLocalOnly()) return; // lokal rejimda qayta yuborish ham kerak emas
   onlineUserId = userId || null;
   if (onlineBound || typeof window === "undefined") return;
   window.addEventListener("online", handleOnline);
@@ -527,6 +545,9 @@ export function unbindOnlineRetry() {
 // ---------------------------------------------------------------------
 export async function syncOnLogin(user) {
   if (!user?.id) return { action: "skip", reason: "no-user" };
+
+  // LOKAL REJIM: na tortish, na yuborish — ma'lumot faqat shu brauzerda
+  if (isLocalOnly()) return { action: "skip", reason: "local-only" };
 
   // Demo hisob bulutga yozilmaydi — demo ma'lumotlari mahalliy qoladi
   if (user.email === DEMO_EMAIL) return { action: "skip", reason: "demo" };
