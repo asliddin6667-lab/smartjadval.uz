@@ -11,7 +11,11 @@ export default function ClassesPage({ classes, setClasses, toast }) {
   const [confirmClearAll, setConfirmClearAll] = useState(false);
   const [form, setForm] = useState({ name: "", studentCount: "", headTeacher: "", offDays: [], eduLang: "uz" });
   const [autoForm, setAutoForm] = useState({ grade: 1, count: 4, studentCount: "", headTeacher: "", eduLang: "uz" });
-  const [allCounts, setAllCounts] = useState(() => Object.fromEntries(Array.from({ length: 11 }, (_, i) => [i + 1, 4])));
+  const [allCounts, setAllCounts] = useState(() => Object.fromEntries(Array.from({ length: 11 }, (_, i) => [i + 1, ""])));
+
+  // 1..11 uchun kiritilgan parallel sonlaridan jami nechta sinf chiqishini hisoblaymiz
+  const allTotal = Array.from({ length: 11 }, (_, i) => i + 1)
+    .reduce((sum, grade) => sum + Math.min(CLASS_LETTERS.length, Math.max(0, Number(allCounts[grade]) || 0)), 0);
 
   const filtered = classes.filter(c =>
     c.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -140,7 +144,6 @@ export default function ClassesPage({ classes, setClasses, toast }) {
                 <div style={{ fontWeight: 800, fontSize: 16 }}>⚡ Avtomatik sinf yaratish</div>
                 <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>1-A, 1-B, 1-C kabi sinflarni bir bosishda qo'shing</div>
               </div>
-              <button className="btn btn-success" onClick={generateAllGrades}>1 dan 11 gacha yaratish</button>
             </div>
 
             <div className="form-row" style={{ gridTemplateColumns: "1fr 1fr 1fr 1fr" }}>
@@ -180,17 +183,30 @@ export default function ClassesPage({ classes, setClasses, toast }) {
               <button className="btn btn-primary" onClick={generateOneGrade}>Shu sinfni yaratish</button>
             </div>
 
-            <div style={{ marginTop: 18 }}>
-              <div className="form-label">1 dan 11 gacha yaratish uchun parallel sonlari</div>
+            <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid var(--card-border)" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
+                <div>
+                  <div className="form-label" style={{ marginBottom: 2 }}>1 dan 11 gacha yaratish uchun parallel sonlari</div>
+                  <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                    {allTotal > 0
+                      ? `Jami ${allTotal} ta sinf yaratiladi`
+                      : "Kerakli sinflar uchun parallel sonini kiriting — bo'sh qolgani yaratilmaydi"}
+                  </div>
+                </div>
+                <button className="btn btn-success" onClick={generateAllGrades} disabled={allTotal === 0}
+                  style={{ whiteSpace: "nowrap", opacity: allTotal === 0 ? 0.55 : 1, cursor: allTotal === 0 ? "not-allowed" : "pointer" }}>
+                  1 dan 11 gacha yaratish
+                </button>
+              </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(90px, 1fr))", gap: 8 }}>
                 {Array.from({ length: 11 }, (_, i) => i + 1).map(grade => (
                   <div key={grade}>
                     <label style={{ fontSize: 11, color: "var(--text-secondary)" }}>{grade}-sinf</label>
-                    <input className="form-control" type="number" min="0" max={CLASS_LETTERS.length} value={allCounts[grade]}
+                    <input className="form-control" type="number" min="0" max={CLASS_LETTERS.length} placeholder="—" value={allCounts[grade]}
                       onChange={e => setAllCounts({ ...allCounts, [grade]: e.target.value })}
                       onBlur={e => {
                         const v = e.target.value;
-                        if (v === "") return; // bo'sh = 0 (bu sinf yaratilmaydi)
+                        if (v === "") return; // bo'sh = yaratilmaydi
                         setAllCounts(prev => ({ ...prev, [grade]: Math.min(CLASS_LETTERS.length, Math.max(0, Number(v) || 0)) }));
                       }} />
                   </div>
