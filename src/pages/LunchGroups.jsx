@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import ConfirmModal from "../components/ConfirmModal";
 import { genId } from "../utils/helpers";
 import { DAYS, TIME_TYPES, typeOfGroup } from "../utils/constants";
@@ -14,8 +14,42 @@ const DEFAULT_NAMES = {
 
 const DAY_SHORT = { Dushanba: "Du", Seshanba: "Se", Chorshanba: "Chor", Payshanba: "Pay", Juma: "Ju", Shanba: "Sha" };
 
-export default function LunchGroupsPage({ classes, timeslots = [], lunchGroups, setLunchGroups, toast }) {
+const NO_SHIFT = "__no_shift__";
+
+export default function LunchGroupsPage({ classes, timeslots = [], shifts = [], lunchGroups, setLunchGroups, toast }) {
   const teachingSlots = [...timeslots].filter(isTeachingSlot).sort((a, b) => Number(a.lessonNumber) - Number(b.lessonNumber));
+
+  // ——— DARS SOATLARINI SMENALARGA BO'LISH ———
+  // Ekranda har smena o'z ichida 1-dars, 2-dars … deb ko'rsatiladi
+  // (ichkarida global lessonNumber saqlanadi — generator shunga tayanadi)
+  const slotGroups = useMemo(() => {
+    const map = new Map();
+    const none = [];
+    teachingSlots.forEach((t) => {
+      if (t.shiftId) {
+        if (!map.has(t.shiftId)) {
+          const sh = (shifts || []).find((x) => x.id === t.shiftId);
+          map.set(t.shiftId, { id: t.shiftId, name: t.shiftName || sh?.name || "Smena", slots: [] });
+        }
+        map.get(t.shiftId).slots.push(t);
+      } else {
+        none.push(t);
+      }
+    });
+    const out = [];
+    (shifts || []).forEach((sh) => { if (map.has(sh.id)) { out.push(map.get(sh.id)); map.delete(sh.id); } });
+    map.forEach((g) => out.push(g));
+    if (none.length) out.push({ id: NO_SHIFT, name: out.length ? "Smenasiz vaqtlar" : "Dars soatlari", slots: none });
+    out.forEach((g) => { g.range = g.slots.length ? `${g.slots[0].startTime}–${g.slots[g.slots.length - 1].endTime}` : "—"; });
+    return out;
+  }, [teachingSlots, shifts]);
+
+  // Dars soatining smena ichidagi raqami: 1, 2, 3 …
+  const slotNumById = useMemo(() => {
+    const m = new Map();
+    slotGroups.forEach((g) => g.slots.forEach((ts, i) => m.set(ts.id, Number(ts.shiftLessonNumber) || i + 1)));
+    return m;
+  }, [slotGroups]);
   const [showModal, setShowModal] = useState(false);
   const [editItem, setEditItem] = useState(null);
   const [deleteId, setDeleteId] = useState(null);
@@ -60,6 +94,16 @@ export default function LunchGroupsPage({ classes, timeslots = [], lunchGroups, 
       timeslotIds: prev.timeslotIds.includes(tsId)
         ? prev.timeslotIds.filter((id) => id !== tsId)
         : [...prev.timeslotIds, tsId],
+    }));
+  }
+
+  // Butun smenani belgilash yoki tozalash
+  function toggleSlotGroup(ids, on) {
+    setForm((prev) => ({
+      ...prev,
+      timeslotIds: on
+        ? [...new Set([...prev.timeslotIds, ...ids])]
+        : prev.timeslotIds.filter((id) => !ids.includes(id)),
     }));
   }
 
@@ -115,8 +159,13 @@ export default function LunchGroupsPage({ classes, timeslots = [], lunchGroups, 
     if (Array.isArray(g.timeslotIds) && g.timeslotIds.length) {
       const days = Array.isArray(g.days) && g.days.length ? g.days : DAYS;
       const dayTxt = days.length === DAYS.length ? "Har kuni" : days.map((d) => DAY_SHORT[d] || d).join(", ");
-      const nums = teachingSlots.filter((ts) => g.timeslotIds.includes(ts.id)).map((ts) => ts.lessonNumber);
-      return `${dayTxt} · ${nums.join(",")}-dars${nums.length > 1 ? "lar" : ""}`;
+      const parts = slotGroups.map((grp) => {
+        const nums = grp.slots.filter((ts) => g.timeslotIds.includes(ts.id)).map((ts) => slotNumById.get(ts.id));
+        if (!nums.length) return null;
+        const txt = `${nums.join(",")}-dars${nums.length > 1 ? "lar" : ""}`;
+        return slotGroups.length > 1 ? `${grp.name}: ${txt}` : txt;
+      }).filter(Boolean);
+      return `${dayTxt} · ${parts.join(" | ")}`;
     }
     return `${g.startTime}–${g.endTime}`; // eski format
   }
@@ -241,19 +290,48 @@ export default function LunchGroupsPage({ classes, timeslots = [], lunchGroups, 
                 {teachingSlots.length === 0 ? (
                   <div className="alert alert-warning">Avval "Dars vaqtlari" bo'limida dars soatlarini kiriting</div>
                 ) : (
-                  <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
-                    {teachingSlots.map((ts) => {
-                      const on = form.timeslotIds.includes(ts.id);
+                  <div style={{ display: "grid", gap: 11 }}>
+                    {slotGroups.length > 1 && (
+                      <div style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>
+                        Har smena o'z ichida <b>1-dars, 2-dars…</b> deb raqamlanadi — kerakli smenadan tanlang.
+                      </div>
+                    )}
+                    {slotGroups.map((grp) => {
+                      const ids = grp.slots.map((ts) => ts.id);
+                      const allOn = ids.every((id) => form.timeslotIds.includes(id));
                       return (
-                        <button key={ts.id} type="button" onClick={() => toggleSlot(ts.id)} style={{
-                          padding: "8px 12px", borderRadius: 11, cursor: "pointer", fontWeight: 800, fontSize: 12.5,
-                          border: on ? "2px solid transparent" : "2px solid #cbd5e1", lineHeight: 1.35, textAlign: "center",
-                          background: on ? "linear-gradient(135deg,#f59e0b,#d97706)" : "transparent",
-                          color: on ? "#fff" : "var(--text-secondary)", transition: "all .15s",
-                        }}>
-                          {ts.lessonNumber}-dars
-                          <div style={{ fontSize: 10.5, fontWeight: 700, opacity: .85 }}>{ts.startTime}–{ts.endTime}</div>
-                        </button>
+                        <div key={grp.id} style={{ border: "1px solid var(--card-border)", borderRadius: 12, padding: "10px 12px 12px" }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap", marginBottom: 9 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+                              <span style={{
+                                fontSize: 13, fontWeight: 800, padding: "4px 12px", borderRadius: 999,
+                                background: "var(--accent-light)", color: "var(--accent)",
+                              }}>{grp.name}</span>
+                              <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text-secondary)" }}>
+                                🕐 {grp.slots.length} dars · {grp.range}
+                              </span>
+                            </div>
+                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => toggleSlotGroup(ids, !allOn)}>
+                              {allOn ? "Tozalash" : "Hammasi"}
+                            </button>
+                          </div>
+                          <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+                            {grp.slots.map((ts) => {
+                              const on = form.timeslotIds.includes(ts.id);
+                              return (
+                                <button key={ts.id} type="button" onClick={() => toggleSlot(ts.id)} style={{
+                                  padding: "8px 12px", borderRadius: 11, cursor: "pointer", fontWeight: 800, fontSize: 12.5,
+                                  border: on ? "2px solid transparent" : "2px solid #cbd5e1", lineHeight: 1.35, textAlign: "center",
+                                  background: on ? "linear-gradient(135deg,#f59e0b,#d97706)" : "transparent",
+                                  color: on ? "#fff" : "var(--text-secondary)", transition: "all .15s",
+                                }}>
+                                  {slotNumById.get(ts.id)}-dars
+                                  <div style={{ fontSize: 10.5, fontWeight: 700, opacity: .85 }}>{ts.startTime}–{ts.endTime}</div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
                       );
                     })}
                   </div>
