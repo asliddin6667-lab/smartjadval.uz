@@ -141,7 +141,7 @@ anon kalit kodda hardcoded (env fayl yo'q, GitHub Pages statik hosting).
 ishlamaydi.
 
 Jadvallar: `profiles`, `schools`, `districts`, `schedule_submissions`, `notifications`,
-`audit_log`, `district_excel_data`.
+`audit_log`, `district_excel_data`, `standard_hours`.
 RPC: `admin_set_subscription`, `admin_set_role`, `admin_set_status`, `admin_create_user`,
 `admin_delete_user`, `admin_set_district`, `admin_set_location`, `admin_set_phone`,
 `admin_update_profile`, `admin_revoke_subscription`, `clear_password_change_flag`.
@@ -150,6 +150,19 @@ konstantasi authService va districtService'da takrorlangan).
 
 Xavfsizlik butunlay RLS va `security definer` funksiyalarda — frontend faqat so'rov
 yuboradi, ruxsatni server tekshiradi.
+
+### Standart soatlar (superadmin)
+
+Superadmin "Standart soatlar" sahifasida ([StandardHours.jsx](src/pages/StandardHours.jsx))
+qaysi sinfda qaysi fan necha soat bo'lishini belgilaydi. Ma'lumot `standard_hours`
+jadvalida bitta JSONB qatorda (`id = global`) yotadi va HAMMA foydalanuvchiga o'qish
+uchun ochiq (yozish — faqat superadmin, RLS `is_admin()`).
+[standardHoursService.js](src/services/standardHoursService.js) uni localStorage'ga
+keshlaydi; bulut ochilmasa kesh, u ham bo'lmasa [curriculum.js](src/utils/curriculum.js)
+dagi `DEFAULT_CURRICULUM` ishlatiladi. "Sinf fanlari" sahifasidagi "⚡ Standart soatlar"
+tugmasi shu rejani qo'llaydi (fan nomi `aliases` orqali solishtiriladi).
+Jadval SQL i: [standard_hours_setup.sql](standard_hours_setup.sql) — Supabase SQL
+Editor'da bir marta ishga tushiriladi.
 
 ⚠️ [supabase_setup.sql](supabase_setup.sql) faqat `profiles` + admin RPC larini qamraydi.
 `schools`, `districts`, `district_excel_data` va tuman modulining migratsiyalari repoda

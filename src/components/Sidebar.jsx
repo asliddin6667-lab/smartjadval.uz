@@ -102,6 +102,15 @@ const ICONS = {
       <path d="M3 15h18" />
     </svg>
   ),
+  standardHours: (
+    <svg {...svgProps}>
+      <path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3" />
+      <path d="M16 3h5v5" />
+      <path d="M9 15h4" />
+      <path d="M9 11h7" />
+      <path d="m14 9 7-6" />
+    </svg>
+  ),
   users: (
     <svg {...svgProps}>
       <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
@@ -152,6 +161,7 @@ const NAV_ITEMS = [
   { id: "analytics", label: "Jadval tahlili" },
   { id: "importExport", label: "Excel" },
   { id: "users", label: "Foydalanuvchilar", superOnly: true },
+  { id: "standardHours", label: "Standart soatlar", superOnly: true },
   { id: "settings", label: "Sozlamalar" },
 ];
 
@@ -287,7 +297,7 @@ export default function Sidebar({
 
         {!collapsed && <div className="nav-section-title">Tizim</div>}
         {visibleItems
-          .filter((i) => ["users", "settings"].includes(i.id))
+          .filter((i) => ["users", "standardHours", "settings"].includes(i.id))
           .map(renderItem)}
       </nav>
 

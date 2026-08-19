@@ -15,6 +15,7 @@ import ClassSubjectsPage from "./pages/ClassSubjects";
 import RoomsPage from "./pages/Rooms";
 import TimeslotsPage from "./pages/TimeSlots";
 import LunchGroupsPage from "./pages/LunchGroups";
+import StandardHoursPage from "./pages/StandardHours";
 import SchedulePage from "./pages/Schedule";
 import TeacherReplacePage from "./pages/TeacherReplace";
 import TeacherAvailabilityPage from "./pages/TeacherAvailability";
@@ -56,7 +57,7 @@ const LOCAL_ONLY = isLocalOnly();
 const PAGE_IDS = [
   "dashboard", "classes", "subjects", "teachers", "teacherAvailability", "classSubjects",
   "rooms", "timeslots", "lunchGroups", "schedule", "teacherReplace",
-  "analytics", "importExport", "users", "settings",
+  "analytics", "importExport", "users", "standardHours", "settings",
 ];
 
 function pageFromHash() {
@@ -314,8 +315,9 @@ export default function App() {
       // Oxirgi ochilgan bo'lim tiklanadi (URL hash ustunroq).
       // "users" faqat superadmin uchun — boshqasiga dashboard beriladi.
       const restored = initialPage();
+      const superOnlyPages = ["users", "standardHours"];
       setActivePage(
-        restored === "users" && currentUser.role !== "superadmin" ? "dashboard" : restored
+        superOnlyPages.includes(restored) && currentUser.role !== "superadmin" ? "dashboard" : restored
       );
       setPaywallOpen(false);
       setShowPayPage(false);
@@ -578,6 +580,7 @@ export default function App() {
       case "analytics": return <AnalyticsPage {...pageProps} />;
       case "importExport": return <ImportExportPage {...pageProps} settings={settings} setSubjects={setSubjects} setTeachers={setTeachers} />;
       case "users": return currentUser.role === "superadmin" ? <UsersPage {...pageProps} /> : <DashboardPage {...pageProps} setActivePage={handleNavigate} />;
+      case "standardHours": return currentUser.role === "superadmin" ? <StandardHoursPage {...pageProps} /> : <DashboardPage {...pageProps} setActivePage={handleNavigate} />;
       case "settings": return (
         <SettingsPage
           settings={settings} setSettings={setSettings}

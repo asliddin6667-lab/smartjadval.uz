@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   PRIMARY_SUBJECT_NAMES, MIDDLE_SUBJECT_NAMES, HIGH_SUBJECT_NAMES,
   PRIMARY_SUBJECT_NAMES_RU, MIDDLE_SUBJECT_NAMES_RU, HIGH_SUBJECT_NAMES_RU
 } from "../utils/constants";
 import { sortByName, cmpName } from "../utils/sortHelpers";
+import { normName, buildCurriculumIndex, hoursFromRow, namesForGrade as curriculumNamesForGrade } from "../utils/curriculum";
+import { getCachedCurriculum, fetchStandardHours } from "../services/standardHoursService";
 import "../styles/cs-mobile.css";
 
 function teacherSubjectIds(teacher) {
@@ -55,7 +57,8 @@ function cloneShared(shared = {}) {
   return out;
 }
 
-function namesForGrade(grade, lang = "uz") {
+// Zaxira ro'yxatlar (reja qamramagan holatlar uchun)
+function fallbackNamesForGrade(grade, lang = "uz") {
   if (lang === "ru") {
     if (grade >= 1 && grade <= 4) return PRIMARY_SUBJECT_NAMES_RU;
     if (grade >= 5 && grade <= 8) return MIDDLE_SUBJECT_NAMES_RU;
@@ -66,93 +69,6 @@ function namesForGrade(grade, lang = "uz") {
   return HIGH_SUBJECT_NAMES;
 }
 
-/* ===================================================================
-   2025-2026 o'quv yili TAYANCH O'QUV REJA (o'zbek tilidagi maktablar)
-   Maktabgacha va maktab ta'limi vaziri 2025-yil 10-apreldagi
-   121-son buyrug'iga 1-ILOVA.
-   h = { sinf: haftalik soat }.  Kasr soatlar (1,5 / 0,5) generator uchun
-   butun songa yaxlitlanadi (Math.round) — quyidagi curriculumHours() ga qarang.
-=================================================================== */
-const CURRICULUM_UZ = [
-  // I. Filologiya fanlari
-  { name: "Ona tili", aliases: ["ona tili"], h: { 1: 4, 2: 4, 3: 4, 4: 4, 5: 4, 6: 4, 7: 3, 8: 3, 9: 3, 10: 2, 11: 2 } },
-  { name: "O'qish savodxonligi", aliases: ["o'qish savodxonligi", "alifbe", "o'qish"], h: { 1: 4, 2: 3, 3: 3, 4: 3 } },
-  { name: "Adabiyot", aliases: ["adabiyot"], h: { 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 2, 11: 2 } },
-  { name: "Rus tili", aliases: ["rus tili"], h: { 2: 2, 3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 2, 11: 2 } },
-  { name: "Chet tili", aliases: ["chet tili", "ingliz tili", "nemis tili", "fransuz tili", "xorijiy til"], h: { 1: 1, 2: 2, 3: 2, 4: 2, 5: 4, 6: 4, 7: 4, 8: 3, 9: 3, 10: 2, 11: 2 } },
-
-  // II. Ijtimoiy fanlar
-  { name: "Tarixdan hikoyalar", aliases: ["tarixdan hikoyalar"], h: { 5: 2 } },
-  { name: "Qadimgi dunyo tarixi", aliases: ["qadimgi dunyo tarixi"], h: { 6: 2 } },
-  { name: "O'zbekiston tarixi", aliases: ["o'zbekiston tarixi"], h: { 7: 2, 8: 2, 9: 2, 10: 1, 11: 1 } },
-  { name: "Jahon tarixi", aliases: ["jahon tarixi"], h: { 7: 1, 8: 1, 9: 1, 10: 1, 11: 1 } },
-  { name: "Davlat va huquq asoslari", aliases: ["davlat va huquq asoslari", "huquq asoslari"], h: { 8: 1, 9: 1, 10: 1, 11: 1 } },
-  { name: "Tarbiya", aliases: ["tarbiya"], h: { 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1, 8: 1, 9: 1, 10: 1, 11: 1 } },
-
-  // III. Aniq fanlar
-  { name: "Matematika", aliases: ["matematika"], h: { 1: 5, 2: 5, 3: 5, 4: 5, 5: 5, 6: 5, 7: 5 } },
-  { name: "Algebra", aliases: ["algebra"], h: { 8: 3, 9: 3, 10: 3, 11: 3 } },
-  { name: "Geometriya", aliases: ["geometriya"], h: { 8: 2, 9: 2, 10: 2, 11: 2 } },
-  { name: "Informatika va axborot texnologiyalari", aliases: ["informatika va axborot texnologiyalari", "informatika", "informatika va at", "axborot texnologiyalari"], h: { 1: 1, 2: 1, 3: 1, 5: 1, 6: 1, 7: 1, 8: 1, 9: 2, 10: 2, 11: 2 } },
-
-  // IV. Tabiiy va iqtisodiy fanlar
-  { name: "Fizika", aliases: ["fizika"], h: { 7: 2, 8: 2, 9: 2, 10: 2, 11: 2 } },
-  { name: "Astronomiya", aliases: ["astronomiya", "astranomiya"], h: { 11: 1 } },
-  { name: "Kimyo", aliases: ["kimyo"], h: { 7: 2, 8: 2, 9: 2, 10: 2, 11: 2 } },
-  { name: "Biologiya", aliases: ["biologiya"], h: { 7: 2, 8: 2, 9: 2, 10: 2, 11: 2 } },
-  { name: "Geografiya", aliases: ["geografiya"], h: { 7: 2, 8: 1.5, 9: 1.5, 10: 2 } },
-  { name: "Iqtisodiy bilim asoslari", aliases: ["iqtisodiy bilim asoslari", "iqtisodiyot asoslari"], h: { 8: 0.5, 9: 0.5 } },
-  { name: "Tadbirkorlik asoslari", aliases: ["tadbirkorlik asoslari"], h: { 11: 1 } },
-  { name: "Tabiiy fanlar", aliases: ["tabiiy fanlar", "tabiiy fanlar science", "science", "tabiatshunoslik"], h: { 1: 1, 2: 1, 3: 1, 4: 2, 5: 2, 6: 3 } },
-
-  // V. Amaliy fanlar
-  { name: "Musiqa madaniyati", aliases: ["musiqa madaniyati", "musiqa"], h: { 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1 } },
-  { name: "Tasviriy san'at", aliases: ["tasviriy san'at", "tasviriy sanat"], h: { 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1 } },
-  { name: "Chizmachilik", aliases: ["chizmachilik"], h: { 8: 1, 9: 1 } },
-  { name: "Texnologiya", aliases: ["texnologiya", "mehnat", "mehnat ta'limi", "texnologiya ta'limi"], h: { 1: 1, 2: 1, 3: 1, 4: 1, 5: 2, 6: 2, 7: 2, 8: 1, 9: 1 } },
-  { name: "Jismoniy tarbiya", aliases: ["jismoniy tarbiya", "jismoniy madaniyat"], h: { 1: 1, 2: 2, 3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 2, 11: 2 } },
-  { name: "Chaqiruvga qadar boshlang'ich tayyorgarlik", aliases: ["chaqiruvga qadar boshlang'ich tayyorgarlik", "chqbt", "chaqiruvgacha boshlang'ich tayyorgarlik"], h: { 10: 2, 11: 2 } },
-];
-
-// Fan nomlarini solishtirish uchun: apostroflar, katta-kichik harf,
-// ortiqcha bo'shliq va qavslar hisobga olinmaydi.
-function normName(v) {
-  return String(v || "")
-    .toLowerCase()
-    .replace(/[\u2018\u2019\u02BB\u02BC\u0060\u00B4`']/g, "'")
-    .replace(/[()\[\].,:;!?"«»\-–—_/\\]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-const CURRICULUM_INDEX = (() => {
-  const m = new Map();
-  CURRICULUM_UZ.forEach((row) => {
-    [row.name, ...(row.aliases || [])].forEach((alias) => {
-      const k = normName(alias);
-      if (k && !m.has(k)) m.set(k, row);
-    });
-  });
-  return m;
-})();
-
-function curriculumRowFor(subjectName) {
-  return CURRICULUM_INDEX.get(normName(subjectName)) || null;
-}
-
-// Shu sinf uchun tayanch rejadagi soat. Fan bu sinfda o'qitilmasa — null.
-function curriculumHours(subjectName, grade) {
-  const row = curriculumRowFor(subjectName);
-  if (!row) return null;
-  const h = row.h[grade];
-  if (h === undefined) return null;
-  return Math.max(1, Math.round(h)); // 1,5 → 2 ; 0,5 → 1
-}
-
-// Tayanch rejada shu sinfga tegishli fanlar ro'yxati (nomlari bilan)
-function curriculumNamesForGrade(grade) {
-  return CURRICULUM_UZ.filter((r) => r.h[grade] !== undefined).map((r) => r.name);
-}
 
 function makeLevelGroups(count = 3, existing = []) {
   const n = Math.max(1, Math.min(12, Number(count || 1)));
@@ -251,6 +167,24 @@ function computeTeacherHours(classSubjects) {
 }
 
 export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, classSubjects, setClassSubjects, toast }) {
+  // Superadmin belgilagan standart soatlar (bulutdan; kelmasa — ichki reja)
+  const [curriculum, setCurriculum] = useState(() => getCachedCurriculum());
+  useEffect(() => {
+    let alive = true;
+    fetchStandardHours().then((res) => { if (alive && res?.data) setCurriculum(res.data); });
+    return () => { alive = false; };
+  }, []);
+  const curriculumIndex = useMemo(() => ({
+    uz: buildCurriculumIndex(curriculum.uz),
+    ru: buildCurriculumIndex(curriculum.ru),
+  }), [curriculum]);
+  function curriculumRowFor(subjectName, lang) {
+    return curriculumIndex[lang]?.get(normName(subjectName)) || null;
+  }
+  function curriculumHours(subjectName, grade, lang) {
+    return hoursFromRow(curriculumRowFor(subjectName, lang), grade);
+  }
+
   const [selectedClassId, setSelectedClassId] = useState(classes[0]?.id || "");
   const [poolOpen, setPoolOpen] = useState(false);
   const [poolForm, setPoolForm] = useState({ subjectId: "", classIds: [], teacherIds: [], weeklyHours: 5 });
@@ -260,6 +194,8 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
   const [clearOpen, setClearOpen] = useState(false);
   // "Barcha sinflardan" tugmasi — ikkinchi bosishda o'chiradi (xatolik oldini olish)
   const [armAll, setArmAll] = useState(false);
+  // "Standart soatlar" tasdiq oynasi (mavjud biriktirmalar almashadi — tasodifan bosilmasin)
+  const [smartAllOpen, setSmartAllOpen] = useState(false);
 
   useEffect(() => {
     if (!selectedClassId && classes[0]?.id) setSelectedClassId(classes[0].id);
@@ -495,32 +431,32 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
   }
 
   /* ——— Sinf uchun reja: qaysi fan, necha soat ———
-     O'zbek tilidagi 1-11 sinflar uchun 2025-2026 TAYANCH O'QUV REJA soatlari
-     ishlatiladi. Rus sinflari va reja qamramagan holatlar uchun eski usul
-     (fanning o'z haftalik soati) saqlanadi. */
+     Soatlar superadminning 'Standart soatlar' sahifasidan keladi (bulut);
+     bulut ochilmasa — kesh, u ham bo'lmasa ichki 2025-2026 TAYANCH O'QUV REJA.
+     Reja qamramagan holatlarda eski usul (fanning o'z haftalik soati). */
   function planForClass(cls) {
     const lang = classLangOf(cls);
     const grade = getGradeFromClassName(cls?.name);
 
-    if (lang === "uz" && grade >= 1 && grade <= 11) {
+    if (grade >= 1 && grade <= 11 && (curriculum[lang] || []).length) {
       const rows = [];
       const usedRows = new Set();
-      sortByName(subjects.filter(s => subjectLangOf(s) === "uz")).forEach(s => {
-        const hours = curriculumHours(s.name, grade);
+      sortByName(subjects.filter(s => subjectLangOf(s) === lang)).forEach(s => {
+        const hours = curriculumHours(s.name, grade, lang);
         if (hours == null) return;
-        const row = curriculumRowFor(s.name);
+        const row = curriculumRowFor(s.name, lang);
         if (usedRows.has(row.name)) return; // bir xil fanning ikkinchi varianti
         usedRows.add(row.name);
         rows.push({ subject: s, hours });
       });
       if (rows.length) {
-        const missing = curriculumNamesForGrade(grade).filter(n => !usedRows.has(n));
+        const missing = curriculumNamesForGrade(curriculum[lang], grade).filter(n => !usedRows.has(n));
         return { rows, missing, source: "reja" };
       }
     }
 
     // Zaxira usul — eski standart ro'yxatlar
-    const names = namesForGrade(grade, lang);
+    const names = fallbackNamesForGrade(grade, lang);
     const rows = sortByName(subjects.filter(s => names.includes(s.name) && subjectLangOf(s) === lang))
       .map(s => ({ subject: s, hours: Math.max(1, Number(s.weeklyHours || 1)) }));
     return { rows, missing: [], source: "standart" };
@@ -556,6 +492,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
   }
 
   function applySmartForAllClasses() {
+    setSmartAllOpen(false);
     const next = { ...classSubjects };
     let done = 0, totalHoursAll = 0;
     let missingRu = false, missingUz = false;
@@ -812,7 +749,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button className="btn btn-primary" onClick={() => { setPoolForm({ subjectId: langSubjects[0]?.id || sortedAllSubjects[0]?.id || "", classIds: [], teacherIds: [], weeklyHours: 5 }); setPoolOpen(true); }} disabled={!classes.length || !subjects.length}>🏊 Hovuz (daraja guruhi)</button>
           <button className="btn btn-secondary" onClick={applySmartForSelected} disabled={!selectedClassId || !subjects.length}>⚡ Mos fanlar</button>
-          <button className="btn btn-success" onClick={applySmartForAllClasses} disabled={!classes.length || !subjects.length}>⚡ Standart soatlar</button>
+          <button className="btn btn-success" onClick={() => setSmartAllOpen(true)} disabled={!classes.length || !subjects.length} title="Barcha sinflarga tayanch o'quv reja soatlarini qo'llash (tasdiq so'raladi)">⚡ Standart soatlar</button>
           <button className="btn btn-primary" onClick={copyToAllClasses} disabled={!selectedClassId || !classes.length}>↗ Nusxalash</button>
           <button
             className="btn"
@@ -1271,6 +1208,35 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
               <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 18 }}>
                 <button className="btn btn-secondary" type="button" onClick={() => setPoolOpen(false)}>Bekor qilish</button>
                 <button className="btn btn-primary" type="button" onClick={createPool}>Hovuzni yaratish</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ——— "STANDART SOATLAR" TASDIQ OYNASI ——— */}
+      {smartAllOpen && (() => {
+        const filled = classes.filter((c) => (classSubjects?.[c.id] || []).length > 0);
+        const filledHours = filled.reduce(
+          (sum, c) => sum + (classSubjects[c.id] || []).reduce((s2, a) => s2 + Number(a.weeklyHours || 0), 0), 0);
+        return (
+          <div onClick={() => setSmartAllOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+            <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--card-bg,#fff)", borderRadius: 16, padding: 22, width: "100%", maxWidth: 520, boxShadow: "0 24px 70px rgba(0,0,0,.35)" }}>
+              <h3 style={{ margin: "0 0 4px" }}>⚡ Standart soatlarni qo'llash</h3>
+              <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 14 }}>
+                Barcha <b>{classes.length} ta sinfga</b> tayanch o'quv reja bo'yicha fanlar va haftalik soatlar biriktiriladi.
+              </div>
+
+              {filled.length > 0 && (
+                <div style={{ background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 12, padding: "12px 14px", marginBottom: 14, fontSize: 13, lineHeight: 1.6, color: "#92400e" }}>
+                  ⚠️ Hozir <b>{filled.length} ta sinfda</b> biriktirilgan fanlar bor ({filledHours} soat).
+                  Qo'llansa, ular <b>o'chib, o'rniga standart soatlar</b> yoziladi — ustoz va xona tanlovlari ham yangilanadi.
+                </div>
+              )}
+
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                <button className="btn btn-secondary" type="button" onClick={() => setSmartAllOpen(false)}>↩ Bekor qilish</button>
+                <button className="btn btn-success" type="button" onClick={applySmartForAllClasses}>✅ Ha, qo'llansin</button>
               </div>
             </div>
           </div>
