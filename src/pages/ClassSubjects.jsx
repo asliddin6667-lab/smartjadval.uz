@@ -523,15 +523,6 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
     }
   }
 
-  function copyToAllClasses() {
-    if (!assignments.length) return toast("Avval tanlangan sinfga fan biriktiring", "warning");
-    const next = { ...classSubjects };
-    // Faqat bir xil ta'lim tilidagi sinflarga nusxalanadi (fanlar tili mos bo'lishi uchun)
-    sameLangClasses.forEach(c => { next[c.id] = assignments.map(a => ({ ...a, levelGroups: (a.levelGroups || []).map(g => ({ ...g })) })); });
-    setClassSubjects(next);
-    toast(`Tanlangan sozlama ${classLang === "ru" ? "barcha rus" : "barcha o'zbek"} sinflariga nusxalandi ✓`, "success");
-  }
-
   // ——— O'CHIRISH (tasdiq bilan) ———
   function openClearDialog() {
     setArmAll(false);
@@ -750,7 +741,6 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
           <button className="btn btn-primary" onClick={() => { setPoolForm({ subjectId: langSubjects[0]?.id || sortedAllSubjects[0]?.id || "", classIds: [], teacherIds: [], weeklyHours: 5 }); setPoolOpen(true); }} disabled={!classes.length || !subjects.length}>🏊 Hovuz (daraja guruhi)</button>
           <button className="btn btn-secondary" onClick={applySmartForSelected} disabled={!selectedClassId || !subjects.length}>⚡ Mos fanlar</button>
           <button className="btn btn-success" onClick={() => setSmartAllOpen(true)} disabled={!classes.length || !subjects.length} title="Barcha sinflarga tayanch o'quv reja soatlarini qo'llash (tasdiq so'raladi)">⚡ Standart soatlar</button>
-          <button className="btn btn-primary" onClick={copyToAllClasses} disabled={!selectedClassId || !classes.length}>↗ Nusxalash</button>
           <button
             className="btn"
             style={{ background: "#dc2626", borderColor: "#dc2626", color: "#fff" }}

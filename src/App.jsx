@@ -31,7 +31,7 @@ import {
   isPasswordRecoveryUrl, completeForcedPasswordChange,
 } from "./services/authService";
 import {
-  syncOnLogin, schedulePush, flushPush, cleanupLegacyKeys, onSyncState,
+  syncOnLogin, schedulePush, flushPush, cleanupLegacyKeys,
 } from "./services/cloudSync";
 import { buildDemoSchoolData } from "./utils/demoData";
 import { isLocalOnly, announceMode } from "./services/devMode";
@@ -147,9 +147,6 @@ export default function App() {
   // Birinchi marta ochilayotgan qurilma — bulutni kutish shart
   const [firstLoad, setFirstLoad] = useState(false);
 
-  // Fonda sinxronizatsiya ketyaptimi? (kichik indikator uchun)
-  const [bgSync, setBgSync] = useState(false);
-
   // ——— Mehmon rejimi holatlari ———
   const [paywallOpen, setPaywallOpen] = useState(false);
   const [showPayPage, setShowPayPage] = useState(false);
@@ -229,13 +226,6 @@ export default function App() {
         );
       }).catch(() => {});
     }
-  }, []);
-
-  // ——— Sinxronizatsiya holati indikatori ———
-  useEffect(() => {
-    return onSyncState((s) => {
-      setBgSync(s.state === "saving" || s.state === "pending");
-    });
   }, []);
 
   // ——— Sahifa yopilishidan oldin bulutga yuborish ———
@@ -678,21 +668,6 @@ export default function App() {
           }}
         >
           🔌 Lokal rejim — bulut uzilgan
-        </div>
-      )}
-
-      {/* Fonda saqlanmoqda — kichik, ishga xalaqit bermaydigan indikator */}
-      {bgSync && (
-        <div style={{
-          position: "fixed", bottom: 16, left: 16, zIndex: 2500,
-          display: "inline-flex", alignItems: "center", gap: 7,
-          height: 32, padding: "0 13px", borderRadius: 999,
-          background: "rgba(15,23,42,.82)", color: "#e2e8f0",
-          fontSize: 12, fontWeight: 700, pointerEvents: "none",
-          boxShadow: "0 4px 14px rgba(0,0,0,.25)",
-        }}>
-          <span style={{ fontSize: 12 }}>☁️</span>
-          Saqlanmoqda...
         </div>
       )}
 
