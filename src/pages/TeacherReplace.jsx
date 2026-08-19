@@ -7,6 +7,7 @@ import {
   classIdsWithTeacherInSubjects,
 } from "../utils/replaceTeacherSubjects";
 import { sortTeachers, cmpName } from "../utils/sortHelpers";
+import { slotDisplayNumber } from "../utils/shiftSlots";
 
 function classIdsOf(lesson) {
   return Array.isArray(lesson?.classIds) ? lesson.classIds : [lesson?.classId].filter(Boolean);
@@ -40,7 +41,7 @@ export default function TeacherReplacePage({
 
   const subjName = (sid) => subjectMap.get(sid)?.name || "Fan";
   const teacherName = (tid) => teacherMap.get(tid)?.name || "—";
-  const slotNum = (tsId) => sortedTimeslots.find((s) => s.id === tsId)?.lessonNumber || "?";
+  const slotNum = (tsId) => slotDisplayNumber(sortedTimeslots.find((s) => s.id === tsId)) || "?";
   const clsNames = (ids) => (ids || []).map((id) => classMap.get(id)?.name).filter(Boolean).join(", ");
 
   // Ketgan ustozning jadvaldagi darslari (nechta va qaysi sinf/fan)

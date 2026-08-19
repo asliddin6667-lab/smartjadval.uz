@@ -13,6 +13,7 @@
 // ═══════════════════════════════════════════════════════════════════
 import { DAYS } from "./constants";
 import { isTeachingSlot, classHasLunchAt } from "./scheduleGenerator";
+import { slotDisplayNumber } from "./shiftSlots";
 
 export function classIdsOf(lesson) {
   return Array.isArray(lesson?.classIds) ? lesson.classIds : [lesson?.classId].filter(Boolean);
@@ -104,7 +105,7 @@ export function unitLabel(ctx, unit) {
 // «Dushanba 2-dars»
 export function slotLabel(ctx, day, slotId) {
   const ts = (ctx.timeslots || []).find((s) => s.id === slotId);
-  return `${day} ${ts?.lessonNumber ?? "?"}-dars`;
+  return `${day} ${slotDisplayNumber(ts) ?? "?"}-dars`;
 }
 
 // ═══ ASOSIY VALIDATSIYA ═══
@@ -772,7 +773,7 @@ function buildSuggestions(ctx, src, dst, reasonObjs) {
             suggestions.push({
               type: "chain",
               changes: 2,
-              label: `${unitLabel(ctx, b)} darsini ${h.day} ${h.lessonNumber}-darsga surib, joy ochish (${slotLabel(ctx, src.day, src.slotId)} bo'sh qoladi)`,
+              label: `${unitLabel(ctx, b)} darsini ${slotLabel(ctx, h.day, h.slotId)}ga surib, joy ochish (${slotLabel(ctx, src.day, src.slotId)} bo'sh qoladi)`,
               actions: [
                 { entries: b.entries, fromDay: dst.day, fromSlotId: dst.slotId, toDay: h.day, toSlotId: h.slotId },
                 { entries: src.unit.entries, fromDay: src.day, fromSlotId: src.slotId, toDay: dst.day, toSlotId: dst.slotId },

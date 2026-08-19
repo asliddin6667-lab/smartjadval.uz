@@ -9,13 +9,14 @@
 //      – almashib bo'lmasa → sabab va tartiblangan yechimlar modali
 //  • Har bir darsni 🔒 qulflash (avtomatik jadval tuzganda o'zgarmaydi)
 // ═══════════════════════════════════════════════════════════════════
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { DAYS } from "../utils/constants";
 import { isTeachingSlot } from "../utils/scheduleGenerator";
 import {
   classIdsOf, teacherIdsOf, collectCardEntries, unitOf, resolveMove, applyActions,
   softWarnings, checkPlace, findAutoPartner, onlyBusyReasons, unitLabel, slotLabel,
 } from "../utils/moveResolver";
+import { groupSlotsByShift, shiftSlotNumbers } from "../utils/shiftSlots";
 
 const cardKeyOf = (l) => [l.subjectId, l.groupKey || "", l.blockIndex ?? ""].join("__");
 
@@ -38,6 +39,7 @@ export default function TeacherGrid({
   teachers = [],
   rooms = [],
   timeslots = [],
+  shifts = [],
   lunchGroups = [],
   schedule = {},
   classSubjects = {},
@@ -64,6 +66,13 @@ export default function TeacherGrid({
     () => [...timeslots].sort((a, b) => Number(a.lessonNumber || 0) - Number(b.lessonNumber || 0)),
     [timeslots]
   );
+
+  // ——— SMENALAR ———
+  // Setka smenalarga bo'linadi, har smena o'z ichida 1-dars, 2-dars … deb
+  // raqamlanadi (ichkarida global lessonNumber o'zgarmaydi).
+  const slotGroups = useMemo(() => groupSlotsByShift(timeslots, shifts), [timeslots, shifts]);
+  const slotNumById = useMemo(() => shiftSlotNumbers(slotGroups), [slotGroups]);
+  const slotNum = (slot) => (slot ? slotNumById.get(slot.id) ?? slot.lessonNumber : "");
 
   const teacher = teachers.find((t) => t.id === teacherId) || null;
   const offDays = new Set(Array.isArray(teacher?.offDays) ? teacher.offDays : []);
@@ -460,104 +469,115 @@ export default function TeacherGrid({
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedTimeslots.map((slot) => (
-                    <tr key={slot.id}>
-                      <td className="tgr-time">
-                        <strong>
-                          {isTeachingSlot(slot)
-                            ? `${slot.lessonNumber || ""}-dars`
-                            : (slot.title || (slot.type === "lunch" ? "Obed" : "Tanaffus"))}
-                        </strong>
-                        <span>{slot.startTime || ""} - {slot.endTime || ""}</span>
-                      </td>
-                      {DAYS.map((day) => {
-                        const state = cellState(day, slot);
-                        const info = active ? (activeMap.get(`${day}__${slot.id}`) || null) : null;
-                        const kind = info?.kind || null;
-                        const cls = [
-                          "tgr-cell",
-                          state === "off" || state === "blocked" ? "tgr-cell-off" : "",
-                          state === "nonteaching" ? "tgr-cell-nt" : "",
-                          kind === "move" || kind === "swap" ? "tgr-drop-ok" : "",
-                          kind === "no" || kind === "nt" ? "tgr-drop-no" : "",
-                          kind === "off" || kind === "blocked" ? "tgr-drop-blocked" : "",
-                        ].filter(Boolean).join(" ");
-                        return (
-                          <td
-                            key={day}
-                            className={cls}
-                            style={{
-                              ...(kind === "swap" ? { outline: "2px dashed rgba(124,58,237,.55)", outlineOffset: "-3px" } : null),
-                              ...(picked && kind && kind !== "self" ? { cursor: "pointer" } : null),
-                            }}
-                            onDragOver={(e) => { if (drag && kind && kind !== "self") e.preventDefault(); }}
-                            onDrop={(e) => { e.preventDefault(); if (drag) commitMove(day, slot); }}
-                            onClick={() => { if (picked && kind && kind !== "self") commitMove(day, slot); }}
-                          >
-                            {state === "off" && <div className="tgr-blocked">🌙 Dam</div>}
-                            {state === "blocked" && <div className="tgr-blocked">🔒 Qulflangan soat</div>}
-                            {state === "nonteaching" && (
-                              <div className="tgr-blocked">{slot.type === "lunch" ? "🍽️ Obed" : "Tanaffus"}</div>
-                            )}
-                            {(state === "free" || state === "busy") && (
-                              <>
-                                {cardsAt(day, slot.id).map((card, i) => {
-                                  const l = card.head;
-                                  const subj = subjectMap.get(l.subjectId)?.name || l.subjectName || "Fan";
-                                  const clsNames = classIdsOf(l).map((id) => classMap.get(id)?.name).filter(Boolean).join(", ");
-                                  return (
-                                    <div
-                                      key={i}
-                                      className={`tgr-card ${l.locked ? "tgr-card-locked" : ""}`}
-                                      draggable={Boolean(setSchedule)}
-                                      style={isPickedCard(day, slot, card)
-                                        ? { outline: "2px solid #7c3aed", outlineOffset: "1px", cursor: "grab" }
-                                        : (setSchedule ? { cursor: "grab" } : undefined)}
-                                      title="Sudrab ko'chiring yoki bosib tanlang"
-                                      onDragStart={(e) => dragStart(e, day, slot, card)}
-                                      onDragEnd={() => setDrag(null)}
-                                      onClick={(e) => { e.stopPropagation(); togglePick(day, slot, card); }}
-                                    >
-                                      <div className="tgr-card-top">
-                                        <span className="tgr-card-cls">{clsNames || "—"}</span>
-                                        {setSchedule && (
-                                          <span className="tgr-card-tools">
-                                            <button type="button" title={l.locked ? "Qulfni ochish" : "Qulflash"}
-                                              onClick={(e) => { e.stopPropagation(); setLock(day, slot.id, card, !l.locked); }}>
-                                              {l.locked ? "🔒" : "🔓"}
-                                            </button>
-                                            <button type="button" title="O'chirish" className="tgr-x"
-                                              onClick={(e) => { e.stopPropagation(); removeCard(day, slot.id, card); }}>✕</button>
-                                          </span>
-                                        )}
-                                      </div>
-                                      <div className="tgr-card-subj">{subj}</div>
-                                      <div className="tgr-card-room">
-                                        {l.roomId ? (roomMap.get(l.roomId)?.name || "Xona") : "Xonasiz"}
-                                        {l.manual ? " · ✋" : ""}
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-
-                                {kind === "swap" && info?.partner && (
-                                  <span style={SWAP_CHIP}>
-                                    ⇄ {unitLabel(ctx, info.partner)} bilan almashadi
-                                    {info.auto ? " (sinf tomonidan)" : ""}
-                                  </span>
-                                )}
-
-                                {setSchedule && !picked && (
-                                  <button type="button" className="tgr-add"
-                                    onClick={(e) => { e.stopPropagation(); openAdd(day, slot.id); }}
-                                    title="Qo'lda dars qo'shish">＋</button>
-                                )}
-                              </>
-                            )}
+                  {slotGroups.map((g) => (
+                    <Fragment key={g.id}>
+                      {slotGroups.length > 1 && (
+                        <tr className="tgr-shift-row">
+                          <td colSpan={DAYS.length + 1} className="tgr-shift-cell">
+                            🕐 {g.name} · {g.range}
                           </td>
-                        );
-                      })}
-                    </tr>
+                        </tr>
+                      )}
+                      {g.slots.map((slot) => (
+                        <tr key={slot.id}>
+                          <td className="tgr-time">
+                            <strong>
+                              {isTeachingSlot(slot)
+                                ? `${slotNum(slot) || ""}-dars`
+                                : (slot.title || (slot.type === "lunch" ? "Obed" : "Tanaffus"))}
+                            </strong>
+                            <span>{slot.startTime || ""} - {slot.endTime || ""}</span>
+                          </td>
+                          {DAYS.map((day) => {
+                            const state = cellState(day, slot);
+                            const info = active ? (activeMap.get(`${day}__${slot.id}`) || null) : null;
+                            const kind = info?.kind || null;
+                            const cls = [
+                              "tgr-cell",
+                              state === "off" || state === "blocked" ? "tgr-cell-off" : "",
+                              state === "nonteaching" ? "tgr-cell-nt" : "",
+                              kind === "move" || kind === "swap" ? "tgr-drop-ok" : "",
+                              kind === "no" || kind === "nt" ? "tgr-drop-no" : "",
+                              kind === "off" || kind === "blocked" ? "tgr-drop-blocked" : "",
+                            ].filter(Boolean).join(" ");
+                            return (
+                              <td
+                                key={day}
+                                className={cls}
+                                style={{
+                                  ...(kind === "swap" ? { outline: "2px dashed rgba(124,58,237,.55)", outlineOffset: "-3px" } : null),
+                                  ...(picked && kind && kind !== "self" ? { cursor: "pointer" } : null),
+                                }}
+                                onDragOver={(e) => { if (drag && kind && kind !== "self") e.preventDefault(); }}
+                                onDrop={(e) => { e.preventDefault(); if (drag) commitMove(day, slot); }}
+                                onClick={() => { if (picked && kind && kind !== "self") commitMove(day, slot); }}
+                              >
+                                {state === "off" && <div className="tgr-blocked">🌙 Dam</div>}
+                                {state === "blocked" && <div className="tgr-blocked">🔒 Qulflangan soat</div>}
+                                {state === "nonteaching" && (
+                                  <div className="tgr-blocked">{slot.type === "lunch" ? "🍽️ Obed" : "Tanaffus"}</div>
+                                )}
+                                {(state === "free" || state === "busy") && (
+                                  <>
+                                    {cardsAt(day, slot.id).map((card, i) => {
+                                      const l = card.head;
+                                      const subj = subjectMap.get(l.subjectId)?.name || l.subjectName || "Fan";
+                                      const clsNames = classIdsOf(l).map((id) => classMap.get(id)?.name).filter(Boolean).join(", ");
+                                      return (
+                                        <div
+                                          key={i}
+                                          className={`tgr-card ${l.locked ? "tgr-card-locked" : ""}`}
+                                          draggable={Boolean(setSchedule)}
+                                          style={isPickedCard(day, slot, card)
+                                            ? { outline: "2px solid #7c3aed", outlineOffset: "1px", cursor: "grab" }
+                                            : (setSchedule ? { cursor: "grab" } : undefined)}
+                                          title="Sudrab ko'chiring yoki bosib tanlang"
+                                          onDragStart={(e) => dragStart(e, day, slot, card)}
+                                          onDragEnd={() => setDrag(null)}
+                                          onClick={(e) => { e.stopPropagation(); togglePick(day, slot, card); }}
+                                        >
+                                          <div className="tgr-card-top">
+                                            <span className="tgr-card-cls">{clsNames || "—"}</span>
+                                            {setSchedule && (
+                                              <span className="tgr-card-tools">
+                                                <button type="button" title={l.locked ? "Qulfni ochish" : "Qulflash"}
+                                                  onClick={(e) => { e.stopPropagation(); setLock(day, slot.id, card, !l.locked); }}>
+                                                  {l.locked ? "🔒" : "🔓"}
+                                                </button>
+                                                <button type="button" title="O'chirish" className="tgr-x"
+                                                  onClick={(e) => { e.stopPropagation(); removeCard(day, slot.id, card); }}>✕</button>
+                                              </span>
+                                            )}
+                                          </div>
+                                          <div className="tgr-card-subj">{subj}</div>
+                                          <div className="tgr-card-room">
+                                            {l.roomId ? (roomMap.get(l.roomId)?.name || "Xona") : "Xonasiz"}
+                                            {l.manual ? " · ✋" : ""}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+    
+                                    {kind === "swap" && info?.partner && (
+                                      <span style={SWAP_CHIP}>
+                                        ⇄ {unitLabel(ctx, info.partner)} bilan almashadi
+                                        {info.auto ? " (sinf tomonidan)" : ""}
+                                      </span>
+                                    )}
+    
+                                    {setSchedule && !picked && (
+                                      <button type="button" className="tgr-add"
+                                        onClick={(e) => { e.stopPropagation(); openAdd(day, slot.id); }}
+                                        title="Qo'lda dars qo'shish">＋</button>
+                                    )}
+                                  </>
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
@@ -608,7 +628,7 @@ export default function TeacherGrid({
               <div>
                 <div className="mvr-title">Qo'lda dars qo'shish</div>
                 <div className="mvr-sub">
-                  {teacher?.name} · {addCell.day} · {addPreview?.slot?.lessonNumber}-dars
+                  {teacher?.name} · {addCell.day} · {slotNum(addPreview?.slot)}-dars
                 </div>
               </div>
             </div>

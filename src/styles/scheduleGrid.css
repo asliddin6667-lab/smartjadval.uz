@@ -136,6 +136,14 @@
 .tgr-time strong { display: block; font-size: 13px; font-weight: 800; color: var(--text-primary, #1e293b); }
 .tgr-time span { display: block; margin-top: 2px; font-size: 11px; color: var(--text-muted, #94a3b8); }
 
+.tgr-shift-cell {
+  background: var(--accent-light, #eef2ff);
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--accent, #4338ca);
+  padding: 7px 10px;
+}
+
 .tgr-cell { min-width: 132px; min-height: 62px; transition: background .15s, box-shadow .15s; }
 .tgr-cell-off { background: repeating-linear-gradient(45deg, rgba(100, 116, 139, .06), rgba(100, 116, 139, .06) 8px, transparent 8px, transparent 16px); }
 .tgr-cell-nt { background: rgba(100, 116, 139, .05); }
@@ -490,6 +498,7 @@
 /* ═══ DARK MODE ═══ */
 body.dark-mode .tgr-table th { background: rgba(255, 255, 255, .04); }
 body.dark-mode .tgr-time { background: rgba(255, 255, 255, .03); }
+body.dark-mode .tgr-shift-cell { background: rgba(99, 102, 241, .18); color: #c7d2fe; }
 body.dark-mode .tgr-off-badge { color: #fbbf24; }
 body.dark-mode .tgr-offnote { color: #fcd34d; }
 body.dark-mode .tgr-cell-off .tgr-blocked { color: #fbbf24; }

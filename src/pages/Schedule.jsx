@@ -8,6 +8,7 @@ import {
   collectCardEntries, unitOf, resolveMove, applyActions, softWarnings, checkPlace,
   findAutoPartner, onlyBusyReasons, unitLabel, slotLabel,
 } from "../utils/moveResolver";
+import { slotDisplayNumber } from "../utils/shiftSlots";
 import MoveResolveModal from "../components/MoveResolveModal";
 import TeacherGrid from "../components/TeacherGrid";
 import "../styles/scheduleGrid.css";
@@ -89,6 +90,7 @@ export default function SchedulePage({
   teachers = [],
   rooms = [],
   timeslots = [],
+  shifts = [],
   lunchGroups = [],
   schedule = {},
   classSubjects = {},
@@ -973,7 +975,7 @@ export default function SchedulePage({
   // Ustoz setkasida qulflangan kataklar barcha bosqichlarda chetlab o'tiladi.
 
   function slotNumOf(slotId) {
-    return sortedTimeslots.find((s) => s.id === slotId)?.lessonNumber ?? "?";
+    return slotDisplayNumber(sortedTimeslots.find((s) => s.id === slotId)) ?? "?";
   }
 
   function lessonTitle(l) {
@@ -1614,6 +1616,7 @@ export default function SchedulePage({
           teachers={teachers}
           rooms={rooms}
           timeslots={timeslots}
+          shifts={shifts}
           lunchGroups={lunchGroups}
           schedule={schedule}
           classSubjects={classSubjects}
@@ -1732,7 +1735,7 @@ export default function SchedulePage({
                           {sortedTimeslots.filter((slot) => slotAllowsClass(slot, cls.id)).map((slot) => (
                             <tr key={slot.id}>
                               <td className="pretty-time-cell">
-                                <strong>{isTeachingSlot(slot) ? `${slot.lessonNumber || ""}-dars` : (slot.title || (slot.type === "lunch" ? "Obed" : "Tanaffus"))}</strong>
+                                <strong>{isTeachingSlot(slot) ? `${slotDisplayNumber(slot) || ""}-dars` : (slot.title || (slot.type === "lunch" ? "Obed" : "Tanaffus"))}</strong>
                                 <span>{slot.startTime || ""} - {slot.endTime || ""}</span>
                               </td>
                               {DAYS.map((day) => {
@@ -1810,7 +1813,7 @@ export default function SchedulePage({
               style={{ background: "var(--card-bg, #fff)", borderRadius: 14, padding: 20, width: "100%", maxWidth: 460, maxHeight: "88vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
               <h3 style={{ margin: "0 0 4px" }}>Qo'lda dars qo'shish</h3>
               <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 14 }}>
-                {cls?.name} · {day} · {slot?.lessonNumber}-dars
+                {cls?.name} · {day} · {slotDisplayNumber(slot)}-dars
               </div>
 
               {remainingSubjects.length === 0 ? (

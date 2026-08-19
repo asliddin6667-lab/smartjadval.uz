@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { DAYS } from "../utils/constants";
 import { isTeachingSlot } from "../utils/scheduleGenerator";
+import { groupSlotsByShift, shiftSlotNumbers } from "../utils/shiftSlots";
 import "../styles/teacherAvailability.css";
 
 // ————————————————————————————————————————————————————————————
@@ -34,6 +35,7 @@ export default function TeacherAvailabilityPage({
   teachers = [],
   setTeachers,
   timeslots = [],
+  shifts = [],
   classes = [],
   subjects = [],
   classSubjects = {},
@@ -55,6 +57,13 @@ export default function TeacherAvailabilityPage({
     [timeslots]
   );
   const teachingTs = useMemo(() => sortedTs.filter(isTeachingSlot), [sortedTs]);
+
+  // ——— SMENALAR ———
+  // Setka smenalarga bo'linadi va har smena o'z ichida 1-dars, 2-dars … deb
+  // raqamlanadi (ichkarida global lessonNumber saqlanib qoladi).
+  const slotGroups = useMemo(() => groupSlotsByShift(timeslots, shifts), [timeslots, shifts]);
+  const slotNumById = useMemo(() => shiftSlotNumbers(slotGroups), [slotGroups]);
+  const slotNum = (ts) => slotNumById.get(ts.id) ?? ts.lessonNumber;
 
   const offDays = useMemo(
     () => new Set(Array.isArray(teacher?.offDays) ? teacher.offDays : []),
@@ -307,60 +316,71 @@ export default function TeacherAvailabilityPage({
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedTs.map((ts) => {
-                    if (!isTeachingSlot(ts)) {
-                      return (
-                        <tr key={ts.id} className="tav-row-break">
-                          <td className="tav-td-slot">
-                            {ts.type === "lunch" ? "🍽" : "☕"} {ts.startTime}–{ts.endTime}
-                          </td>
-                          <td colSpan={DAYS.length} className="tav-td-break">
-                            {ts.type === "lunch" ? "Obed" : "Tanaffus"}
+                  {slotGroups.map((g) => (
+                    <Fragment key={g.id}>
+                      {slotGroups.length > 1 && (
+                        <tr className="tav-row-shift">
+                          <td colSpan={DAYS.length + 1} className="tav-td-shift">
+                            🕐 {g.name} · {g.range}
                           </td>
                         </tr>
-                      );
-                    }
-                    return (
-                      <tr key={ts.id}>
-                        <td className="tav-td-slot">
-                          <b>{ts.lessonNumber}-dars</b>
-                          <span className="tav-td-time">{ts.startTime}–{ts.endTime}</span>
-                        </td>
-                        {DAYS.map((day) => {
-                          if (offDays.has(day)) {
-                            return <td key={day} className="tav-cell tav-cell-off">—</td>;
-                          }
-                          const lockedCell = isBlocked(day, ts.id);
-                          const lessons = lessonMap.get(`${day}|${ts.id}`) || [];
+                      )}
+                      {g.slots.map((ts) => {
+                        if (!isTeachingSlot(ts)) {
                           return (
-                            <td
-                              key={day}
-                              className={
-                                "tav-cell " +
-                                (lockedCell ? "tav-cell-locked" : "tav-cell-open") +
-                                (lessons.length ? " tav-cell-haslesson" : "")
-                              }
-                              onClick={() => toggleSlot(day, ts.id)}
-                              title={lockedCell ? "Ochish uchun bosing" : "Qulflash uchun bosing"}
-                            >
-                              <div className="tav-cell-top">
-                                <span className="tav-lock-icon">{lockedCell ? "🔒" : "🔓"}</span>
-                                {lockedCell && <span className="tav-lock-text">Qulflangan</span>}
-                              </div>
-                              {lessons.map((l, i) => (
-                                <div key={i} className="tav-lesson-chip">
-                                  {lessonLabel(l)}
-                                </div>
-                              ))}
-                              {lockedCell && lessons.length > 0 && (
-                                <div className="tav-lesson-note">Qayta tuzishda ko'chadi</div>
-                              )}
-                            </td>
+                            <tr key={ts.id} className="tav-row-break">
+                              <td className="tav-td-slot">
+                                {ts.type === "lunch" ? "🍽" : "☕"} {ts.startTime}–{ts.endTime}
+                              </td>
+                              <td colSpan={DAYS.length} className="tav-td-break">
+                                {ts.type === "lunch" ? "Obed" : "Tanaffus"}
+                              </td>
+                            </tr>
                           );
-                        })}
-                      </tr>
-                    );
-                  })}
+                        }
+                        return (
+                          <tr key={ts.id}>
+                            <td className="tav-td-slot">
+                              <b>{slotNum(ts)}-dars</b>
+                              <span className="tav-td-time">{ts.startTime}–{ts.endTime}</span>
+                            </td>
+                            {DAYS.map((day) => {
+                              if (offDays.has(day)) {
+                                return <td key={day} className="tav-cell tav-cell-off">—</td>;
+                              }
+                              const lockedCell = isBlocked(day, ts.id);
+                              const lessons = lessonMap.get(`${day}|${ts.id}`) || [];
+                              return (
+                                <td
+                                  key={day}
+                                  className={
+                                    "tav-cell " +
+                                    (lockedCell ? "tav-cell-locked" : "tav-cell-open") +
+                                    (lessons.length ? " tav-cell-haslesson" : "")
+                                  }
+                                  onClick={() => toggleSlot(day, ts.id)}
+                                  title={lockedCell ? "Ochish uchun bosing" : "Qulflash uchun bosing"}
+                                >
+                                  <div className="tav-cell-top">
+                                    <span className="tav-lock-icon">{lockedCell ? "🔒" : "🔓"}</span>
+                                    {lockedCell && <span className="tav-lock-text">Qulflangan</span>}
+                                  </div>
+                                  {lessons.map((l, i) => (
+                                    <div key={i} className="tav-lesson-chip">
+                                      {lessonLabel(l)}
+                                    </div>
+                                  ))}
+                                  {lockedCell && lessons.length > 0 && (
+                                    <div className="tav-lesson-note">Qayta tuzishda ko'chadi</div>
+                                  )}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        );
+                      })}
+                    </Fragment>
+                  ))}
                 </tbody>
               </table>
             </div>

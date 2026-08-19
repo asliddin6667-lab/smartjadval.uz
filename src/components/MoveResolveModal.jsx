@@ -1,3 +1,5 @@
+import { slotDisplayNumber } from "../utils/shiftSlots";
+
 // ═══════════════════════════════════════════════════════════════════
 // MOVE RESOLVE MODAL — ikki rejim:
 //  1) "blocked"  — dars qo'yib bo'lmadi: sabablar + minimal yechimlar
@@ -29,8 +31,8 @@ export default function MoveResolveModal({
       subj,
       clsName,
       tch,
-      fromTxt: `${a.fromDay}, ${from?.lessonNumber ?? "?"}-dars`,
-      toTxt: `${a.toDay}, ${to?.lessonNumber ?? "?"}-dars`,
+      fromTxt: `${a.fromDay}, ${slotDisplayNumber(from) ?? "?"}-dars`,
+      toTxt: `${a.toDay}, ${slotDisplayNumber(to) ?? "?"}-dars`,
       moved: !(a.fromDay === a.toDay && a.fromSlotId === a.toSlotId),
     };
   }

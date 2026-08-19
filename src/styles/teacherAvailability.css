@@ -177,6 +177,16 @@
   margin-top: 2px;
 }
 
+.tav-row-shift .tav-td-shift {
+  background: #eef2ff;
+  border-radius: 10px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-weight: 800;
+  color: #4338ca;
+  text-align: left;
+}
+
 .tav-row-break .tav-td-break {
   background: #fff7ed;
   border: 1px dashed #fdba74;
@@ -378,6 +388,10 @@ body.dark-mode .tav-td-slot {
   color: #cbd5e1;
 }
 body.dark-mode .tav-td-time { color: #64748b; }
+body.dark-mode .tav-row-shift .tav-td-shift {
+  background: #1e1b4b;
+  color: #c7d2fe;
+}
 body.dark-mode .tav-row-break .tav-td-break {
   background: #2b1c0e;
   border-color: #9a3412;
