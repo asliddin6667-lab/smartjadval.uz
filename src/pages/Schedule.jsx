@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { DAYS, typeOfGroup } from "../utils/constants";
 import {
-  generateSchedule, isTeachingSlot, classHasLunchAt, classesHaveLunchAt, compactSchedule,
+  generateSchedule, budgetFor, isTeachingSlot, classHasLunchAt, classesHaveLunchAt, compactSchedule,
 } from "../utils/scheduleGenerator";
 import { exportColoredSchedule } from "../utils/coloredScheduleExport";
 import {
@@ -113,6 +113,8 @@ export default function SchedulePage({
   const [genProgress, setGenProgress] = useState(0);
   const [genRound, setGenRound] = useState(0);
   const [genDone, setGenDone] = useState(false);
+  const [genElapsed, setGenElapsed] = useState(0);   // sekundomer (soniya)
+  const genTimerRef = useRef(null);
 
   const subjectMap = useMemo(() => new Map(subjects.map((s, i) => [s.id, { ...s, _colorIndex: i }])), [subjects]);
   const teacherMap = useMemo(() => new Map(teachers.map((t) => [t.id, t])), [teachers]);
@@ -668,15 +670,34 @@ export default function SchedulePage({
     setGenerating(true);
     setGenProgress(0);
     setGenRound(0);
+    setGenElapsed(0);
+
+    // Sekundomer — ekranda real vaqtda sanaladi
+    const t0 = Date.now();
+    if (genTimerRef.current) clearInterval(genTimerRef.current);
+    genTimerRef.current = setInterval(() => setGenElapsed((Date.now() - t0) / 1000), 100);
+    const stopTimer = () => {
+      if (genTimerRef.current) { clearInterval(genTimerRef.current); genTimerRef.current = null; }
+    };
 
     try {
-      // Ko'p bosqichli qidiruv: har bir urinishdan eng yaxshisi saqlanadi.
-      // Tanlov mezoni leksikografik:
-      // (1) joylangan soat, (2) KUN O'RTASIDAGI OYNA, (3) kunlik yuk notekisligi,
-      // (4) bir kunda bir fan limitidan oshish.
-      const MAX_ROUNDS = 60;
-      const TIME_CAP_MS = 45000;
-      const STALL_LIMIT = 10;
+      // ——— IKKI BOSQICHLI QIDIRUV ———
+      // 1) TEZKOR: past byudjetli bir necha urinish. Har urinishda BARCHA
+      //    qoidalar (ustoz/sinf/xona bandligi, dam kuni, obed, smena, bloklar)
+      //    to'liq tekshiriladi — faqat izlash vaqti qisqa. Ko'p maktabda
+      //    100% shu yerda chiqadi va jadval 1–2 soniyada tayyor bo'ladi.
+      // 2) CHUQUR: faqat tezkor bosqich kamchilik qoldirsa ishga tushadi —
+      //    to'liq byudjet bilan, eng yaxshi natija ustiga qurib boradi.
+      // Tanlov mezoni leksikografik (o'zgarmagan):
+      // (1) joylangan soat, (2) KUN O'RTASIDAGI OYNA, (3) kunlik yuk
+      // notekisligi, (4) bir kunda bir fan limitidan oshish.
+      const fastB = budgetFor(requiredTotal, "fast");
+      const deepB = budgetFor(requiredTotal, "deep");
+      const FAST_ROUNDS = 6;      // 6 ta strategiya — har biri bir marta
+      const MAX_ROUNDS = 24;
+      // Vaqt chegarasi maktab hajmiga moslashadi (avval hammaga 45 s edi)
+      const TIME_CAP_MS = Math.max(9000, Math.min(30000, 6000 + requiredTotal * 9));
+      const STALL_LIMIT = 4;
       const start = Date.now();
 
       let best = null;
@@ -684,6 +705,7 @@ export default function SchedulePage({
       let bestOver = Infinity;
       let bestGaps = Infinity;
       let bestBal = Infinity;
+      let bestStrategy = 0;
       let stall = 0;
 
       const betterThan = (placed, over, gaps, bal) => {
@@ -694,11 +716,21 @@ export default function SchedulePage({
       };
 
       for (let r = 0; r < MAX_ROUNDS; r++) {
+        // Brauzerga chizish imkoni beramiz — sekundomer, foiz va urinish
+        // raqami har urinishdan oldin ekranga chiqadi (rAF paintdan oldin,
+        // setTimeout esa paintdan keyin ishlaydi).
+        setGenElapsed((Date.now() - t0) / 1000);
         // eslint-disable-next-line no-await-in-loop
-        await new Promise((res) => setTimeout(res, 12));
+        await new Promise((res) => requestAnimationFrame(() => setTimeout(res, 0)));
 
+        const fast = r < FAST_ROUNDS;
+        const b = fast ? fastB : deepB;
+        // Tezkor bosqichda strategiyalar navbatma-navbat (xilma-xillik),
+        // chuqur bosqichda esa g'olib strategiya boshqa seed bilan qayta uriniladi.
+        const strategy = fast ? r % 6 : bestStrategy;
         const cand = generateSchedule(
-          classes, subjects, teachers, rooms, timeslots, classSubjects, lunchGroups, seed
+          classes, subjects, teachers, rooms, timeslots, classSubjects, lunchGroups, seed,
+          { solveMs: b.solveMs, compactMs: b.compactMs, polishMs: b.polishMs, strategy, quiet: true }
         );
         const placed = countPlacedUnits(cand);
         const over = countOverCap(cand);
@@ -710,6 +742,7 @@ export default function SchedulePage({
           bestOver = over;
           bestGaps = gaps;
           bestBal = bal;
+          bestStrategy = strategy;
           best = cand;
           stall = 0;
         } else {
@@ -719,9 +752,19 @@ export default function SchedulePage({
         setGenProgress(requiredTotal > 0 ? Math.min(100, Math.round((bestPlaced / requiredTotal) * 100)) : 100);
         setGenRound(r + 1);
 
-        if (requiredTotal > 0 && bestPlaced >= requiredTotal && bestGaps === 0 && bestBal === 0) break;
-        if (stall >= STALL_LIMIT && requiredTotal > 0 && bestPlaced >= requiredTotal && bestGaps === 0) break;
-        if (Date.now() - start > TIME_CAP_MS) break;
+        if (requiredTotal === 0) break;
+        const elapsed = Date.now() - start;
+        const full = bestPlaced >= requiredTotal;
+        // Mukammal natija — darhol to'xtaymiz
+        if (full && bestGaps === 0 && bestBal === 0) break;
+        // Hammasi joylashdi va oyna yo'q — bir necha urinish yaxshilanmasa yoki
+        // vaqtning yarmi ketgan bo'lsa, shu natija bilan tugatamiz
+        if (full && bestGaps === 0 && (stall >= 4 || elapsed > TIME_CAP_MS * 0.5)) break;
+        // Chuqur bosqichda yaxshilanish to'xtadi
+        if (!fast && stall >= STALL_LIMIT) break;
+        if (elapsed > TIME_CAP_MS) break;
+        // Tezkor bosqich tugadi, lekin chuqur urinishga vaqt qolmadi
+        if (r + 1 === FAST_ROUNDS && elapsed > TIME_CAP_MS * 0.6) break;
       }
 
       let finalSch = best || {};
@@ -740,17 +783,23 @@ export default function SchedulePage({
 
       setSchedule(finalSch);
 
+      const secs = (Date.now() - t0) / 1000;
+      stopTimer();
+      setGenElapsed(secs);
+
       const lockNote = keptLocked > 0 ? ` · ${keptLocked} ta qulflangan dars saqlandi 🔒` : "";
       const gapNote = countGaps(finalSch) > 0 ? ` · ⚠️ ${countGaps(finalSch)} ta bo'sh soat qoldi` : "";
+      const timeNote = ` · ⏱ ${secs.toFixed(1)} s`;
       if (requiredTotal === 0 || bestPlaced >= requiredTotal) {
-        toast?.(`Dars jadvali 100% tuzildi ✓${lockNote}${gapNote}`, gapNote ? "warning" : "success");
+        toast?.(`Dars jadvali 100% tuzildi ✓${lockNote}${gapNote}${timeNote}`, gapNote ? "warning" : "success");
       } else {
-        toast?.(`Jadval tuzildi — ${requiredTotal - bestPlaced} soat tushmadi${lockNote}${gapNote}`, "warning");
+        toast?.(`Jadval tuzildi — ${requiredTotal - bestPlaced} soat tushmadi${lockNote}${gapNote}${timeNote}`, "warning");
       }
 
       setGenDone(true);
-      await new Promise((res) => setTimeout(res, 1100));
+      await new Promise((res) => setTimeout(res, 900));
     } finally {
+      stopTimer();
       setGenerating(false);
       setGenDone(false);
     }
@@ -1601,10 +1650,13 @@ export default function SchedulePage({
               @keyframes gen-pop{from{transform:scale(.6);opacity:0}to{transform:scale(1);opacity:1}}
               .gen-text{color:#ffffff;font-size:18px;font-weight:700;letter-spacing:.3px;text-shadow:0 2px 10px rgba(0,0,0,.35);}
               .gen-sub{margin-top:-10px;color:rgba(255,255,255,.7);font-size:13px;font-weight:600;}
+              .gen-time{margin-top:-6px;color:#ffffff;font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:1px;text-shadow:0 2px 14px rgba(0,0,0,.4);}
+              .gen-time small{font-size:14px;font-weight:700;opacity:.75;margin-left:3px;}
             `}</style>
             {genDone ? <div className="gen-check">✓</div> : <div className="gen-spinner" />}
             <div className="gen-text">{genDone ? "Tayyor!" : "Bajarilyapti…"}</div>
-            {!genDone && <div className="gen-sub">{genProgress}% · {genRound}-urinish</div>}
+            <div className="gen-sub">{genDone ? `${genProgress}% · ${genRound} ta urinish` : `${genProgress}% · ${genRound}-urinish`}</div>
+            <div className="gen-time">{genElapsed.toFixed(1)}<small>s</small></div>
           </div>
         )}
       </div>

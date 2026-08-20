@@ -3594,15 +3594,27 @@ function totalWeeklyHours(classSubjects = {}) {
   return total;
 }
 
-// Maktab hajmiga qarab bitta urinishning vaqt byudjeti
-function budgetFor(totalHours) {
+// Maktab hajmiga qarab bitta urinishning vaqt byudjeti.
+//   mode "fast" — tezkor zondlash: past cap, urinish ~0.3–1s.
+//                 Ko'pincha shu yerdayoq 100% chiqadi.
+//   mode "deep" — to'liq qidiruv: faqat tezkor urinishlar kamchilik qoldirsa.
+// Bular CHEGARA (cap), sarf emas — bosqichlar yaxshilanish tugashi bilan
+// erta to'xtaydi, shuning uchun mantiq (qoidalar) hech qayerda qisqarmaydi.
+export function budgetFor(totalHours, mode = "deep") {
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.round(v)));
+  if (mode === "fast") {
+    return {
+      solveMs: clamp(300 + totalHours * 0.35, 450, 1400),
+      compactMs: clamp(400 + totalHours * 0.4, 550, 1600),
+      polishMs: totalHours > 1500 ? 120 : 160,
+    };
+  }
   // Bular — CHEGARA (cap), sarf emas: bosqichlar yaxshilanish tugashi bilan
   // erta to'xtaydi. Shuning uchun kichik maktabda urinish ~0.3–1s, kattada ~2–4s.
   return {
-    solveMs: clamp(1200 + totalHours * 2.6, 2000, 8000),
-    compactMs: clamp(1800 + totalHours * 2.8, 3000, 7500),
-    polishMs: totalHours > 1500 ? 250 : 450,
+    solveMs: clamp(900 + totalHours * 1.2, 1400, 4000),
+    compactMs: clamp(1200 + totalHours * 1.3, 1800, 4500),
+    polishMs: totalHours > 1500 ? 200 : 350,
   };
 }
 
