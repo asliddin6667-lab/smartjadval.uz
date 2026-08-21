@@ -150,6 +150,15 @@ hafta almashinuvi (`weekAltEnabled`), fan almashinuvi (`swapEnabled`).
 Hard cheklovlar (ikkala dvigatelda ham): ustoz/sinf dam kuni, obed guruhlari, smena
 (`timeslot.classIds`), ustoz/sinf/xona bandligi.
 
+**Ustoz va xona bandligi VAQT bo'yicha, slot id bo'yicha emas.** Ikki smena bir xil
+soatda o'tishi mumkin (id boshqa, `startTime` bir xil) — shuning uchun bandlik
+`slotsOverlap()` bilan aniqlanadigan «vaqt bandi»ga bog'langan (`buildTimeBuckets()`,
+[scheduleGenerator.js](src/utils/scheduleGenerator.js)). Generatorda `teacherGrid` va
+`roomGrid` indeksi `d * TB + tsBucket[i]`, `buildValidationReport` esa `tSeen`/`rSeen`
+ni band bo'yicha yuritadi; [moveResolver.js](src/utils/moveResolver.js) dagi `cellsAt()`
+vaqti kesishadigan barcha kataklarni birga o'qiydi. **Sinf** bandligi va ustoz
+setkasidagi qulflar (`blockedSlots`) avvalgidek slot bo'yicha qoladi.
+
 ### Saqlangan jadvallar
 
 Dars jadvali sahifasidagi «💾 Saqlash» tugmasi joriy jadvalning TO'LIQ nusxasini nom

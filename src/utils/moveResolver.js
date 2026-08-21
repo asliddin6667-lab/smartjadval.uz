@@ -12,7 +12,7 @@
 // → uch tomonlama aylanma almashinuv → muqobil bo'sh kataklar.
 // ═══════════════════════════════════════════════════════════════════
 import { DAYS } from "./constants";
-import { isTeachingSlot, classHasLunchAt } from "./scheduleGenerator";
+import { isTeachingSlot, classHasLunchAt, overlappingSlots } from "./scheduleGenerator";
 import { slotDisplayNumber } from "./shiftSlots";
 
 export function classIdsOf(lesson) {
@@ -25,6 +25,37 @@ export function teacherIdsOf(lesson) {
   if (lesson?.teacherId) ids.push(lesson.teacherId);
   if (lesson?.alternating && lesson?.altTeacherId) ids.push(lesson.altTeacherId);
   return ids;
+}
+
+// ═══ VAQT BO'YICHA BANDLIK ═══
+// Ikki smena bir xil soatda o'tishi mumkin (timeslot id boshqa, vaqti bir xil).
+// Ustoz/xona/sinf bandligi shu sababli bitta katak emas, VAQTI KESISHADIGAN
+// barcha kataklar bo'yicha tekshiriladi.
+const overlapCache = new WeakMap();
+
+function overlapIdsOf(timeslots, slot) {
+  if (!slot) return [];
+  const list = Array.isArray(timeslots) ? timeslots : [];
+  let map = overlapCache.get(list);
+  if (!map) overlapCache.set(list, (map = new Map()));
+  let ids = map.get(slot.id);
+  if (!ids) {
+    ids = overlappingSlots(list, slot).map((t) => t.id);
+    if (!ids.includes(slot.id)) ids.push(slot.id);
+    map.set(slot.id, ids);
+  }
+  return ids;
+}
+
+// (kun, slot) vaqtida band bo'lgan barcha darslar
+export function cellsAt(ctx, day, slot) {
+  const sch = ctx?.schedule?.[day];
+  if (!sch || !slot) return [];
+  const ids = overlapIdsOf(ctx?.timeslots, slot);
+  if (ids.length <= 1) return Array.isArray(sch[slot.id]) ? sch[slot.id] : [];
+  const out = [];
+  ids.forEach((id) => { if (Array.isArray(sch[id])) out.push(...sch[id]); });
+  return out;
 }
 
 export function slotAllowsClass(slot, classId) {
@@ -112,7 +143,7 @@ export function slotLabel(ctx, day, slotId) {
 // unit'ni (day, slot) ga qo'yish mumkinmi? ignore — hisobga olinmaydigan
 // entrylar (masalan, swap sherigi — u baribir ketadi).
 export function checkPlace(ctx, unit, day, slot, ignore = new Set()) {
-  const { schedule, classes, teachers, lunchGroups } = ctx;
+  const { classes, teachers, lunchGroups } = ctx;
   const errs = [];
   const clsName = (id) => classes.find((c) => c.id === id)?.name || "sinf";
   const tName = (id) => teachers.find((t) => t.id === id)?.name || "ustoz";
@@ -150,7 +181,7 @@ export function checkPlace(ctx, unit, day, slot, ignore = new Set()) {
     }
   });
 
-  const cell = schedule?.[day]?.[slot.id] || [];
+  const cell = cellsAt(ctx, day, slot);
   cell.forEach((l) => {
     if (ignore.has(l) || unit.entries.includes(l)) return;
     const lc = classIdsOf(l);
@@ -184,7 +215,7 @@ export function onlyBusyReasons(errs = []) {
 
 // Maqsad katakdagi unit bilan to'qnashadigan kartalar (birliklar) ro'yxati
 export function conflictingCards(ctx, unit, day, slot, ignore = new Set()) {
-  const cell = ctx.schedule?.[day]?.[slot.id] || [];
+  const cell = cellsAt(ctx, day, slot);
   const cards = new Map();
   cell.forEach((l) => {
     if (ignore.has(l) || unit.entries.includes(l)) return;

@@ -99,6 +99,63 @@ function overlaps(aStart, aEnd, bStart, bEnd) {
   return toMinutes(aStart) < toMinutes(bEnd) && toMinutes(aEnd) > toMinutes(bStart);
 }
 
+// ═══ VAQT BANDLARI ═══
+// Ikki smena bir xil soatda o'tishi mumkin: timeslot id'lari boshqa, lekin
+// soati bir xil. Shuning uchun USTOZ va XONA bandligi slot id/indeksi emas,
+// VAQT bo'yicha yuritiladi — aks holda smenalar bir-birini "ko'rmaydi".
+// Sinf bandligi va ustoz setkasidagi qulflar slot bo'yicha qoladi.
+function hasClock(ts) {
+  return Boolean(
+    ts && ts.startTime && ts.endTime && toMinutes(ts.startTime) < toMinutes(ts.endTime)
+  );
+}
+
+// Ikki slot bir vaqtga to'g'ri keladimi?
+export function slotsOverlap(a, b) {
+  if (!a || !b) return false;
+  if (a.id && a.id === b.id) return true;
+  if (!hasClock(a) || !hasClock(b)) return false;
+  return overlaps(a.startTime, a.endTime, b.startTime, b.endTime);
+}
+
+// slot bilan vaqti kesishadigan barcha slotlar (slotning o'zi ham kiradi)
+export function overlappingSlots(timeslots = [], slot) {
+  if (!slot) return [];
+  return (Array.isArray(timeslots) ? timeslots : []).filter((ts) => slotsOverlap(ts, slot));
+}
+
+// Vaqti kesishadigan slotlarni bitta "vaqt bandi"ga birlashtiradi (union-find).
+// bucketOf[i] — i-slotning band raqami, count — bandlar umumiy soni.
+// Vaqti ko'rsatilmagan slot faqat o'zi bilan qoladi (eski xatti-harakat).
+function buildTimeBuckets(slots = []) {
+  const n = slots.length;
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (x) => {
+    let r = x;
+    while (parent[r] !== r) r = parent[r];
+    let c = x;
+    while (parent[c] !== r) { const nx = parent[c]; parent[c] = r; c = nx; }
+    return r;
+  };
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (!hasClock(slots[i]) || !hasClock(slots[j])) continue;
+      if (!overlaps(slots[i].startTime, slots[i].endTime, slots[j].startTime, slots[j].endTime)) continue;
+      const a = find(i);
+      const b = find(j);
+      if (a !== b) parent[b] = a;
+    }
+  }
+  const idx = new Map();
+  const bucketOf = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const r = find(i);
+    if (!idx.has(r)) idx.set(r, idx.size);
+    bucketOf[i] = idx.get(r);
+  }
+  return { bucketOf, count: idx.size };
+}
+
 export function classHasLunchAt(timeslot, classId, lunchGroups = [], day = null) {
   if (!timeslot || !classId) return false;
 
@@ -349,6 +406,11 @@ function attemptSchedule(
   for (let i = 0; i < T - 1; i++) {
     nextConsecutive[i] = allIdxById.get(teachingTs[i + 1].id) === allIdxById.get(teachingTs[i].id) + 1;
   }
+  // Ustoz/xona bandligi vaqt bandi bo'yicha: bir soatda o'tadigan ikki smena
+  // sloti bitta bandga tushadi va bir-birining ustoziga/xonasiga da'vo qila olmaydi.
+  const { bucketOf: tsBucket, count: TB } = buildTimeBuckets(teachingTs);
+  const DTB = D * TB;
+  const tbOff = (d, i) => d * TB + tsBucket[i];
   const C = classes.length;
   const TT = teachers.length;
   const S = subjects.length;
@@ -425,11 +487,11 @@ function attemptSchedule(
     }
   }
   const classGrid = new Uint8Array(C * DT);
-  const teacherGrid = new Uint8Array(TT * DT);
+  const teacherGrid = new Uint8Array(TT * DTB);
   const roomGridMap = new Map();
   function roomGrid(rid) {
     let g = roomGridMap.get(rid);
-    if (!g) { g = new Uint8Array(DT); roomGridMap.set(rid, g); }
+    if (!g) { g = new Uint8Array(DTB); roomGridMap.set(rid, g); }
     return g;
   }
   const teacherLoadArr = new Int16Array(TT);
@@ -544,15 +606,15 @@ function attemptSchedule(
           if (ti !== undefined) {
             teacherLoadArr[ti] += 1;
             teacherDailyArr[ti * D + d] += 1;
-            if (tIdx !== undefined) teacherGrid[ti * DT + d * T + tIdx] = 1;
+            if (tIdx !== undefined) teacherGrid[ti * DTB + tbOff(d, tIdx)] = 1;
           }
-          if (l.roomId && tIdx !== undefined) roomGrid(l.roomId)[d * T + tIdx] = 1;
+          if (l.roomId && tIdx !== undefined) roomGrid(l.roomId)[tbOff(d, tIdx)] = 1;
           if (l.alternating && l.altTeacherId) {
             const ti2 = tIdxOf.get(l.altTeacherId);
             if (ti2 !== undefined) {
               teacherLoadArr[ti2] += 1;
               teacherDailyArr[ti2 * D + d] += 1;
-              if (tIdx !== undefined) teacherGrid[ti2 * DT + d * T + tIdx] = 1;
+              if (tIdx !== undefined) teacherGrid[ti2 * DTB + tbOff(d, tIdx)] = 1;
             }
           }
         });
@@ -943,9 +1005,10 @@ function attemptSchedule(
     const base = d * T + i;
     for (let o = 0; o < req.blockSize; o++) {
       const off = base + o;
+      const toff = tbOff(d, i + o);
       for (const ci of req.cIdxs) if (classGrid[ci * DT + off]) return false;
-      for (const ti of req.tIdxs) if (teacherGrid[ti * DT + off] || teacherBlockGrid[ti * DT + off]) return false;
-      for (const rg of req.roomArrs) if (rg[off]) return false;
+      for (const ti of req.tIdxs) if (teacherGrid[ti * DTB + toff] || teacherBlockGrid[ti * DT + off]) return false;
+      for (const rg of req.roomArrs) if (rg[toff]) return false;
     }
     return true;
   }
@@ -1042,9 +1105,10 @@ function attemptSchedule(
       es.forEach((e) => cell.push(e));
       entries.push(...es);
       const off = base + o;
+      const toff = tbOff(d, i + o);
       for (const ci of req.cIdxs) classGrid[ci * DT + off] = 1;
-      for (const ti of req.tIdxs) teacherGrid[ti * DT + off] = 1;
-      for (const rg of req.roomArrs) rg[off] = 1;
+      for (const ti of req.tIdxs) teacherGrid[ti * DTB + toff] = 1;
+      for (const rg of req.roomArrs) rg[toff] = 1;
     }
     applyCounters(req, d, +1);
     placedHours += req.blockSize;
@@ -1063,9 +1127,10 @@ function attemptSchedule(
       const ts = p.slots[o];
       schedule[day][ts.id] = schedule[day][ts.id].filter((e) => !p.entries.includes(e));
       const off = base + o;
+      const toff = tbOff(d, startIdx + o);
       for (const ci of req.cIdxs) classGrid[ci * DT + off] = 0;
-      for (const ti of req.tIdxs) teacherGrid[ti * DT + off] = 0;
-      for (const rg of req.roomArrs) rg[off] = 0;
+      for (const ti of req.tIdxs) teacherGrid[ti * DTB + toff] = 0;
+      for (const rg of req.roomArrs) rg[toff] = 0;
     }
     p.entries.forEach((e) => entryToPlacement.delete(e));
     applyCounters(req, d, -1);
@@ -1672,9 +1737,10 @@ function attemptSchedule(
     const base = d * T + i;
     for (let o = 0; o < req.blockSize; o++) {
       const off = base + o;
+      const toff = tbOff(d, i + o);
       for (const ci of req.cIdxs) classGrid[ci * DT + off] = val;
-      for (const ti of req.tIdxs) teacherGrid[ti * DT + off] = val;
-      for (const rg of req.roomArrs) rg[off] = val;
+      for (const ti of req.tIdxs) teacherGrid[ti * DTB + toff] = val;
+      for (const rg of req.roomArrs) rg[toff] = val;
     }
     const delta = val ? req.blockSize : -req.blockSize;
     for (const ci of req.cIdxs) classDayCount[ci * D + d] += delta;
@@ -2732,16 +2798,28 @@ function buildValidationReport(ctx) {
     const bs = teacherBlockedMap?.[tid];
     return Boolean(bs && Array.isArray(bs[day]) && bs[day].includes(tsId));
   };
+  // Ustoz/xona bir vaqtda ikki joyda bo'la olmaydi — hatto slotlar
+  // turli smenada bo'lsa ham. Shuning uchun kuzatuv vaqt bandi bo'yicha.
+  const vBuckets = buildTimeBuckets(timeslots);
+  const vBucketOf = new Map(timeslots.map((ts, i) => [ts.id, vBuckets.bucketOf[i]]));
   const placedPerKey = {};
   DAYS.forEach((day) => {
+    const tSeenByBucket = new Map();
+    const rSeenByBucket = new Map();
+    const seenIn = (map, key) => {
+      let m = map.get(key);
+      if (!m) map.set(key, (m = new Map()));
+      return m;
+    };
     timeslots.forEach((ts) => {
       const cell = schedule[day]?.[ts.id];
       if (!Array.isArray(cell) || !cell.length) return;
       if (!isTeachingSlot(ts)) {
         cell.forEach((l) => { if (!l.manual) lunchConflicts.push({ day, tsId: ts.id, subjectId: l.subjectId }); });
       }
-      const tSeen = new Map();
-      const rSeen = new Map();
+      const bKey = vBucketOf.has(ts.id) ? vBucketOf.get(ts.id) : `slot:${ts.id}`;
+      const tSeen = seenIn(tSeenByBucket, bKey);
+      const rSeen = seenIn(rSeenByBucket, bKey);
       const cSeen = new Map();
       cell.forEach((l) => {
         const p = entryToPlacement?.get(l) || l;
@@ -2825,6 +2903,10 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
   for (let i = 0; i < T - 1; i++) {
     nextConsecutive[i] = allIdxById.get(teachingTs[i + 1].id) === allIdxById.get(teachingTs[i].id) + 1;
   }
+  // Zichlashda ham ustoz/xona bandligi vaqt bandi bo'yicha tekshiriladi
+  const { bucketOf: tsBucket, count: TB } = buildTimeBuckets(teachingTs);
+  const DTB = D * TB;
+  const tbOff = (d, i) => d * TB + tsBucket[i];
 
   // ——— USTOZ SETKASI: qulflangan soatlar (zichlashda ham hurmat qilinadi) ———
   const tBlockedMap = new Map(); // teacherId -> Uint8Array(DT)
@@ -2995,7 +3077,7 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
   const rGrid = new Map();
   const gridOf = (map, id) => {
     let g = map.get(id);
-    if (!g) { g = new Uint8Array(DT); map.set(id, g); }
+    if (!g) { g = new Uint8Array(DTB); map.set(id, g); }
     return g;
   };
   const classDayCount = new Int16Array(C * D);
@@ -3009,9 +3091,10 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
   const setBits = (u, d, i, val) => {
     for (let o = 0; o < u.len; o++) {
       const off = d * T + i + o;
+      const toff = tbOff(d, i + o);
       for (const ci of u.cIdxs) classGrid[ci * DT + off] = val;
-      for (const id of u.tids) gridOf(tGrid, id)[off] = val;
-      for (const id of u.rids) gridOf(rGrid, id)[off] = val;
+      for (const id of u.tids) gridOf(tGrid, id)[toff] = val;
+      for (const id of u.rids) gridOf(rGrid, id)[toff] = val;
     }
     const delta = val ? u.len : -u.len;
     for (const ci of u.cIdxs) classDayCount[ci * D + d] += delta;
@@ -3032,13 +3115,14 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
     for (let o = 0; o < u.len; o++) {
       if (o > 0 && !nextConsecutive[i + o - 1]) return false;
       const off = d * T + i + o;
+      const toff = tbOff(d, i + o);
       for (const ci of u.cIdxs) if (blocked[ci * DT + off] || classGrid[ci * DT + off]) return false;
       for (const id of u.tids) {
-        if (gridOf(tGrid, id)[off]) return false;
+        if (gridOf(tGrid, id)[toff]) return false;
         const bg = tBlockedMap.get(id);
         if (bg && bg[off]) return false;
       }
-      for (const id of u.rids) if (gridOf(rGrid, id)[off]) return false;
+      for (const id of u.rids) if (gridOf(rGrid, id)[toff]) return false;
     }
     return true;
   };
