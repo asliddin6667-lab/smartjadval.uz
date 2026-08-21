@@ -823,6 +823,9 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                     const isOpen = openSettings === s.id;
                     const chips = checked ? activeChips(a, s) : [];
                     const hoursNow = Number(a.weeklyHours || s.weeklyHours || 1);
+                    // 2 guruhga bo'lish yoqilganda ustoz/xona asosiy qatorda emas,
+                    // pastdagi guruh kartalarida tanlanadi — tepada faqat "—" turadi.
+                    const splitMode = checked && Boolean(a.splitEnabled) && !a.levelGroupEnabled;
                     return (
                       <div key={s.id} className={`cs-item ${checked ? "" : "cs-item-off"} ${isOpen ? "cs-item-open" : ""}`}>
                         {/* ——— ASOSIY QATOR ——— */}
@@ -854,14 +857,22 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                               }} />
                           </div>
                           <div className="cs-col-teacher">
-                            <select className="form-control" disabled={!checked || a.levelGroupEnabled} value={a.teacherId || ""} onChange={e => updateAssignment(s.id, { teacherId: e.target.value })}>
-                              <option value="">— ustoz —</option>{availableTeachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                            </select>
+                            {splitMode ? (
+                              <div className="cs-dash-box" title="Ustoz har bir guruh uchun pastdagi «✂️ 2 guruhga bo'lish» blokidan tanlanadi">—</div>
+                            ) : (
+                              <select className="form-control" disabled={!checked || a.levelGroupEnabled} value={a.teacherId || ""} onChange={e => updateAssignment(s.id, { teacherId: e.target.value })}>
+                                <option value="">— ustoz —</option>{availableTeachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                              </select>
+                            )}
                           </div>
                           <div className="cs-col-room">
-                            <select className="form-control" disabled={!checked || a.levelGroupEnabled} value={a.roomId || ""} onChange={e => updateAssignment(s.id, { roomId: e.target.value })}>
-                              <option value="">Xonasiz</option>{sortedRooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-                            </select>
+                            {splitMode ? (
+                              <div className="cs-dash-box" title="Xona har bir guruh uchun pastdagi «✂️ 2 guruhga bo'lish» blokidan tanlanadi">—</div>
+                            ) : (
+                              <select className="form-control" disabled={!checked || a.levelGroupEnabled} value={a.roomId || ""} onChange={e => updateAssignment(s.id, { roomId: e.target.value })}>
+                                <option value="">Xonasiz</option>{sortedRooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                              </select>
+                            )}
                           </div>
                           <div className="cs-col-settings">
                             <button
@@ -965,12 +976,51 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                             {a.splitEnabled && !a.levelGroupEnabled && (
                               <div className="cs-detail" style={{ background: "var(--content-bg)" }}>
                                 <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>✂️ 2 guruhga bo'lish</div>
-                                <div className="cs-grid-3">
-                                  <input className="form-control" placeholder="1-guruh nomi" value={a.groupName1 || "1-guruh"} onChange={e => updateAssignment(s.id, { groupName1: e.target.value })} />
-                                  <select className="form-control" disabled={a.swapEnabled} value={a.teacherId2 || ""} onChange={e => updateAssignment(s.id, { teacherId2: e.target.value })}>
-                                    <option value="">— 2-guruh ustozi —</option>{availableTeachers.filter(t => t.id !== a.teacherId).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                                  </select>
-                                  <select className="form-control" disabled={a.swapEnabled} value={a.roomId2 || ""} onChange={e => updateAssignment(s.id, { roomId2: e.target.value })}><option value="">2-guruh xonasi</option>{sortedRooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select>
+                                <div className="cs-split-groups">
+                                  {/* ——— 1-guruh ——— */}
+                                  <div className="cs-split-card cs-split-card-1">
+                                    <div className="cs-split-head"><span className="cs-split-num">1</span> 1-guruh</div>
+                                    <div className="cs-split-field">
+                                      <span className="cs-split-label">Guruh nomi</span>
+                                      <input className="form-control" placeholder="1-guruh" value={a.groupName1 || "1-guruh"} onChange={e => updateAssignment(s.id, { groupName1: e.target.value })} />
+                                    </div>
+                                    <div className="cs-split-field">
+                                      <span className="cs-split-label">👨‍🏫 Ustoz</span>
+                                      <select className="form-control" value={a.teacherId || ""} onChange={e => updateAssignment(s.id, { teacherId: e.target.value })}>
+                                        <option value="">— 1-guruh ustozi —</option>{availableTeachers.filter(t => t.id !== a.teacherId2).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                      </select>
+                                    </div>
+                                    <div className="cs-split-field">
+                                      <span className="cs-split-label">🚪 Xona</span>
+                                      <select className="form-control" value={a.roomId || ""} onChange={e => updateAssignment(s.id, { roomId: e.target.value })}>
+                                        <option value="">Xonasiz</option>{sortedRooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                                      </select>
+                                    </div>
+                                  </div>
+
+                                  {/* ——— 2-guruh ——— */}
+                                  <div className="cs-split-card cs-split-card-2">
+                                    <div className="cs-split-head"><span className="cs-split-num">2</span> 2-guruh</div>
+                                    <div className="cs-split-field">
+                                      <span className="cs-split-label">Guruh nomi</span>
+                                      <input className="form-control" placeholder="2-guruh" value={a.groupName2 || "2-guruh"} onChange={e => updateAssignment(s.id, { groupName2: e.target.value })} />
+                                    </div>
+                                    <div className="cs-split-field">
+                                      <span className="cs-split-label">👨‍🏫 Ustoz</span>
+                                      <select className="form-control" disabled={a.swapEnabled} value={a.teacherId2 || ""} onChange={e => updateAssignment(s.id, { teacherId2: e.target.value })}>
+                                        <option value="">— 2-guruh ustozi —</option>{availableTeachers.filter(t => t.id !== a.teacherId).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                      </select>
+                                    </div>
+                                    <div className="cs-split-field">
+                                      <span className="cs-split-label">🚪 Xona</span>
+                                      <select className="form-control" disabled={a.swapEnabled} value={a.roomId2 || ""} onChange={e => updateAssignment(s.id, { roomId2: e.target.value })}>
+                                        <option value="">Xonasiz</option>{sortedRooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                                      </select>
+                                    </div>
+                                    {a.swapEnabled && (
+                                      <div className="cs-split-note">🔄 Almashinuv yoqilgan — 2-guruh ustozi va xonasi quyidagi «2-fan» sozlamasidan olinadi.</div>
+                                    )}
+                                  </div>
                                 </div>
                                 <div style={{ marginTop: 10, background: "var(--card-bg)", border: "1px solid var(--card-border)", padding: 12, borderRadius: 10 }}>
                                   <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
@@ -980,10 +1030,9 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                                   {a.swapEnabled && (
                                     <>
                                       <div style={{ fontSize: 12, color: "var(--text-secondary)", margin: "8px 0" }}>
-                                        1-guruh <b>{s.name}</b> (asosiy qatorda tanlangan ustoz/xona), 2-guruh esa quyidagi fanni o'qiydi. Keyingi soatda almashadi. <b>2-fanni alohida belgilamang</b> — soati shu yerdan olinadi.
+                                        1-guruh <b>{s.name}</b> (yuqoridagi 1-guruh kartasidagi ustoz/xona bilan), 2-guruh esa quyidagi fanni o'qiydi. Keyingi soatda almashadi. <b>2-fanni alohida belgilamang</b> — soati shu yerdan olinadi.
                                       </div>
                                       <div className="cs-grid-3" style={{ marginTop: 4 }}>
-                                        <input className="form-control" placeholder="2-guruh nomi" value={a.groupName2 || "2-guruh"} onChange={e => updateAssignment(s.id, { groupName2: e.target.value })} />
                                         <select className="form-control" value={a.swapSubjectId || ""} onChange={e => updateAssignment(s.id, { swapSubjectId: e.target.value, swapTeacherId: "" })}>
                                           <option value="">— 2-fan —</option>
                                           {langSubjects.filter(x => x.id !== s.id).map(x => <option key={x.id} value={x.id}>{x.name}</option>)}

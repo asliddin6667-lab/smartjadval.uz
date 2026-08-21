@@ -195,7 +195,8 @@ body.dark-mode .cs-class-btn.active .cs-class-count {
 
   /* Sozlama gridlari telefon ekranida ustma-ust */
   .cs-grid-2,
-  .cs-grid-3 {
+  .cs-grid-3,
+  .cs-split-groups {
     grid-template-columns: 1fr;
   }
 

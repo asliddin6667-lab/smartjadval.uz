@@ -3,6 +3,9 @@
 //   1) Excel bo'limi (ImportExport.jsx) — "🎨 Rangli jadval" tugmasi
 //   2) Dars jadvali sahifasi (Schedule.jsx) — "📥 Excel" tugmasi
 //
+// `mono: true` — AYNAN SHU jadvalning rangsiz (oq-qora) nusxasi: fon ranglari
+// oq/kulrangga almashadi, matn qora bo'ladi, tuzilma o'zgarmaydi.
+//
 // Format talablari:
 //   - HAR SMENA — ALOHIDA LIST (varaq). Listda faqat o'sha smenaning sinflari
 //     va o'sha smenaning dars vaqtlari bo'ladi (bo'sh ustunlar chiqmaydi)
@@ -41,6 +44,22 @@ const CLASS_HEADS = [
   { bg: 'BE123C', fg: 'FFFFFF' },
   { bg: '0E7490', fg: 'FFFFFF' },
 ];
+
+// ——— RANGSIZ (oq-qora) rejim palitrasi ———
+// `mono: true` bilan chaqirilganda ishlatiladi: rangli fonlar o'rniga oq va
+// kulrang tuslar qo'yiladi, matn qora bo'ladi. Jadval tuzilmasi (chegaralar,
+// sinf ajratkichlari) o'zgarmaydi — oddiy printerda ham toza chiqadi.
+const MONO = {
+  title: { bg: 'FFFFFF', fg: '000000' },
+  sub: { bg: 'FFFFFF', fg: '000000' },
+  day: { bg: 'D9D9D9', fg: '000000' },
+  leadHead: { bg: 'E0E0E0', fg: '000000' },
+  lead: 'F5F5F5',
+  classHead: { bg: 'E8E8E8', fg: '000000' },
+  cell: { bg: 'FFFFFF', fg: '000000' },
+  band: { bg: 'EDEDED', fg: '000000' },
+  dayLabel: { bg: 'F5F5F5', fg: '000000' },
+};
 
 function lessonClassIds(lesson) {
   return Array.isArray(lesson.classIds) ? lesson.classIds : [lesson.classId].filter(Boolean);
@@ -130,8 +149,17 @@ function buildGroups(classes, timeslots) {
 // Dars bo'lmasa null qaytaradi (bo'sh varaq qo'shilmaydi).
 function buildSheet(XLSX, {
   classes, timeslots, subjects, teachers, rooms, lunchGroups, schedule,
-  title, subtitle,
+  title, subtitle, mono = false,
 }) {
+  // Rejimga bog'liq ranglar — pastdagi barcha uslublar shulardan oladi
+  const C_TITLE = mono ? MONO.title : { bg: TITLE_BG, fg: 'FFFFFF' };
+  const C_SUB = mono ? MONO.sub : { bg: SUB_BG, fg: 'FFFFFF' };
+  const C_DAY = mono ? MONO.day : { bg: DAY_BG, fg: 'FFFFFF' };
+  const C_LEADHEAD = mono ? MONO.leadHead : { bg: '334155', fg: 'FFFFFF' };
+  const C_LEAD = mono ? MONO.lead : LEAD_BG;
+  const C_DAYLBL = mono ? MONO.dayLabel : { bg: 'FDE68A', fg: '92400E' };
+  const classHead = (ci) => (mono ? MONO.classHead : CLASS_HEADS[ci % CLASS_HEADS.length]);
+
   const sortedTimeslots = [...timeslots].sort(
     (a, b) => Number(a.lessonNumber || 0) - Number(b.lessonNumber || 0)
   );
@@ -148,14 +176,18 @@ function buildSheet(XLSX, {
   const lessonsAt = (day, ts, cls) =>
     (schedule?.[day]?.[ts.id] || []).filter((l) => lessonClassIds(l).includes(cls.id));
   const subjColor = (l) => {
+    if (mono) return { ...MONO.cell };
     const bg = hexToExcelRGB(getSubject(l.subjectId)?.color);
     return bg ? { bg, fg: readableTextRGB(bg) } : { bg: 'BDD7EE', fg: '1F2937' };
   };
   const bandColor = (ts) => {
+    if (mono) return { ...MONO.band };
     const t = String(ts.title || '').toLowerCase();
     if (t.includes('uyqu') || t.includes('uxla')) return { bg: 'F8CBAD', fg: '7C2D12' };
     return { bg: '13A05A', fg: 'FFFFFF' };
   };
+  // "Dam" / "Obed" belgilari — rangsiz rejimda och kulrang
+  const markColor = (bg, fg) => (mono ? { ...MONO.band } : { bg, fg });
 
   const anyLesson = DAYS.some((day) =>
     sortedTimeslots.some((ts) => classes.some((cls) => lessonsAt(day, ts, cls).length > 0))
@@ -247,8 +279,8 @@ function buildSheet(XLSX, {
 
       const plans = classes.map((cls) => {
         const offDays = Array.isArray(cls.offDays) ? cls.offDays : [];
-        if (offDays.includes(day)) return { kind: 'label', text: 'Dam', fill: { bg: 'FEF3C7', fg: 'B45309' } };
-        if (classHasLunchAt(ts, cls.id, lunchGroups, day)) return { kind: 'label', text: 'Obed', fill: { bg: 'FDE68A', fg: '92400E' } };
+        if (offDays.includes(day)) return { kind: 'label', text: 'Dam', fill: markColor('FEF3C7', 'B45309') };
+        if (classHasLunchAt(ts, cls.id, lunchGroups, day)) return { kind: 'label', text: 'Obed', fill: markColor('FDE68A', '92400E') };
         const ls = lessonsAt(day, ts, cls);
         if (!ls.length) return { kind: 'empty' };
         const sorted = [...ls].sort((a, b) =>
@@ -350,16 +382,16 @@ function buildSheet(XLSX, {
   for (let C = range.s.c; C <= range.e.c; C++) {
     cell(0, C).s = {
       alignment: { horizontal: 'center', vertical: 'center', wrapText: false },
-      font: { bold: true, sz: 18, color: { rgb: 'FFFFFF' } },
-      fill: { patternType: 'solid', fgColor: { rgb: TITLE_BG } },
+      font: { bold: true, sz: 18, color: { rgb: C_TITLE.fg } },
+      fill: { patternType: 'solid', fgColor: { rgb: C_TITLE.bg } },
     };
   }
   // 1-qator — ostki sarlavha (smena, o'quv yili)
   for (let C = range.s.c; C <= range.e.c; C++) {
     cell(1, C).s = {
       alignment: { horizontal: 'center', vertical: 'center', wrapText: false },
-      font: { bold: true, sz: 12, color: { rgb: 'FFFFFF' } },
-      fill: { patternType: 'solid', fgColor: { rgb: SUB_BG } },
+      font: { bold: true, sz: 12, color: { rgb: C_SUB.fg } },
+      fill: { patternType: 'solid', fgColor: { rgb: C_SUB.bg } },
     };
   }
   // 2-qator — ustun nomlari. Kun/Soat/Vaqt to'q kulrang, har sinf o'z rangida.
@@ -367,12 +399,12 @@ function buildSheet(XLSX, {
     cell(2, C).s = {
       alignment: mid,
       border: { top: SEP, bottom: SEP, left: HAIR, right: HAIR },
-      font: { bold: true, sz: 12, color: { rgb: 'FFFFFF' } },
-      fill: { patternType: 'solid', fgColor: { rgb: '334155' } },
+      font: { bold: true, sz: 12, color: { rgb: C_LEADHEAD.fg } },
+      fill: { patternType: 'solid', fgColor: { rgb: C_LEADHEAD.bg } },
     };
   }
   classes.forEach((_, ci) => {
-    const head = CLASS_HEADS[ci % CLASS_HEADS.length];
+    const head = classHead(ci);
     cell(2, LEAD + ci).s = {
       alignment: mid,
       border: { top: SEP, bottom: SEP, left: SEP, right: SEP },
@@ -388,7 +420,7 @@ function buildSheet(XLSX, {
         alignment: mid,
         border: { top: HAIR, bottom: HAIR, left: HAIR, right: SEP },
         font: { bold: true, sz: 11, color: { rgb: '1F2937' } },
-        fill: { patternType: 'solid', fgColor: { rgb: LEAD_BG } },
+        fill: { patternType: 'solid', fgColor: { rgb: C_LEAD } },
       };
     }
   }
@@ -399,8 +431,8 @@ function buildSheet(XLSX, {
       cell(R, 0).s = {
         alignment: { horizontal: 'center', vertical: 'center', textRotation: 90, wrapText: false },
         border: { top: HAIR, bottom: HAIR, left: SEP, right: SEP },
-        font: { bold: true, sz: 14, color: { rgb: '92400E' } },
-        fill: { patternType: 'solid', fgColor: { rgb: 'FDE68A' } },
+        font: { bold: true, sz: 14, color: { rgb: C_DAYLBL.fg } },
+        fill: { patternType: 'solid', fgColor: { rgb: C_DAYLBL.bg } },
       };
     }
   });
@@ -433,8 +465,8 @@ function buildSheet(XLSX, {
       cell(R, C).s = {
         alignment: { horizontal: 'center', vertical: 'center', wrapText: false },
         border: { top: SEP, bottom: SEP },
-        font: { bold: true, sz: 16, color: { rgb: 'FFFFFF' } },
-        fill: { patternType: 'solid', fgColor: { rgb: DAY_BG } },
+        font: { bold: true, sz: 16, color: { rgb: C_DAY.fg } },
+        fill: { patternType: 'solid', fgColor: { rgb: C_DAY.bg } },
       };
     }
   });
@@ -464,6 +496,7 @@ export async function exportColoredSchedule({
   schedule = {},
   schoolName = '',
   academicYear = '',
+  mono = false,   // true — rangsiz (oq-qora) nusxa
   toast,
 }) {
   try {
@@ -496,6 +529,7 @@ export async function exportColoredSchedule({
         subjects, teachers, rooms, lunchGroups, schedule,
         title,
         subtitle: parts.join(' · '),
+        mono,
       });
       if (!ws) return;
       const name = sheetName(g.name, used);
@@ -515,8 +549,13 @@ export async function exportColoredSchedule({
     }
 
     wb.Workbook = { ...(wb.Workbook || {}), Names: names };
-    XLSX.writeFile(wb, `dars_jadvali_rangli_${safeFileDate()}.xlsx`);
-    toast?.(added > 1 ? `Excelga yuklandi — ${added} ta smena listi ✓` : 'Rangli jadval Excelga yuklandi ✓', 'success');
+    XLSX.writeFile(wb, `dars_jadvali_${mono ? 'rangsiz' : 'rangli'}_${safeFileDate()}.xlsx`);
+    toast?.(
+      added > 1
+        ? `Excelga yuklandi — ${added} ta smena listi ✓`
+        : `${mono ? 'Rangsiz' : 'Rangli'} jadval Excelga yuklandi ✓`,
+      'success',
+    );
   } catch (e) {
     toast?.(e.message || 'Excel eksportda xatolik', 'error');
   }

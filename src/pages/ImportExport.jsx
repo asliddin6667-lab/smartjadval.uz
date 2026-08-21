@@ -1,15 +1,9 @@
 import { useRef, useState } from 'react';
-import { DAYS } from '../utils/constants';
 import { genId } from '../utils/helpers';
 import { loadXLSX, splitNames, normalizeText, findByName, makeSubject, worksheetToRows, downloadWorkbook } from '../utils/excelUtils';
 import { exportColoredSchedule } from '../utils/coloredScheduleExport';
 import { exportAnalysisExcel } from '../utils/analysisExport';
 import { exportHourGridExcel } from '../utils/hourGridExport';
-import { isTeachingSlot, classHasLunchAt } from '../utils/scheduleGenerator';
-
-function lessonClassIds(lesson) {
-  return Array.isArray(lesson.classIds) ? lesson.classIds : [lesson.classId].filter(Boolean);
-}
 
 function teacherSubjectIds(teacher) {
   return Array.isArray(teacher.subjectIds) ? teacher.subjectIds : (teacher.subjectId ? [teacher.subjectId] : []);
@@ -30,7 +24,6 @@ export default function ImportExportPage({
 }) {
   const teacherFileRef = useRef(null);
   const [importing, setImporting] = useState(false);
-  const sortedTimeslots = [...timeslots].sort((a, b) => Number(a.lessonNumber) - Number(b.lessonNumber));
 
   async function downloadTeacherTemplate() {
     try {
@@ -151,95 +144,13 @@ export default function ImportExportPage({
     }
   }
 
-  function getSubject(id) { return subjects.find(s => s.id === id); }
-  function getTeacher(id) { return teachers.find(t => t.id === id); }
-  function getRoom(id) { return rooms.find(r => r.id === id); }
-  function getClassName(id) { return classes.find(c => c.id === id)?.name || ''; }
-
-  function scheduleRows() {
-    const rows = [];
-    DAYS.forEach(day => {
-      sortedTimeslots.forEach(ts => {
-        const blocked = !isTeachingSlot(ts);
-        if (blocked) {
-          rows.push({
-            "Kun": day,
-            "Dars": ts.title || (ts.type === 'lunch' ? 'Obed vaqti' : 'Tanaffus'),
-            "Boshlanish": ts.startTime || '',
-            "Tugash": ts.endTime || '',
-            "Sinf / guruh": '',
-            "Fan": "Dars qo'yilmaydi",
-            "O'qituvchi": '',
-            "Xona": '',
-            "Guruh kaliti": '',
-          });
-          return;
-        }
-        const lessons = schedule?.[day]?.[ts.id] || [];
-        lessons.forEach(lesson => {
-          rows.push({
-            "Kun": day,
-            "Dars": `${ts.lessonNumber}-dars`,
-            "Boshlanish": ts.startTime || '',
-            "Tugash": ts.endTime || '',
-            "Sinf / guruh": lessonClassIds(lesson).map(getClassName).filter(Boolean).join(', '),
-            "Fan": getSubject(lesson.subjectId)?.name || '',
-            "O'qituvchi": getTeacher(lesson.teacherId)?.name || '',
-            "Xona": getRoom(lesson.roomId)?.name || 'Xonasiz',
-            "Guruh kaliti": lesson.groupKey || '',
-          });
-        });
-      });
-    });
-    return rows;
-  }
-
-  function classScheduleRows() {
-    const rows = [];
-    classes.forEach(cls => {
-      DAYS.forEach(day => {
-        sortedTimeslots.forEach(ts => {
-          const blocked = !isTeachingSlot(ts);
-          const classLunch = !blocked && classHasLunchAt(ts, cls.id, lunchGroups, day);
-          const lesson = (blocked || classLunch) ? null : (schedule?.[day]?.[ts.id] || []).find(l => lessonClassIds(l).includes(cls.id));
-          rows.push({
-            "Sinf": cls.name,
-            "Kun": day,
-            "Dars": blocked ? (ts.title || (ts.type === 'lunch' ? 'Obed vaqti' : 'Tanaffus')) : `${ts.lessonNumber}-dars`,
-            "Vaqt": `${ts.startTime || ''}-${ts.endTime || ''}`,
-            "Fan": blocked ? "Dars qo'yilmaydi" : (classLunch ? "Obed" : (lesson ? (getSubject(lesson.subjectId)?.name || '') : '')),
-            "O'qituvchi": lesson ? (getTeacher(lesson.teacherId)?.name || '') : '',
-            "Xona": lesson ? (getRoom(lesson.roomId)?.name || 'Xonasiz') : '',
-            "Guruh": lesson?.groupKey || '',
-          });
-        });
-      });
-    });
-    return rows;
-  }
-
-  function teacherLoadRows() {
-    return teachers.map(t => {
-      let lessons = 0;
-      DAYS.forEach(day => sortedTimeslots.forEach(ts => {
-        lessons += (schedule?.[day]?.[ts.id] || []).filter(l => l.teacherId === t.id).length;
-      }));
-      return {
-        "O'qituvchi": t.name,
-        "Fanlar": teacherSubjectIds(t).map(id => subjects.find(s => s.id === id)?.name).filter(Boolean).join(', '),
-        "Jadvaldagi darslar": lessons,
-        "Maksimal soat": t.maxWeeklyHours || 28,
-        "Holat": lessons > Number(t.maxWeeklyHours || 28) ? 'Oshib ketgan' : 'Normal',
-      };
-    });
-  }
-
-  // Rangli jadval eksporti — umumiy modulga o'tkazildi (coloredScheduleExport.js).
-  // Yangi format: bo'sh soat qatorlari chiqmaydi, kunlar rangli qator bilan
+  // Jadval eksporti — umumiy modulga o'tkazildi (coloredScheduleExport.js).
+  // Format: bo'sh soat qatorlari chiqmaydi, kunlar ajratuvchi qator bilan
   // ajratiladi, kun nomlari katta shriftda.
-  async function exportColoredMatrix() {
+  // mono = true — aynan shu jadvalning rangsiz (oq-qora) nusxasi.
+  async function exportColoredMatrix(mono = false) {
     await exportColoredSchedule({
-      classes, subjects, teachers, rooms, timeslots, lunchGroups, schedule, toast,
+      classes, subjects, teachers, rooms, timeslots, lunchGroups, schedule, toast, mono,
       schoolName: settings.schoolName || schoolName,
       academicYear: settings.academicYear,
     });
@@ -259,25 +170,6 @@ export default function ImportExportPage({
     await exportHourGridExcel({
       classes, subjects, classSubjects, settings, schoolName, toast,
     });
-  }
-
-  async function exportSchedule() {
-    try {
-      const rows = scheduleRows();
-      if (!rows.length) {
-        toast('Avval dars jadvalini yarating', 'warning');
-        return;
-      }
-      const XLSX = await loadXLSX();
-      downloadWorkbook(XLSX, [
-        { name: 'Umumiy jadval', rows },
-        { name: 'Sinflar kesimida', rows: classScheduleRows() },
-        { name: 'Ustoz yuklamasi', rows: teacherLoadRows() },
-      ], `dars_jadvali_${safeFileDate()}.xlsx`);
-      toast('Dars jadvali Excelga yuklandi ✓', 'success');
-    } catch (e) {
-      toast(e.message, 'error');
-    }
   }
 
   return (
@@ -313,11 +205,11 @@ export default function ImportExportPage({
             <div style={{ fontSize: 28, marginBottom: 10 }}>📋</div>
             <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 6 }}>Dars jadvalini Excelga yuklash</div>
             <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 14 }}>
-              Rangli jadval: ustunlarda sinflar, kunlar rangli qator bilan ajratilgan, bo'sh soatlar chiqmaydi, har bir fan o'z rangida. Pastdagi tugma — batafsil ro'yxat (sinf/ustoz kesimida).
+              Ustunlarda sinflar, kunlar alohida qator bilan ajratilgan, bo'sh soatlar chiqmaydi. Rangli variantda har bir fan o'z rangida; rangsiz variant — aynan shu jadval oq-qora holda (oddiy printer uchun).
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button className="btn btn-success" onClick={exportColoredMatrix}>🎨 Rangli jadval (sinflar ustun)</button>
-              <button className="btn btn-secondary" onClick={exportSchedule}>📊 Batafsil ro'yxat</button>
+              <button className="btn btn-success" onClick={() => exportColoredMatrix(false)}>🎨 Rangli jadval (sinflar ustun)</button>
+              <button className="btn btn-secondary" onClick={() => exportColoredMatrix(true)}>🖨️ Rangsiz jadval</button>
             </div>
           </div></div>
 
