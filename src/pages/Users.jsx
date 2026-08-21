@@ -11,6 +11,8 @@ import {
   adminSetLocation, syncAllDistricts,
 } from "../services/districtService";
 import { UZ_REGIONS, districtsOf } from "../utils/uzRegions";
+import { fetchSchoolData } from "../services/cloudSync";
+import { buildBackup, safeFileName, BACKUP_VERSION } from "../services/backupService";
 
 // =====================================================================
 //  FOYDALANUVCHILAR (Superadmin paneli)
@@ -57,6 +59,9 @@ export default function UsersPage({ currentUser, toast }) {
   // Viloyat/tuman filtri
   const [filterRegion, setFilterRegion] = useState("");
   const [filterDistrict, setFilterDistrict] = useState("");
+  // Zaxira yuklab olish holati: qaysi foydalanuvchi / ommaviy jarayon
+  const [dlUser, setDlUser] = useState(null);
+  const [bulk, setBulk] = useState(null);
 
   async function loadUsers() {
     try {
@@ -276,6 +281,161 @@ export default function UsersPage({ currentUser, toast }) {
     return { text: "To'lov qilmagan", cls: "badge-danger" };
   }
 
+  // ------------------------------------------------------------------
+  //  ZAXIRA (JSON) — foydalanuvchi KIRITGAN ma'lumot
+  //
+  //  Profil ro'yxati emas, bulutdagi `schools` blobi yuklab olinadi:
+  //  sinflar, fanlar, o'qituvchilar, dars vaqtlari, jadval va h.k.
+  //  Format Sozlamalar sahifasidagi zaxira bilan BIR XIL
+  //  (backupService.buildBackup) — ya'ni kerak bo'lsa o'sha yerdan
+  //  "Zaxiradan tiklash" orqali qaytarib yuklash mumkin.
+  // ------------------------------------------------------------------
+  function saveJson(obj, fileName) {
+    const blob = new Blob([JSON.stringify(obj, null, 2)], {
+      type: "application/json;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  // Bitta foydalanuvchining profili + kiritgan ma'lumoti
+  function profileOf(u) {
+    const iso = (ms) => (ms ? new Date(ms).toISOString() : null);
+    return {
+      eduId: u.uid || null,
+      id: u.id,
+      ism: u.name || "",
+      email: u.email || "",
+      telefon: u.phone || "",
+      maktab: u.schoolName || "",
+      rol: u.role,
+      status: u.status,
+      viloyat: u.regionName || "",
+      tuman: u.districtName || "",
+      biriktirilganTuman: u.districtId ? districtName(u.districtId) : null,
+      royxatdanOtgan: iso(u.createdAt),
+      obuna: {
+        holati: subState(u),
+        status: u.subscription?.status || "unpaid",
+        tugashSanasi: iso(u.subscription?.expiresAt),
+      },
+    };
+  }
+
+  // ——— BITTA foydalanuvchi ———
+  async function downloadUserData(u) {
+    if (dlUser) return;
+    setDlUser(u.id);
+    try {
+      const res = await fetchSchoolData(u.id);
+      if (!res.ok) {
+        return toast(
+          res.reason === "empty"
+            ? `${u.name || u.email}: bulutda ma'lumot yo'q (yoki hali sinxronlanmagan)`
+            : `Yuklab bo'lmadi: ${res.message || "xato"}`,
+          "warning"
+        );
+      }
+      const backup = buildBackup(res.data, { schoolName: u.schoolName });
+      backup.profile = profileOf(u);
+      backup.cloudUpdatedAt = res.updatedAt || null;
+      const total = Object.values(backup.counts).reduce((a, b) => a + b, 0);
+      saveJson(backup, safeFileName(u.schoolName || u.name || u.email));
+      toast(
+        total
+          ? `${u.name || u.email}: zaxira yuklandi ✓`
+          : `${u.name || u.email}: zaxira yuklandi, lekin ma'lumot bo'sh`,
+        total ? "success" : "warning"
+      );
+    } catch (err) {
+      toast(err.message, "warning");
+    } finally {
+      setDlUser(null);
+    }
+  }
+
+  // ——— HAMMASI (ekranda ko'rinayotgan ro'yxat) bitta faylda ———
+  async function downloadAllData() {
+    if (bulk) return;
+    const list = shownUsers.filter((u) => u.role !== "superadmin");
+    if (!list.length) return toast("Zaxiralash uchun foydalanuvchi yo'q", "warning");
+    if (!confirm(
+      `${list.length} ta foydalanuvchining kiritgan ma'lumoti bitta JSON faylga yig'ilsinmi?\n` +
+      `Bu biroz vaqt oladi — oyna yopilmasin.`
+    )) return;
+
+    setBulk({ done: 0, total: list.length });
+    const out = [];
+    let withData = 0;
+    try {
+      // 4 tadan — Supabase'ni ortiqcha yuklamaslik uchun
+      for (let i = 0; i < list.length; i += 4) {
+        const part = list.slice(i, i + 4);
+        const got = await Promise.all(
+          part.map(async (u) => {
+            try {
+              const res = await fetchSchoolData(u.id);
+              return { u, res };
+            } catch (err) {
+              return { u, res: { ok: false, reason: "error", message: err.message } };
+            }
+          })
+        );
+        for (const { u, res } of got) {
+          if (res.ok) {
+            const backup = buildBackup(res.data, { schoolName: u.schoolName });
+            const total = Object.values(backup.counts).reduce((a, b) => a + b, 0);
+            if (total) withData += 1;
+            out.push({
+              profil: profileOf(u),
+              cloudUpdatedAt: res.updatedAt || null,
+              counts: backup.counts,
+              data: backup.data,
+            });
+          } else {
+            out.push({
+              profil: profileOf(u),
+              xato: res.reason === "empty" ? "ma'lumot yo'q" : (res.message || "xato"),
+              data: null,
+            });
+          }
+        }
+        setBulk({ done: Math.min(i + 4, list.length), total: list.length });
+      }
+
+      saveJson(
+        {
+          app: "smartjadval",
+          type: "users-backup",
+          version: BACKUP_VERSION,
+          exportedAt: new Date().toISOString(),
+          exportedBy: currentUser?.email || "",
+          filtr: {
+            qidiruv: query.trim() || null,
+            obuna: subFilter,
+            viloyat: filterRegion || null,
+            tuman: filterDistrict || null,
+          },
+          count: out.length,
+          withData,
+          users: out,
+        },
+        `smartjadval_zaxira_hammasi_${new Date().toISOString().slice(0, 10)}.json`
+      );
+      toast(`${out.length} ta foydalanuvchi zaxiralandi (${withData} tasida ma'lumot bor) ✓`, "success");
+    } catch (err) {
+      toast(err.message, "warning");
+    } finally {
+      setBulk(null);
+    }
+  }
+
   const isSelfEdit = editUser && editUser.id === currentUser.id;
 
   // ------------------------------------------------------------------
@@ -328,6 +488,14 @@ export default function UsersPage({ currentUser, toast }) {
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button className="btn btn-secondary" onClick={loadUsers} disabled={loading}>⟳ Yangilash</button>
+          <button
+            className="btn btn-secondary"
+            onClick={downloadAllData}
+            disabled={loading || !!bulk || !users.length}
+            title="Ekranda ko'rinayotgan foydalanuvchilarning KIRITGAN ma'lumotini (sinflar, fanlar, o'qituvchilar, jadval) bitta JSON zaxira fayliga yig'ish"
+          >
+            {bulk ? `⏳ Zaxiralanmoqda ${bulk.done}/${bulk.total}` : "⬇ Hammasining zaxirasi (JSON)"}
+          </button>
           <button
             className="btn btn-secondary"
             onClick={() => { setShowDistricts(!showDistricts); setShowForm(false); setEditUser(null); setPwUser(null); }}
@@ -881,6 +1049,14 @@ export default function UsersPage({ currentUser, toast }) {
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <button className="btn btn-info btn-sm" title="Ism va maktabni o'zgartirish" onClick={() => startEdit(u)} disabled={busy}>✏️ Tahrirlash</button>
                         <button className="btn btn-warning btn-sm" title="Yangi parol o'rnatish" onClick={() => startPwReset(u)} disabled={busy}>🔑 Parol</button>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          title="Shu foydalanuvchi kiritgan ma'lumotni (sinflar, fanlar, o'qituvchilar, dars jadvali) JSON zaxira sifatida yuklab olish"
+                          onClick={() => downloadUserData(u)}
+                          disabled={busy || !!dlUser || !!bulk}
+                        >
+                          {dlUser === u.id ? "⏳ ..." : "⬇ Zaxira"}
+                        </button>
                         <button className="btn btn-warning btn-sm" onClick={() => toggleStatus(u)} disabled={busy}>{u.status === "active" ? "Bloklash" : "Faollashtirish"}</button>
                         <button className="btn btn-danger btn-sm" onClick={() => removeUser(u)} disabled={busy}>O'chirish</button>
                       </div>

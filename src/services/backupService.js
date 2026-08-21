@@ -79,7 +79,7 @@ export function buildBackup(data, { schoolName = "" } = {}) {
   };
 }
 
-function safeFileName(schoolName) {
+export function safeFileName(schoolName) {
   const base = String(schoolName || "maktab")
     .replace(/[\\/:*?"<>|]+/g, " ")
     .trim()

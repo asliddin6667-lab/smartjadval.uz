@@ -898,4 +898,33 @@ export function clearLocalCopy(userId) {
   for (const k of SYNC_KEYS) saveUserData(userId, k, EMPTY[k]);
 }
 
+// ---------------------------------------------------------------------
+//  BOSHQA FOYDALANUVCHINING BULUTDAGI MA'LUMOTI (faqat superadmin)
+//
+//  Zaxira nusxa olish uchun: `schools` jadvalidagi blob ochiladi va
+//  SYNC_KEYS ko'rinishida qaytariladi. Hech narsa yozilmaydi, mahalliy
+//  nusxaga ham tegilmaydi.
+//
+//  LOKAL REJIM qulfi bu yerda QO'LLANMAYDI — admin amallari lokalda ham
+//  haqiqiy Supabase bilan ishlaydi. Ruxsatni RLS tekshiradi: superadmin
+//  uchun `schools` da SELECT siyosati bo'lmasa, natija bo'sh keladi.
+// ---------------------------------------------------------------------
+export async function fetchSchoolData(ownerId) {
+  if (!ownerId) return { ok: false, reason: "empty" };
+  const { data, error } = await supabase
+    .from("schools")
+    .select("data, updated_at")
+    .eq("owner_id", ownerId)
+    .maybeSingle();
+
+  if (error) return { ok: false, reason: "error", message: error.message };
+  if (!data) return { ok: false, reason: "empty" };
+
+  return {
+    ok: true,
+    data: decodeBlob(data.data || {}),
+    updatedAt: data.updated_at || "",
+  };
+}
+
 export { SYNC_KEYS, EMPTY };
