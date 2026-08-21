@@ -12,7 +12,7 @@
 // → uch tomonlama aylanma almashinuv → muqobil bo'sh kataklar.
 // ═══════════════════════════════════════════════════════════════════
 import { DAYS } from "./constants";
-import { isTeachingSlot, classHasLunchAt, overlappingSlots } from "./scheduleGenerator";
+import { isTeachingSlot, classHasLunchAt, overlappingSlots, isFixedMondaySubject } from "./scheduleGenerator";
 import { slotDisplayNumber } from "./shiftSlots";
 
 export function classIdsOf(lesson) {
@@ -139,6 +139,22 @@ export function slotLabel(ctx, day, slotId) {
   return `${day} ${slotDisplayNumber(ts) ?? "?"}-dars`;
 }
 
+// ——— KELAJAK SOATI: sinfning DUSHANBA 1-darsi ———
+// Fan nomi bo'yicha aniqlanadi (eski jadvallarda belgi bo'lmasligi mumkin).
+// Shu fan qo'lda ham boshqa katakka ko'chirilmaydi.
+function isFixedMondayUnit(ctx, unit) {
+  const subj = (ctx?.subjects || []).find((s) => s.id === unit?.subjectId);
+  return isFixedMondaySubject(subj);
+}
+// Sinf uchun kunning BIRINCHI dars soatimi?
+function isFirstSlotOfDay(ctx, classId, day, slot) {
+  const list = (ctx?.timeslots || [])
+    .filter((ts) => isTeachingSlot(ts) && slotAllowsClass(ts, classId) &&
+      !classHasLunchAt(ts, classId, ctx?.lunchGroups, day))
+    .sort((a, b) => Number(a.lessonNumber || 0) - Number(b.lessonNumber || 0));
+  return Boolean(list.length) && list[0].id === slot?.id;
+}
+
 // ═══ ASOSIY VALIDATSIYA ═══
 // unit'ni (day, slot) ga qo'yish mumkinmi? ignore — hisobga olinmaydigan
 // entrylar (masalan, swap sherigi — u baribir ketadi).
@@ -169,6 +185,14 @@ export function checkPlace(ctx, unit, day, slot, ignore = new Set()) {
     }
   });
 
+  if (isFixedMondayUnit(ctx, unit)) {
+    if (day !== "Dushanba") {
+      errs.push({ code: "FIXED_MONDAY", msg: "Kelajak soati faqat dushanba kuni bo'ladi" });
+    } else if (unit.classIds.some((cid) => !isFirstSlotOfDay(ctx, cid, day, slot))) {
+      errs.push({ code: "FIXED_MONDAY", msg: "Kelajak soati faqat dushanbaning 1-darsida bo'ladi" });
+    }
+  }
+
   unit.teacherIds.forEach((tid) => {
     const t = teachers.find((x) => x.id === tid);
     if (Array.isArray(t?.offDays) && t.offDays.includes(day)) {
@@ -181,6 +205,9 @@ export function checkPlace(ctx, unit, day, slot, ignore = new Set()) {
     }
   });
 
+  // O'chirilgan xona haqiqiy resurs emas — bandlik deb qaralmaydi
+  const liveRooms = Array.isArray(ctx?.rooms) && ctx.rooms.length
+    ? new Set(ctx.rooms.map((r) => r?.id).filter(Boolean)) : null;
   const cell = cellsAt(ctx, day, slot);
   cell.forEach((l) => {
     if (ignore.has(l) || unit.entries.includes(l)) return;
@@ -195,6 +222,7 @@ export function checkPlace(ctx, unit, day, slot, ignore = new Set()) {
       }
     });
     unit.roomIds.forEach((rid) => {
+      if (liveRooms && !liveRooms.has(rid)) return;
       if (l.roomId === rid) errs.push({ code: "ROOM_BUSY", msg: "Xona bu vaqtda band", lesson: l });
     });
   });

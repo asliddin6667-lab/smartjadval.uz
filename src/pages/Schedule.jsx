@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { DAYS, typeOfGroup } from "../utils/constants";
 import {
   generateSchedule, budgetFor, isTeachingSlot, classHasLunchAt, classesHaveLunchAt, compactSchedule,
+  isFixedMondaySubject,
 } from "../utils/scheduleGenerator";
 import { exportColoredSchedule } from "../utils/coloredScheduleExport";
 import {
@@ -152,6 +153,18 @@ export default function SchedulePage({
     if (!teacherId) return false;
     const bs = teacherMap.get(teacherId)?.blockedSlots;
     return Boolean(bs && Array.isArray(bs[day]) && bs[day].includes(slotId));
+  }
+
+  // ——— KELAJAK SOATI ———
+  // Bu fan HAR DOIM dushanbaning 1-darsida turadi: avtomatik to'ldirish ham,
+  // qo'lda qo'shish ham uni boshqa katakka qo'ymaydi.
+  function isFixedMondaySubjectId(sid) {
+    return isFixedMondaySubject(subjectMap.get(sid));
+  }
+  function firstSlotIdOf(classId, day) {
+    const list = sortedTimeslots.filter((ts) => isTeachingSlot(ts) && slotAllowsClass(ts, classId)
+      && !classHasLunchAt(ts, classId, lunchGroups, day));
+    return list[0]?.id || null;
   }
 
   function getClassLessons(day, timeSlotId, classId) {
@@ -575,20 +588,38 @@ export default function SchedulePage({
     return gaps;
   }
 
-  // Sifat o'lchovi: kunlik yuk notekisligi (kam bo'lgani yaxshi)
+  // Sifat o'lchovi: kunlik yuk notekisligi (kam bo'lgani yaxshi).
+  // Me'yor kunning SIG'IMIGA moslanadi: qisqartirilgan kunga (obed/"dam olish"
+  // guruhi yoki smena sozlamasi tufayli) teng ulush shunchaki sig'maydi.
   function countImbalance(sch) {
     let dev = 0;
     classes.forEach((cls) => {
       const off = new Set(Array.isArray(cls.offDays) ? cls.offDays : []);
       const usable = DAYS.filter((d) => !off.has(d));
       if (!usable.length) return;
-      const counts = usable.map((day) => sortedTimeslots.reduce((n, ts) => (
-        isTeachingSlot(ts) && (sch?.[day]?.[ts.id] || []).some((l) => classIdsOf(l).includes(cls.id)) ? n + 1 : n
+      const slotsOfDay = (day) => sortedTimeslots.filter((ts) => isTeachingSlot(ts) &&
+        slotAllowsClass(ts, cls.id) && !classHasLunchAt(ts, cls.id, lunchGroups, day));
+      const caps = usable.map((day) => slotsOfDay(day).length);
+      const counts = usable.map((day) => slotsOfDay(day).reduce((n, ts) => (
+        (sch?.[day]?.[ts.id] || []).some((l) => classIdsOf(l).includes(cls.id)) ? n + 1 : n
       ), 0));
       const total = counts.reduce((a, b) => a + b, 0);
-      const lo = Math.floor(total / usable.length);
-      const hi = total - lo * usable.length > 0 ? lo + 1 : lo;
-      counts.forEach((n) => { dev += n > hi ? n - hi : (n < lo ? lo - n : 0); });
+      // "suv to'ldirish": sig'imi yetmagan kun to'ladi, qolgani qayta bo'linadi
+      const share = new Array(caps.length).fill(0);
+      let rest = total;
+      let open = caps.map((c, i) => i).filter((i) => caps[i] > 0);
+      while (open.length) {
+        const per = rest / open.length;
+        const full = open.filter((i) => caps[i] <= per);
+        if (!full.length) { open.forEach((i) => { share[i] = per; }); break; }
+        full.forEach((i) => { share[i] = caps[i]; rest -= caps[i]; });
+        open = open.filter((i) => !full.includes(i));
+      }
+      counts.forEach((n, i) => {
+        const lo = Math.floor(share[i] + 1e-9);
+        const hi = Math.ceil(share[i] - 1e-9);
+        dev += n > hi ? n - hi : (n < lo ? lo - n : 0);
+      });
     });
     return dev;
   }
@@ -641,7 +672,7 @@ export default function SchedulePage({
     for (let k = 0; k < 4; k++) {
       let next;
       try {
-        next = compactSchedule(classes, timeslots, lunchGroups, best, classSubjects, teachers);
+        next = compactSchedule(classes, timeslots, lunchGroups, best, classSubjects, teachers, subjects, rooms);
       } catch {
         break;
       }
@@ -766,8 +797,10 @@ export default function SchedulePage({
         // Hammasi joylashdi va oyna yo'q — bir necha urinish yaxshilanmasa yoki
         // vaqtning yarmi ketgan bo'lsa, shu natija bilan tugatamiz
         if (full && bestGaps === 0 && (stall >= 4 || elapsed > TIME_CAP_MS * 0.5)) break;
-        // Chuqur bosqichda yaxshilanish to'xtadi
-        if (!fast && stall >= STALL_LIMIT) break;
+        // Chuqur bosqichda yaxshilanish to'xtadi.
+        // MUHIM: kun o'rtasida bo'sh soat (oyna) qolgan bo'lsa — to'xtamaymiz,
+        // vaqt tugagunicha oynasiz variant qidiriladi.
+        if (!fast && stall >= STALL_LIMIT && bestGaps === 0) break;
         if (elapsed > TIME_CAP_MS) break;
         // Tezkor bosqich tugadi, lekin chuqur urinishga vaqt qolmadi
         if (r + 1 === FAST_ROUNDS && elapsed > TIME_CAP_MS * 0.6) break;
@@ -1264,10 +1297,13 @@ export default function SchedulePage({
     ), 0);
 
     const freeSlot = (cid, sid, teacherList, classOff) => {
+      const ksFix = isFixedMondaySubjectId(sid);
       for (const day of daysByLoad(next, cid)) {
         if (classOff.has(day)) continue;
+        if (ksFix && day !== "Dushanba") continue;
         if (subjOnDay(cid, sid, day) >= subjectDayCap(cid, sid)) continue;
         for (const ts of teachingSlots) {
+          if (ksFix && ts.id !== firstSlotIdOf(cid, day)) continue;
           if (!slotAllowsClass(ts, cid)) continue;
           if (classesHaveLunchAt(ts, [cid], lunchGroups, day)) continue;
           const cell = next[day][ts.id];
@@ -1288,12 +1324,14 @@ export default function SchedulePage({
     // Qulflangan, qo'lda qo'yilgan, guruhli va BLOK darslar HECH QACHON ko'chirilmaydi
     const isMovable = (l) => l && !l.locked && !l.manual && !l.groupPart && !l.groupKey
       && !l.levelGroupEnabled && !l.swap && !l.alternating && !isBlockPart(l)
+      && !l.fixedMonday && !isFixedMondaySubjectId(l.subjectId)
       && classIdsOf(l).length === 1;
     const teacherOffHas = (tid, day) => {
       const tt = teachers.find((x) => x.id === tid);
       return tt && Array.isArray(tt.offDays) && tt.offDays.includes(day);
     };
     const findHomeForLesson = (l, exDay, exTs) => {
+      if (l?.fixedMonday || isFixedMondaySubjectId(l?.subjectId)) return null;
       const cid = classIdsOf(l)[0];
       const cObj = classes.find((c) => c.id === cid);
       const classOff2 = new Set(Array.isArray(cObj?.offDays) ? cObj.offDays : []);
@@ -1439,6 +1477,11 @@ export default function SchedulePage({
     const remain = requiredHours(classId, manualForm.subjectId) - placedHours(classId, manualForm.subjectId);
     if (remain <= 0) {
       toast?.("Bu fan soatlari to'liq qo'yilgan — ortiqcha qo'shib bo'lmaydi", "warning");
+      return;
+    }
+    if (isFixedMondaySubjectId(manualForm.subjectId)
+      && (day !== "Dushanba" || slotId !== firstSlotIdOf(classId, day))) {
+      toast?.("Kelajak soati faqat dushanbaning 1-darsiga qo'yiladi", "warning");
       return;
     }
 

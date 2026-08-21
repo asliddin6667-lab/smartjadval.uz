@@ -373,11 +373,51 @@ function normSubjName(s) {
 export function isFixedMondaySubject(subject) {
   return FIXED_MONDAY_NAMES.has(normSubjName(subject?.name));
 }
+export function fixedMondaySubjectIds(subjects = []) {
+  return new Set((subjects || []).filter((s) => isFixedMondaySubject(s)).map((s) => s.id));
+}
+
+// ——— O'CHIRILGAN XONAGA HAVOLA ———
+// Xona ro'yxatdan o'chirilsa, "Sinf fanlari"dagi biriktirmalarda uning id'si
+// qolib ketadi. Dvigatel esa uni HAQIQIY resurs deb biladi: o'sha "xona"ga
+// bog'langan barcha darslar bir-birini bloklaydi va bir vaqtda faqat bittasi
+// o'tishi mumkin bo'lib qoladi. Bir nechta sinf bitta o'chirilgan xonaga
+// bog'langan bo'lsa — yuzlab soat umuman joylashmaydi.
+// Shuning uchun mavjud bo'lmagan xona "xonasiz" deb qaraladi.
+export function stripMissingRooms(classSubjects = {}, rooms = null) {
+  if (!Array.isArray(rooms)) return classSubjects || {};
+  const ok = new Set(rooms.map((r) => r?.id).filter(Boolean));
+  const bad = (id) => Boolean(id) && !ok.has(id);
+  let changed = false;
+  const out = {};
+  Object.entries(classSubjects || {}).forEach(([cid, list]) => {
+    out[cid] = (Array.isArray(list) ? list : []).map((a) => {
+      if (!a) return a;
+      const hit = bad(a.roomId) || bad(a.roomId2) || bad(a.swapRoomId) || bad(a.weekAltRoomId) ||
+        (Array.isArray(a.levelGroups) && a.levelGroups.some((g) => bad(g?.roomId)));
+      if (!hit) return a;
+      changed = true;
+      const copy = { ...a };
+      if (bad(copy.roomId)) copy.roomId = "";
+      if (bad(copy.roomId2)) copy.roomId2 = "";
+      if (bad(copy.swapRoomId)) copy.swapRoomId = "";
+      if (bad(copy.weekAltRoomId)) copy.weekAltRoomId = "";
+      if (Array.isArray(copy.levelGroups)) {
+        copy.levelGroups = copy.levelGroups.map((g) => (bad(g?.roomId) ? { ...g, roomId: "" } : g));
+      }
+      return copy;
+    });
+  });
+  return changed ? out : (classSubjects || {});
+}
 
 function attemptSchedule(
   classes, subjects, teachers, rooms, timeslots,
   classSubjects = {}, lunchGroups = [], lockedSchedule = null, options = {}
 ) {
+  // O'chirilgan xonaga havolalar tozalanadi — aks holda ular soxta
+  // "band xona" bo'lib, o'nlab sinfning darslarini bir-biriga urishtiradi.
+  classSubjects = stripMissingRooms(classSubjects, rooms);
   const rng = mulberry32((options.seed ?? 1) >>> 0);
   // ——— STRATEGIYA: har urinish boshqa yo'ldan boradi (xilma-xillik) ———
   const strategy = ((Number(options.strategy) || 0) % 6 + 6) % 6;
@@ -513,8 +553,11 @@ function attemptSchedule(
     return placedKeyCount.get(ci * S + si) || 0;
   }
   // ——— Kunlik me'yor: sinfning haftalik soati ish kunlariga teng bo'linadi ———
-  const balLo = new Int16Array(C);
-  const balHi = new Int16Array(C);
+  // Me'yor HAR KUN uchun alohida saqlanadi: ba'zi kunlar qisqartirilgan
+  // bo'lishi mumkin (obed/"Dam olish" guruhi, smena sozlamasi), unday kunga
+  // teng ulush shunchaki sig'maydi.
+  const balLo = new Int16Array(C * D);
+  const balHi = new Int16Array(C * D);
   const dayUsable = new Uint8Array(C * D);
   const usableDayCount = new Int16Array(C);
   const dayCapacity = new Int16Array(C * D);
@@ -531,14 +574,33 @@ function attemptSchedule(
     }
     usableDayCount[ci] = ud;
   }
+  // "Suv to'ldirish": avval har kunga teng ulush beriladi; sig'imi yetmagan
+  // kun to'lib qoladi, ortgan soat qolgan kunlarga qayta bo'linadi.
+  // Masalan 34 soat / 6 kun, lekin shanbada atigi 4 soat sig'sa:
+  // 4 + 6+6+6+6+6 — bu ENG TEKIS taqsimot, "kuniga 5-6" emas.
   function setBalanceTargets(totalsOf) {
     for (let ci = 0; ci < C; ci++) {
-      const ud = usableDayCount[ci];
-      if (!ud) { balLo[ci] = 0; balHi[ci] = 0; continue; }
-      const total = totalsOf(ci);
-      const base = Math.floor(total / ud);
-      balLo[ci] = base;
-      balHi[ci] = total - base * ud > 0 ? base + 1 : base;
+      const pool = [];
+      for (let d = 0; d < D; d++) {
+        balLo[ci * D + d] = 0;
+        balHi[ci * D + d] = 0;
+        if (dayUsable[ci * D + d]) pool.push(d);
+      }
+      if (!pool.length) continue;
+      const share = new Float64Array(D);
+      let rest = totalsOf(ci);
+      let open = pool.slice();
+      while (open.length) {
+        const per = rest / open.length;
+        const full = open.filter((d) => dayCapacity[ci * D + d] <= per);
+        if (!full.length) { open.forEach((d) => { share[d] = per; }); break; }
+        full.forEach((d) => { share[d] = dayCapacity[ci * D + d]; rest -= share[d]; });
+        open = open.filter((d) => !full.includes(d));
+      }
+      pool.forEach((d) => {
+        balLo[ci * D + d] = Math.floor(share[d] + 1e-9);
+        balHi[ci * D + d] = Math.ceil(share[d] - 1e-9);
+      });
     }
   }
   // Boshlang'ich me'yor — biriktirilgan haftalik soatlar bo'yicha
@@ -872,10 +934,12 @@ function attemptSchedule(
   // o'zgarmaydi (fan soni, yuk, ora kunda) — faqat soat o'rni almashadi.
   let dayRearrange = false;
   // ——— QATTIQ CHEKLOV: bir kunda bitta fan limitdan oshmasin ———
+  // capEmergency — faqat oynani yopishning oxirgi chorasida yoqiladi.
+  let capEmergency = false;
   function subjDayOk(req, d) {
     if (dayRearrange) return true;
     if (req.sIdx < 0) return true;
-    const cap = (req.dayCap || req.blockSize) + (req.capRelax || 0);
+    const cap = (req.dayCap || req.blockSize) + (req.capRelax || 0) + (capEmergency ? 1 : 0);
     const exD = req.placedRef && req.placedRef.active ? req.placedRef.d : -1;
     const bs = req.blockSize;
     for (const ci of req.cIdxs) {
@@ -904,7 +968,7 @@ function attemptSchedule(
     if (d === exD) return true;
     const bs = req.blockSize;
     for (const ci of req.cIdxs) {
-      const hi = balHi[ci] + relax;
+      const hi = balHi[ci * D + d] + relax;
       if (hi <= 0) continue;
       let n = classDayCount[ci * D + d];
       if (d === exD) n -= bs;
@@ -1238,7 +1302,8 @@ function attemptSchedule(
     let dayCapPenalty = 0;
     for (const ci of req.cIdxs) {
       const n = classDayCount[ci * D + d] + blockSize;
-      if (n > balHi[ci]) dayCapPenalty += (n - balHi[ci]) * DAYCAP_W;
+      const hiD = balHi[ci * D + d];
+      if (n > hiD) dayCapPenalty += (n - hiD) * DAYCAP_W;
     }
     let teacherPenalty = 0;
     for (const ti of req.tIdxs) { teacherPenalty += teacherLoadArr[ti] + teacherDailyArr[ti * D + d]; }
@@ -1685,7 +1750,9 @@ function attemptSchedule(
         gaps += head;
         if (dayUsable[ci * D + d]) {
           const n = classDayCount[ci * D + d];
-          const dev = n > balHi[ci] ? n - balHi[ci] : (n < balLo[ci] ? balLo[ci] - n : 0);
+          const hiD = balHi[ci * D + d];
+          const loD = balLo[ci * D + d];
+          const dev = n > hiD ? n - hiD : (n < loD ? loD - n : 0);
           cost += dev * dev * BAL_W;
         }
       }
@@ -2489,8 +2556,8 @@ function attemptSchedule(
     for (let d = 0; d < D; d++) {
       if (!dayUsable[ci * D + d]) continue;
       const n = classDayCount[ci * D + d];
-      if (n > balHi[ci]) dev += n - balHi[ci];
-      else if (n < balLo[ci]) dev += balLo[ci] - n;
+      if (n > balHi[ci * D + d]) dev += n - balHi[ci * D + d];
+      else if (n < balLo[ci * D + d]) dev += balLo[ci * D + d] - n;
     }
     return dev;
   }
@@ -2516,14 +2583,14 @@ function attemptSchedule(
         const unders = [];
         for (let d = 0; d < D; d++) {
           if (!dayUsable[ci * D + d]) continue;
-          if (classDayCount[ci * D + d] < balLo[ci]) unders.push(d);
+          if (classDayCount[ci * D + d] < balLo[ci * D + d]) unders.push(d);
         }
         for (let d = 0; d < D; d++) {
           if (!dayUsable[ci * D + d]) continue;
           const n = classDayCount[ci * D + d];
           // Kun me'yordan oshgan bo'lsa yoki kam yuklangan kun bo'lsa —
           // me'yordagi kundan ham bitta soat berish mumkin (5/3 → 4/4)
-          if (n > balHi[ci] || (unders.length && n > balLo[ci])) overs.push(d);
+          if (n > balHi[ci * D + d] || (unders.length && n > balLo[ci * D + d])) overs.push(d);
         }
         overs.sort((a, b) => classDayCount[ci * D + b] - classDayCount[ci * D + a]);
         if (!overs.length || !unders.length) break;
@@ -2534,6 +2601,8 @@ function attemptSchedule(
         let lastOcc = -1;
         const oBase = ci * DT + overD * T;
         for (let k = 0; k < T; k++) if (classGrid[oBase + k]) lastOcc = k;
+        // Faqat kunning OXIRGI darsi ko'chiriladi — shunda o'sha kunda
+        // o'rta katak bo'shab, yangi oyna paydo bo'lmaydi.
         const movers = [];
         for (const p of placements) {
           if (!p.active || p.locked || p.d !== overD) continue;
@@ -2564,8 +2633,9 @@ function attemptSchedule(
             let cNow = compactCost(uni);
             let gNow = _lastGap;
             if (gNow > gapBefore) {
-              // Yangi kunda oyna paydo bo'ldi — o'sha kunni qayta tartiblaymiz
-              for (const ci2 of req.cIdxs) prefixRebuildDay(ci2, c.d);
+              // Oyna paydo bo'ldi — ikkala kunni ham qayta tartiblaymiz
+              // (dars ketgan kunda ham o'rta katak bo'shab qolishi mumkin)
+              for (const ci2 of req.cIdxs) { prefixRebuildDay(ci2, c.d); prefixRebuildDay(ci2, oldD); }
               cNow = compactCost(uni);
               gNow = _lastGap;
             }
@@ -2690,6 +2760,7 @@ function attemptSchedule(
     if (headGapsOf(ALL_C) > 0) {
       gapEmergency = true;
       balEmergency = true;
+      capEmergency = true;
       for (let k = 0; k < 4; k++) {
         if (headGapsOf(ALL_C) === 0) break;
         deadline = Math.max(deadline, Date.now() + 800);
@@ -2701,6 +2772,7 @@ function attemptSchedule(
       }
       gapEmergency = false;
       balEmergency = false;
+      capEmergency = false;
     }
     // Yakuniy tenglash — lekin oyna qaytib paydo bo'lmasligi shart
     for (let k = 0; k < 3; k++) {
@@ -2888,7 +2960,16 @@ function buildValidationReport(ctx) {
 // (backtracking) ishlaydi — darslar kun boshidan uzluksiz turadi.
 // YANGI: `teachers` (ixtiyoriy) berilsa, ustoz setkasida qulflangan
 // soatlarga (teacher.blockedSlots) zichlash paytida ham dars surilmaydi.
-export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], schedule = {}, classSubjects = {}, teachers = []) {
+export function compactSchedule(
+  classes = [], timeslots = [], lunchGroups = [], schedule = {}, classSubjects = {}, teachers = [],
+  subjects = [], rooms = null
+) {
+  // KELAJAK SOATI: nom bo'yicha aniqlanadi — eski jadvallarda `fixedMonday`
+  // belgisi bo'lmasligi mumkin, lekin baribir joyidan qo'zg'almasligi kerak.
+  const fixedMondayIds = fixedMondaySubjectIds(subjects);
+  // O'chirilgan xona darslarni bloklamasin
+  const roomOk = Array.isArray(rooms) && rooms.length ? new Set(rooms.map((r) => r?.id).filter(Boolean)) : null;
+  const liveRoom = (id) => (id && (!roomOk || roomOk.has(id)) ? id : "");
   const D = DAYS.length;
   const allTs = [...timeslots].sort((a, b) => Number(a.lessonNumber) - Number(b.lessonNumber));
   const teachingTs = allTs.filter(isTeachingSlot);
@@ -3043,10 +3124,10 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
           });
           if (l.teacherId) tSet.add(l.teacherId);
           if (l.altTeacherId) tSet.add(l.altTeacherId);
-          if (l.roomId) rSet.add(l.roomId);
+          if (liveRoom(l.roomId)) rSet.add(l.roomId);
           if (l.manual) locked = true;
           // KELAJAK SOATI: dushanba 1-darsga biriktirilgan — zichlashda qo'zg'almaydi
-          if (l.fixedMonday) locked = true;
+          if (l.fixedMonday || fixedMondayIds.has(l.subjectId)) locked = true;
         }
         const cIdxs = [...cSet].map((cid) => cIdxOf.get(cid)).filter((x) => x !== undefined);
         if (!cIdxs.length) locked = true;
@@ -3153,23 +3234,38 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
 
   // Kunlik me'yor: sinfning haftalik soati ish kunlariga teng bo'linadi
   // (24 soat / 6 kun => kuniga aynan 4 ta).
-  const balLo = new Int16Array(C);
-  const balHi = new Int16Array(C);
+  // Me'yor har kun uchun alohida — qisqartirilgan kunlar hisobga olinadi
+  // (generatordagi bilan bir xil "suv to'ldirish" usuli).
+  const balLo = new Int16Array(C * D);
+  const balHi = new Int16Array(C * D);
   const dayUsable = new Uint8Array(C * D);
+  const dayCap = new Int16Array(C * D);
   for (let ci = 0; ci < C; ci++) {
-    let ud = 0;
+    const pool = [];
     let total = 0;
     for (let d = 0; d < D; d++) {
       let cap = 0;
       const cBase = ci * DT + d * T;
       for (let k = 0; k < T; k++) if (!blocked[cBase + k]) cap += 1;
-      if (cap > 0) { dayUsable[ci * D + d] = 1; ud += 1; }
+      dayCap[ci * D + d] = cap;
+      if (cap > 0) { dayUsable[ci * D + d] = 1; pool.push(d); }
       total += classDayCount[ci * D + d];
     }
-    if (!ud) { balLo[ci] = 0; balHi[ci] = 0; continue; }
-    const base = Math.floor(total / ud);
-    balLo[ci] = base;
-    balHi[ci] = total - base * ud > 0 ? base + 1 : base;
+    if (!pool.length) continue;
+    const share = new Float64Array(D);
+    let rest = total;
+    let open = pool.slice();
+    while (open.length) {
+      const per = rest / open.length;
+      const full = open.filter((d) => dayCap[ci * D + d] <= per);
+      if (!full.length) { open.forEach((d) => { share[d] = per; }); break; }
+      full.forEach((d) => { share[d] = dayCap[ci * D + d]; rest -= share[d]; });
+      open = open.filter((d) => !full.includes(d));
+    }
+    pool.forEach((d) => {
+      balLo[ci * D + d] = Math.floor(share[d] + 1e-9);
+      balHi[ci * D + d] = Math.ceil(share[d] - 1e-9);
+    });
   }
 
   // Taqqoslash LEKSIKOGRAFIK: avval oynalar soni, keyin me'yordan chetlanish
@@ -3190,7 +3286,9 @@ export function compactSchedule(classes = [], timeslots = [], lunchGroups = [], 
         gaps += head;
         if (dayUsable[ci * D + d]) {
           const n = classDayCount[ci * D + d];
-          const dev = n > balHi[ci] ? n - balHi[ci] : (n < balLo[ci] ? balLo[ci] - n : 0);
+          const hiD = balHi[ci * D + d];
+          const loD = balLo[ci * D + d];
+          const dev = n > hiD ? n - hiD : (n < loD ? loD - n : 0);
           cost += dev * dev * BAL_W;
         }
       }
