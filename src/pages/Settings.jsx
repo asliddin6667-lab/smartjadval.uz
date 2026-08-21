@@ -3,7 +3,7 @@ import ConfirmModal from "../components/ConfirmModal";
 import { downloadBackup, parseBackup, KEY_LABELS } from "../services/backupService";
 import { flushPush } from "../services/cloudSync";
 
-export default function SettingsPage({ settings, setSettings, classes, subjects, teachers, rooms, timeslots, lunchGroups, classSubjects, schedule, shifts, setClasses, setSubjects, setTeachers, setRooms, setTimeslots, setLunchGroups, setShifts, setSchedule, setClassSubjects, toast, darkMode, setDarkMode, currentUser }) {
+export default function SettingsPage({ settings, setSettings, classes, subjects, teachers, rooms, timeslots, lunchGroups, classSubjects, schedule, shifts, savedSchedules = [], setSavedSchedules, setClasses, setSubjects, setTeachers, setRooms, setTimeslots, setLunchGroups, setShifts, setSchedule, setClassSubjects, toast, darkMode, setDarkMode, currentUser }) {
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const fileRef = useRef(null);
   // Yuklangan JSON tekshiruvdan o'tgach shu yerda kutadi — foydalanuvchi
@@ -22,6 +22,7 @@ export default function SettingsPage({ settings, setSettings, classes, subjects,
     if (setShifts) setShifts([]);
     setClassSubjects({});
     setSchedule({});
+    if (setSavedSchedules) setSavedSchedules([]);
     setShowClearConfirm(false);
     toast("Barcha ma'lumotlar o'chirildi", "error");
   }
@@ -30,7 +31,7 @@ export default function SettingsPage({ settings, setSettings, classes, subjects,
   function handleExportBackup() {
     try {
       const backup = downloadBackup(
-        { settings, classes, subjects, teachers, classSubjects, rooms, timeslots, lunchGroups, shifts, schedule },
+        { settings, classes, subjects, teachers, classSubjects, rooms, timeslots, lunchGroups, shifts, schedule, savedSchedules },
         { schoolName: settings?.schoolName }
       );
       const total = Object.values(backup.counts).reduce((a, b) => a + b, 0);
@@ -72,6 +73,7 @@ export default function SettingsPage({ settings, setSettings, classes, subjects,
       lunchGroups: setLunchGroups,
       shifts: setShifts,
       schedule: setSchedule,
+      savedSchedules: setSavedSchedules,
     };
     keys.forEach((k) => setterOf[k]?.(data[k]));
     setPending(null);

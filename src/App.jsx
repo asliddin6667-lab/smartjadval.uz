@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import "./styles/global.css";
 import "./styles/responsive.css";
 
@@ -17,6 +17,7 @@ import TimeslotsPage from "./pages/TimeSlots";
 import LunchGroupsPage from "./pages/LunchGroups";
 import StandardHoursPage from "./pages/StandardHours";
 import SchedulePage from "./pages/Schedule";
+import SavedSchedulesPage from "./pages/SavedSchedules";
 import TeacherReplacePage from "./pages/TeacherReplace";
 import TeacherAvailabilityPage from "./pages/TeacherAvailability";
 import AnalyticsPage from "./pages/Analytics";
@@ -32,6 +33,7 @@ import {
 } from "./services/authService";
 import {
   syncOnLogin, schedulePush, flushPush, cleanupLegacyKeys,
+  checkRemote, onRemoteUpdate,
 } from "./services/cloudSync";
 import { buildDemoSchoolData } from "./utils/demoData";
 import { isLocalOnly, announceMode } from "./services/devMode";
@@ -56,7 +58,7 @@ const LOCAL_ONLY = isLocalOnly();
 // =====================================================================
 const PAGE_IDS = [
   "dashboard", "classes", "subjects", "teachers", "teacherAvailability", "classSubjects",
-  "rooms", "timeslots", "lunchGroups", "schedule", "teacherReplace",
+  "rooms", "timeslots", "lunchGroups", "schedule", "savedSchedules", "teacherReplace",
   "analytics", "importExport", "users", "standardHours", "settings",
 ];
 
@@ -91,6 +93,7 @@ function readLocalData(user) {
     lunchGroups: loadUserData(uid, "lunchGroups", []),
     shifts: loadUserData(uid, "shifts", []),
     schedule: loadUserData(uid, "schedule", {}),
+    savedSchedules: loadUserData(uid, "savedSchedules", []),
   };
 
   // Demo foydalanuvchida ma'lumot bo'lmasa, platforma to'ldirilgan holda ochiladi.
@@ -107,6 +110,7 @@ function readLocalData(user) {
       lunchGroups: demo.lunchGroups,
       shifts: demo.shifts || [],
       schedule: demo.schedule,
+      savedSchedules: [],
     };
   }
 
@@ -142,7 +146,14 @@ export default function App() {
   const [lunchGroups, setLunchGroups] = useState([]);
   const [shifts, setShifts] = useState([]);
   const [schedule, setSchedule] = useState({});
+  // Nomlangan jadval nusxalari — "Saqlangan jadvallar" bo'limi
+  const [savedSchedules, setSavedSchedules] = useState([]);
   const [dataReady, setDataReady] = useState(false);
+
+  // Kirishdagi sinxronizatsiya tugadimi? Tugamaguncha bulutga HECH NIMA
+  // yuborilmaydi — aks holda ekrandagi eski nusxa bulutdagi yangi
+  // ma'lumot ustidan yozilib ketishi mumkin (tortish push'dan sekinroq).
+  const [syncDone, setSyncDone] = useState(false);
 
   // Birinchi marta ochilayotgan qurilma — bulutni kutish shart
   const [firstLoad, setFirstLoad] = useState(false);
@@ -158,6 +169,23 @@ export default function App() {
   const userId = currentUser?.id;
   // Tuman admini — maktab ma'lumotlari yuklanmaydi va sinxronlanmaydi
   const isDistrictAdmin = currentUser?.role === "district_admin";
+
+  // Ma'lumotni ekranga qo'yish. Ikki joydan chaqiriladi: kirishdagi
+  // sinxronizatsiya va bulutdan kelgan yangilanish (boshqa qurilma yozganda).
+  // setXxx setterlari o'zgarmaydi — shuning uchun bog'liqliklar bo'sh.
+  const applySchoolData = useCallback((d) => {
+    setSettings(d.settings);
+    setClasses(d.classes);
+    setSubjects(d.subjects);
+    setTeachers(d.teachers);
+    setClassSubjects(d.classSubjects);
+    setRooms(d.rooms);
+    setTimeslots(d.timeslots);
+    setLunchGroups(d.lunchGroups);
+    setShifts(d.shifts);
+    setSchedule(d.schedule);
+    setSavedSchedules(d.savedSchedules || []);
+  }, []);
 
   // ——— Faol bo'limni URL hash va localStorage'ga yozish ———
   useEffect(() => {
@@ -287,19 +315,10 @@ export default function App() {
     }
 
     let cancelled = false;
+    // Yangi seans — sinxronizatsiya tugamaguncha push qulflanadi
+    setSyncDone(false);
 
-    function applyData(d) {
-      setSettings(d.settings);
-      setClasses(d.classes);
-      setSubjects(d.subjects);
-      setTeachers(d.teachers);
-      setClassSubjects(d.classSubjects);
-      setRooms(d.rooms);
-      setTimeslots(d.timeslots);
-      setLunchGroups(d.lunchGroups);
-      setShifts(d.shifts);
-      setSchedule(d.schedule);
-    }
+    const applyData = applySchoolData;
 
     function finishBoot() {
       // Oxirgi ochilgan bo'lim tiklanadi (URL hash ustunroq).
@@ -355,19 +374,63 @@ export default function App() {
 
       setDataReady(true);
       setFirstLoad(false);
+      setSyncDone(true);
 
       if (syncResult.action === "offline") {
         addToast("Internet yo'q — mahalliy nusxada ishlayapsiz", "warning");
       } else if (syncResult.action === "recovered") {
-        addToast("Saqlanmagan o'zgarishlar bulutga yuborildi", "success");
+        addToast(
+          syncResult.conflict
+            ? "Shu qurilmadagi o'zgarishlar yangiroq edi — ular qo'llandi"
+            : "Saqlanmagan o'zgarishlar bulutga yuborildi",
+          "success"
+        );
       } else if (syncResult.action === "pulled" && localHasData) {
-        addToast("Ma'lumotlar boshqa qurilmadan yangilandi", "info");
+        addToast(
+          syncResult.conflict
+            ? "Boshqa qurilmadagi o'zgarishlar yangiroq edi — ular qo'llandi"
+            : "Ma'lumotlar boshqa qurilmadan yangilandi",
+          "info"
+        );
       }
     })();
 
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser]);
+
+  // =====================================================================
+  //  SEANS DAVOMIDA YANGILANISH
+  //  Ilova oynasi yana faollashganda bulut tekshiriladi. Boshqa
+  //  qurilmada o'zgarish bo'lgan bo'lsa — u darhol ekranga tushadi,
+  //  qayta kirishni kutish shart emas.
+  //
+  //  Shu qurilmada yuborilmagan o'zgarish bo'lsa, checkRemote hech
+  //  narsa qilmaydi — foydalanuvchi yozayotgan narsa ustidan yozilmaydi.
+  // =====================================================================
+  useEffect(() => {
+    if (!userId || isDistrictAdmin || !dataReady || !syncDone) return;
+    if (currentUser?.email === "demo@smartjadval.uz") return;
+
+    const off = onRemoteUpdate(() => {
+      applySchoolData(readLocalData(currentUser));
+      addToast("Ma'lumotlar boshqa qurilmadan yangilandi", "info");
+    });
+
+    function onWake() {
+      if (document.visibilityState !== "visible") return;
+      checkRemote(userId).catch(() => {});
+    }
+
+    window.addEventListener("visibilitychange", onWake);
+    window.addEventListener("focus", onWake);
+    return () => {
+      off();
+      window.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("focus", onWake);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, isDistrictAdmin, dataReady, syncDone]);
 
   // ——— localStorage'ga saqlash (avvalgidek, sinxron) ———
   useEffect(() => { if (userId && dataReady) saveUserData(userId, "classes", classes); }, [userId, dataReady, classes]);
@@ -379,19 +442,20 @@ export default function App() {
   useEffect(() => { if (userId && dataReady) saveUserData(userId, "lunchGroups", lunchGroups); }, [userId, dataReady, lunchGroups]);
   useEffect(() => { if (userId && dataReady) saveUserData(userId, "shifts", shifts); }, [userId, dataReady, shifts]);
   useEffect(() => { if (userId && dataReady) saveUserData(userId, "schedule", schedule); }, [userId, dataReady, schedule]);
+  useEffect(() => { if (userId && dataReady) saveUserData(userId, "savedSchedules", savedSchedules); }, [userId, dataReady, savedSchedules]);
   useEffect(() => { if (userId && dataReady) saveUserData(userId, "settings", settings); }, [userId, dataReady, settings]);
   useEffect(() => { saveData("darkMode", darkMode); }, [darkMode]);
 
   // ——— BULUTGA YUBORISH (debounce bilan) ———
   useEffect(() => {
-    if (!userId || !dataReady || isDistrictAdmin) return;
+    if (!userId || !dataReady || !syncDone || isDistrictAdmin) return;
     if (currentUser?.email === "demo@smartjadval.uz") return; // demo bulutga yozilmaydi
     schedulePush(userId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    userId, dataReady,
+    userId, dataReady, syncDone,
     classes, subjects, teachers, classSubjects, rooms,
-    timeslots, lunchGroups, shifts, schedule, settings,
+    timeslots, lunchGroups, shifts, schedule, settings, savedSchedules,
   ]);
 
   useEffect(() => {
@@ -405,6 +469,7 @@ export default function App() {
     logout();
     setCurrentUser(null);
     setDataReady(false);
+    setSyncDone(false);
     setFirstLoad(false);
     setPaywallOpen(false);
     setShowPayPage(false);
@@ -565,7 +630,20 @@ export default function App() {
       case "rooms": return <RoomsPage {...pageProps} setRooms={setRooms} />;
       case "timeslots": return <TimeslotsPage {...pageProps} setTimeslots={setTimeslots} shifts={shifts} setShifts={setShifts} />;
       case "lunchGroups": return <LunchGroupsPage {...pageProps} setLunchGroups={setLunchGroups} shifts={shifts} />;
-      case "schedule": return <SchedulePage {...pageProps} settings={settings} setSchedule={setSchedule} />;
+      case "schedule": return (
+        <SchedulePage
+          {...pageProps} settings={settings} setSchedule={setSchedule}
+          savedSchedules={savedSchedules} setSavedSchedules={setSavedSchedules}
+          setActivePage={handleNavigate}
+        />
+      );
+      case "savedSchedules": return (
+        <SavedSchedulesPage
+          {...pageProps} settings={settings} setSchedule={setSchedule}
+          savedSchedules={savedSchedules} setSavedSchedules={setSavedSchedules}
+          setActivePage={handleNavigate}
+        />
+      );
       case "teacherReplace": return <TeacherReplacePage {...pageProps} setSchedule={setSchedule} setClassSubjects={setClassSubjects} />;
       case "analytics": return <AnalyticsPage {...pageProps} />;
       case "importExport": return <ImportExportPage {...pageProps} settings={settings} setSubjects={setSubjects} setTeachers={setTeachers} />;
@@ -580,6 +658,7 @@ export default function App() {
           setTimeslots={setTimeslots} setSchedule={setSchedule}
           setClassSubjects={setClassSubjects} setLunchGroups={setLunchGroups}
           shifts={shifts} setShifts={setShifts}
+          savedSchedules={savedSchedules} setSavedSchedules={setSavedSchedules}
           {...pageProps}
         />
       );

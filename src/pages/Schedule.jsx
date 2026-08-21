@@ -10,7 +10,9 @@ import {
 } from "../utils/moveResolver";
 import { slotDisplayNumber } from "../utils/shiftSlots";
 import MoveResolveModal from "../components/MoveResolveModal";
+import SaveScheduleModal from "../components/SaveScheduleModal";
 import TeacherGrid from "../components/TeacherGrid";
+import { countLessons, upsertSaved } from "../utils/savedSchedules";
 import "../styles/scheduleGrid.css";
 
 const FALLBACK_PALETTE = [
@@ -95,9 +97,13 @@ export default function SchedulePage({
   schedule = {},
   classSubjects = {},
   settings = {},
+  savedSchedules = [],
+  setSavedSchedules,
   setSchedule,
+  setActivePage,
   toast,
 }) {
+  const [saveOpen, setSaveOpen] = useState(false);   // «💾 Saqlash» oynasi
   const [gridMode, setGridMode] = useState("class"); // "class" | "teacher"
   const [selectedClass, setSelectedClass] = useState("all");
   const [viewMode, setViewMode] = useState("table");
@@ -1497,6 +1503,21 @@ export default function SchedulePage({
     toast?.("Dars jadvali tozalandi", "success");
   }
 
+  // ——— Jadvalni nom bilan saqlash ———
+  // Nusxa `savedSchedules` ro'yxatiga tushadi va "Saqlangan jadvallar"
+  // bo'limida ko'rinadi. Joriy jadvalga tegilmaydi.
+  function handleSaveSchedule(name, overwriteId) {
+    if (!setSavedSchedules) return;
+    setSavedSchedules(upsertSaved(savedSchedules, { name, overwriteId, schedule, classes }));
+    setSaveOpen(false);
+    toast?.(
+      overwriteId
+        ? `«${name}» yangilandi ✓`
+        : `«${name}» saqlandi ✓ — «Saqlangan jadvallar» bo'limida`,
+      "success"
+    );
+  }
+
   async function exportExcel() {
     const exportClasses = visibleClasses.length ? visibleClasses : sortedClasses;
     await exportColoredSchedule({
@@ -1515,6 +1536,7 @@ export default function SchedulePage({
 
   const lockedTotal = setSchedule ? lockedCount() : 0;
   const gapTotal = setSchedule ? countGaps(schedule) : 0;
+  const lessonTotal = countLessons(schedule);
 
   return (
     <div className="pretty-schedule-page">
@@ -1557,6 +1579,8 @@ export default function SchedulePage({
           .sch-btn-soft-blue:hover{background:rgba(37,99,235,.08);border-color:rgba(37,99,235,.5);box-shadow:0 8px 18px rgba(37,99,235,.16);}
           .sch-btn-soft-gray{background:var(--card-bg,#fff);border-color:var(--card-border,#e2e8f0);color:var(--text-secondary,#475569);box-shadow:0 2px 8px rgba(15,23,42,.05);}
           .sch-btn-soft-gray:hover{background:var(--bg-secondary,#f1f5f9);border-color:#c7d2e2;box-shadow:0 8px 18px rgba(15,23,42,.10);}
+          .sch-btn-save{background:linear-gradient(135deg,#6366f1,#4f46e5);color:#fff;box-shadow:0 6px 16px rgba(79,70,229,.3), inset 0 1px 0 rgba(255,255,255,.25);}
+          .sch-btn-save:hover{box-shadow:0 10px 24px rgba(79,70,229,.4), inset 0 1px 0 rgba(255,255,255,.25);}
           .sch-btn-soft-red{background:var(--card-bg,#fff);border-color:rgba(220,38,38,.3);color:#dc2626;box-shadow:0 2px 8px rgba(15,23,42,.05);}
           .sch-btn-soft-red:hover{background:rgba(220,38,38,.08);border-color:rgba(220,38,38,.5);box-shadow:0 8px 18px rgba(220,38,38,.16);}
           [data-theme="dark"] .sch-btn-soft-green{background:transparent;color:#4ade80;}
@@ -1619,6 +1643,27 @@ export default function SchedulePage({
             {setSchedule && lockedTotal > 0 && (
               <button className="sch-btn sch-btn-soft-blue" onClick={unlockAll} type="button" title="Barcha qulflarni ochish">
                 🔓 Qulflar ({lockedTotal})
+              </button>
+            )}
+            {setSavedSchedules && (
+              <button
+                className="sch-btn sch-btn-save"
+                onClick={() => setSaveOpen(true)}
+                type="button"
+                disabled={!lessonTotal}
+                title={lessonTotal ? "Jadvalni nom bilan saqlash" : "Jadval bo'sh"}
+              >
+                💾 Saqlash
+              </button>
+            )}
+            {setSavedSchedules && setActivePage && savedSchedules.length > 0 && (
+              <button
+                className="sch-btn sch-btn-soft-gray"
+                onClick={() => setActivePage("savedSchedules")}
+                type="button"
+                title="Saqlangan jadvallar ro'yxati"
+              >
+                🗂 Saqlanganlar ({savedSchedules.length})
               </button>
             )}
             <button className="sch-btn sch-btn-soft-green" onClick={exportExcel} type="button">📥 Excel</button>
@@ -2032,6 +2077,15 @@ export default function SchedulePage({
           </div>
         );
       })()}
+
+      {saveOpen && (
+        <SaveScheduleModal
+          savedSchedules={savedSchedules}
+          lessonCount={lessonTotal}
+          onSave={handleSaveSchedule}
+          onCancel={() => setSaveOpen(false)}
+        />
+      )}
     </div>
   );
 }

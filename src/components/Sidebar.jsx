@@ -80,6 +80,13 @@ const ICONS = {
       <line x1="3" x2="21" y1="10" y2="10" />
     </svg>
   ),
+  savedSchedules: (
+    <svg {...svgProps}>
+      <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.5L10 3.5H4a2 2 0 0 0-2 2V18a2 2 0 0 0 2 2z" />
+      <path d="M8 12h8" />
+      <path d="M8 16h5" />
+    </svg>
+  ),
   teacherReplace: (
     <svg {...svgProps}>
       <path d="M8 3 4 7l4 4" />
@@ -157,6 +164,7 @@ const NAV_ITEMS = [
   { id: "timeslots", label: "Dars vaqtlari" },
   { id: "lunchGroups", label: "Dam olish vaqtlari" },
   { id: "schedule", label: "Dars jadvali" },
+  { id: "savedSchedules", label: "Saqlangan jadvallar" },
   { id: "teacherReplace", label: "Ustoz almashtirish" },
   { id: "analytics", label: "Jadval tahlili" },
   { id: "importExport", label: "Excel" },
@@ -292,7 +300,7 @@ export default function Sidebar({
 
         {!collapsed && <div className="nav-section-title">Jadval</div>}
         {visibleItems
-          .filter((i) => ["schedule", "teacherReplace", "analytics", "importExport"].includes(i.id))
+          .filter((i) => ["schedule", "savedSchedules", "teacherReplace", "analytics", "importExport"].includes(i.id))
           .map(renderItem)}
 
         {!collapsed && <div className="nav-section-title">Tizim</div>}

@@ -55,9 +55,9 @@ ham ustun.
 
 ### Ma'lumot holati — props drilling, store yo'q
 
-Maktab ma'lumotlari 10 ta state slice sifatida `App.jsx` da yashaydi:
+Maktab ma'lumotlari 11 ta state slice sifatida `App.jsx` da yashaydi:
 `settings, classes, subjects, teachers, classSubjects, rooms, timeslots, lunchGroups,
-shifts, schedule`. Context/Redux/Zustand yo'q — hammasi `pageProps` orqali pastga
+shifts, schedule, savedSchedules`. Context/Redux/Zustand yo'q — hammasi `pageProps` orqali pastga
 uzatiladi, sahifalar `setXxx` setterlarini oladi.
 
 Bu ro'yxat **uch joyda sinxron turishi shart**: `App.jsx` state'lari va `saveUserData`
@@ -77,9 +77,26 @@ localStorage — **asosiy ish nusxasi**, Supabase — zaxira va qurilmalararo ko
   qator, ichida barcha SYNC_KEYS.
 - `schedulePush()` debounce bilan yuboradi (1s kutish, 3s maksimal), `flushPush()`
   sahifa yopilishida/chiqishda majburan yuboradi.
-- Yo'qolishdan himoya: `sync_meta_<userId>` da `lastHash` (djb2) saqlanadi. Kirishda
-  mahalliy hash farq qilsa — "yuborilmagan o'zgarish bor" deb hisoblanadi va bulut
-  ustidan YOZILMAYDI, aksincha avval push qilinadi (`syncOnLogin` → `"recovered"`).
+- **Konflikt: "oxirgi o'zgarish g'olib" (v4).** Blob ichida `_rev` (versiya raqami),
+  `_ts` (mahalliy o'zgarish vaqti) va `_dev` yuradi; `sync_meta_<userId>` da esa
+  `baseRev` (shu qurilma ko'rgan oxirgi versiya), `lastHash` (djb2), `localTs`,
+  `cloudUpdatedAt` saqlanadi. Kirishda avval `readCloudHead()` faqat shu maydonlarni
+  so'raydi (2 MB blob emas):
+  - bulut oldinda + mahalliy toza → **tortiladi**;
+  - bulut biz bilgan holatda + mahalliy o'zgargan → **yuboriladi**;
+  - ikkalasi ham o'zgargan → `_ts` bo'yicha yangirog'i qo'llanadi, yutqazgan nusxa
+    `conflict_<userId>` kalitiga zaxira sifatida tushadi (`getConflictBackup()`).
+- `pushToCloud()` `updated_at` ni **qo'lda yozadi**. `schools` jadvalida UPDATE uchun
+  trigger yo'q — busiz u INSERT vaqtida qotib qolardi va boshqa qurilma "bulut
+  o'zgarmagan" deb ma'lumotni umuman tortmasdi.
+- `checkRemote()` oyna qayta faollashganda bulutni tekshiradi va boshqa qurilmadagi
+  o'zgarishni darhol ekranga tushiradi (`onRemoteUpdate` → App.jsx). Mahalliyda
+  yuborilmagan o'zgarish bo'lsa — tegmaydi.
+- App.jsx `syncDone` bayrog'i: kirishdagi sinxronizatsiya tugamaguncha `schedulePush`
+  chaqirilmaydi (push tortishdan tez — eski nusxa yangi ma'lumot ustidan yozilmasin).
+- `SYNC_KEYS` ga yangi kalit qo'shsangiz — hozirgi ro'yxatni `LEGACY_KEY_SETS` ga
+  ko'chiring. Aks holda `lastHash` barcha qurilmalarda mos kelmay qoladi va hammasi
+  o'zini "o'zgargan" deb hisoblab, bir-birining ustidan yozadi.
 - `classSubjects` "sim uchun" siqiladi (`encodeBlob`/`decodeBlob`, `WIRE_VERSION = 3`):
   `CS_DEFAULTS` dagi default qiymatlar tashlanadi, qaytarishda tiklanadi.
   **`classSubjects` yozuviga yangi maydon qo'shsangiz — `CS_DEFAULTS` ni ham yangilang**,
@@ -132,6 +149,19 @@ hafta almashinuvi (`weekAltEnabled`), fan almashinuvi (`swapEnabled`).
 
 Hard cheklovlar (ikkala dvigatelda ham): ustoz/sinf dam kuni, obed guruhlari, smena
 (`timeslot.classIds`), ustoz/sinf/xona bandligi.
+
+### Saqlangan jadvallar
+
+Dars jadvali sahifasidagi «💾 Saqlash» tugmasi joriy jadvalning TO'LIQ nusxasini nom
+bilan `savedSchedules` massiviga qo'shadi ([savedSchedules.js](src/utils/savedSchedules.js)
+dagi `upsertSaved`). Nusxalar [SavedSchedules.jsx](src/pages/SavedSchedules.jsx)
+sahifasida ko'rinadi — u yerdan qayta yuklash (joriy jadval ustiga), nomini
+o'zgartirish, Excel'ga chiqarish yoki o'chirish mumkin.
+
+Har bir nusxa butun jadvalni saqlaydi, shuning uchun `MAX_SAVED = 20` cheklovi bor —
+aks holda localStorage kvotasi va bulutga ketadigan JSONB blob shishib ketadi.
+Saqlash oynasi ([SaveScheduleModal.jsx](src/components/SaveScheduleModal.jsx)) ikkala
+sahifada ham bir xil ishlatiladi.
 
 ### Supabase
 

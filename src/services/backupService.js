@@ -56,6 +56,7 @@ export const KEY_LABELS = {
   lunchGroups: "Obed guruhlari",
   shifts: "Smenalar",
   schedule: "Dars jadvali (darslar)",
+  savedSchedules: "Saqlangan jadvallar",
 };
 
 // ——— Zaxira obyektini yig'ish ———
