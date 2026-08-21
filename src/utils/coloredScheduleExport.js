@@ -9,11 +9,9 @@
 // Format talablari:
 //   - HAR SMENA — ALOHIDA LIST (varaq). Listda faqat o'sha smenaning sinflari
 //     va o'sha smenaning dars vaqtlari bo'ladi (bo'sh ustunlar chiqmaydi)
-//   - HAR SINF — BITTA USTUN. Xona uchun alohida ustun YO'Q. Har dars ikki
-//     qatorda: tepada fan nomi (qalin, kattaroq shrift), pastida mayda shriftda
-//     guruh · xona va o'qituvchi:
-//         Matematika
-//         1-guruh · 12
+//   - HAR SINF — BITTA USTUN. Xona uchun alohida ustun YO'Q: xona raqami
+//     fan nomi yonida qavs ichida, o'qituvchi bilan bitta katakda turadi:
+//         Matematika (12)
 //         Aliyev Ali
 //   - Sinf ustunlari qalin vertikal chiziq bilan bir-biridan ajratiladi
 //   - Dars raqami smena ichidagi tartib bilan: 1-dars, 2-dars … (global emas)
@@ -294,80 +292,56 @@ function buildSheet(XLSX, {
             const subj = getSubject(l.subjectId);
             const tName = getTeacher(l.teacherId)?.name || '';
             const room = getRoom(l.roomId)?.name || '';
-            const gp = (sorted.length > 1 && l.groupPart) ? l.groupPart : '';
-            // HAR DARS — IKKI QATOR: yuqorisi fan (qalin, kattaroq shrift),
-            // pastida tafsilot mayda shriftda — avval guruh · xona, so'ng o'qituvchi.
-            // Ikki alohida qator kerak: bitta Excel katagida ikki xil shrift
-            // o'lchami bo'la olmaydi (kutubxona rich text yozmaydi).
-            const meta = [gp, room].filter(Boolean).join(' · ');
-            return {
-              head: subj?.name || '',
-              sub: [meta, tName].filter(Boolean).join('\n'),
-              fill: subjColor(l),
-            };
+            const gp = (sorted.length > 1 && l.groupPart) ? l.groupPart + ': ' : '';
+            // BITTA KATAK: 1-satr — fan (+ xona qavs ichida), 2-satr — o'qituvchi
+            const head = gp + (subj?.name || '') + (room ? ` (${room})` : '');
+            return { text: tName ? head + '\n' + tName : head, fill: subjColor(l) };
           }),
         };
       });
 
       const counts = plans.map((p) => (p.kind === 'lessons' ? p.items.length : 1));
       const maxG = Math.max(1, ...counts);
-      // Dars bor bo'lsa har dars 2 qator egallaydi (fan + tafsilot);
-      // faqat "Obed" belgisi turgan qatorga bitta qator yetarli.
-      const LPR = plans.some((p) => p.kind === 'lessons') ? 2 : 1;
-      const blockH = maxG * LPR;
       const blockStart = r;
 
-      for (let sub = 0; sub < blockH; sub++) {
+      for (let sub = 0; sub < maxG; sub++) {
         const row = new Array(totalCols).fill('');
         if (sub === 0) {
           row[1] = numOf(ts);
           row[2] = timeLabel;
         }
-        const gi = Math.floor(sub / LPR);             // nechanchi dars
-        const isHead = LPR === 1 || sub % LPR === 0;  // fan qatorimi
         plans.forEach((p, ci) => {
           const col = LEAD + ci;
           if (p.kind === 'lessons') {
-            const it = p.items[gi];
-            if (!it) return;
-            row[col] = isHead ? it.head : it.sub;
-            fills.push({ r: blockStart + sub, c: col, ...it.fill, kind: isHead ? 'head' : 'sub' });
+            if (sub < p.items.length) {
+              row[col] = p.items[sub].text;
+              fills.push({ r: blockStart + sub, c: col, ...p.items[sub].fill });
+            }
           } else if (sub === 0 && p.kind === 'label') {
             row[col] = p.text;
-            fills.push({ r: blockStart, c: col, ...p.fill, kind: 'label' });
+            fills.push({ r: blockStart, c: col, ...p.fill });
           }
         });
         aoa.push(row);
-        if (LPR === 1) rowHpt.push(26);
-        else if (isHead) rowHpt.push(22);
-        else {
-          // tafsilot qatori: "guruh · xona" va o'qituvchi ikki satr bo'lsa balandroq
-          const twoLine = plans.some(
-            (p) => p.kind === 'lessons' && p.items[gi] && p.items[gi].sub.includes('\n')
-          );
-          rowHpt.push(twoLine ? 30 : 18);
-        }
+        rowHpt.push(maxG > 1 ? 34 : 40);
       }
 
-      if (blockH > 1) {
-        merges.push({ s: { r: blockStart, c: 1 }, e: { r: blockStart + blockH - 1, c: 1 } });
-        merges.push({ s: { r: blockStart, c: 2 }, e: { r: blockStart + blockH - 1, c: 2 } });
+      if (maxG > 1) {
+        merges.push({ s: { r: blockStart, c: 1 }, e: { r: blockStart + maxG - 1, c: 1 } });
+        merges.push({ s: { r: blockStart, c: 2 }, e: { r: blockStart + maxG - 1, c: 2 } });
       }
       plans.forEach((p, ci) => {
         const col = LEAD + ci;
-        if (blockH <= 1) return;
-        if (p.kind !== 'lessons') {
-          // bo'sh katak yoki "Dam"/"Obed" belgisi — butun blok bo'ylab yagona katak
-          merges.push({ s: { r: blockStart, c: col }, e: { r: blockStart + blockH - 1, c: col } });
-        } else if (p.items.length * LPR < blockH) {
-          // darsi kam sinf — ortib qolgan qatorlar birlashtiriladi
-          merges.push({
-            s: { r: blockStart + p.items.length * LPR, c: col },
-            e: { r: blockStart + blockH - 1, c: col },
-          });
+        if (maxG <= 1) return;
+        const gc = p.kind === 'lessons' ? p.items.length : 1;
+        if (p.kind !== 'lessons' || gc <= 1) {
+          // bo'sh katak yoki bitta dars — butun blok bo'ylab yagona katak
+          merges.push({ s: { r: blockStart, c: col }, e: { r: blockStart + maxG - 1, c: col } });
+        } else if (gc < maxG) {
+          merges.push({ s: { r: blockStart + gc, c: col }, e: { r: blockStart + maxG - 1, c: col } });
         }
       });
-      r += blockH;
+      r += maxG;
     });
 
     // Chap chekkadagi VERTIKAL kun yozuvi (kunning barcha soat qatorlari bo'ylab)
@@ -463,29 +437,12 @@ function buildSheet(XLSX, {
     }
   });
 
-  // Dars kataklari — fan rangida, ustun ajratkichi saqlanadi.
-  // Fan qatori: qalin, 13 pt, pastga tekislangan; tafsilot qatori: 10 pt, yuqoriga.
-  // Bir darsning ikki qatori ORASIGA gorizontal chiziq qo'yilmaydi — ular bitta
-  // katakdek ko'rinishi kerak.
-  fills.forEach(({ r: R, c: C, bg, fg, kind }) => {
-    const isHead = kind === 'head';
-    const isSub = kind === 'sub';
+  // Dars kataklari — fan rangida, ustun ajratkichi saqlanadi
+  fills.forEach(({ r: R, c: C, bg, fg }) => {
     cell(R, C).s = {
-      alignment: isHead
-        ? { horizontal: 'center', vertical: 'bottom', wrapText: true }
-        : isSub
-          ? { horizontal: 'center', vertical: 'top', wrapText: true }
-          : mid,
-      border: isHead
-        ? { top: HAIR, left: SEP, right: SEP }
-        : isSub
-          ? { bottom: HAIR, left: SEP, right: SEP }
-          : { top: HAIR, bottom: HAIR, left: SEP, right: SEP },
-      font: {
-        bold: !isSub,
-        sz: isHead ? 13 : isSub ? 10 : 11,
-        color: { rgb: fg },
-      },
+      alignment: mid,
+      border: { top: HAIR, bottom: HAIR, left: SEP, right: SEP },
+      font: { bold: true, sz: 11, color: { rgb: fg } },
       fill: { patternType: 'solid', fgColor: { rgb: bg } },
     };
   });
