@@ -163,47 +163,56 @@
 
 .vak-seg {
   display: inline-flex;
-  gap: 4px;
-  padding: 4px;
-  border-radius: 12px;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 18px;
   background: rgba(100, 116, 139, 0.09);
-  border: 1px solid rgba(100, 116, 139, 0.14);
+  border: 1px solid rgba(100, 116, 139, 0.16);
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.05);
   flex-wrap: wrap;
 }
 
 .vak-seg__btn {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 10px;
   border: none;
   background: transparent;
   color: inherit;
-  border-radius: 9px;
-  padding: 7px 14px;
-  font-size: 13px;
-  font-weight: 700;
+  border-radius: 13px;
+  padding: 11px 20px;
+  font-size: 15px;
+  font-weight: 800;
+  font-family: inherit;
+  letter-spacing: 0.1px;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease,
+    transform 0.18s ease;
 }
 
 .vak-seg__btn:hover {
-  background: rgba(100, 116, 139, 0.1);
+  background: rgba(100, 116, 139, 0.12);
+  transform: translateY(-1px);
 }
 
 .vak-seg__btn--active {
   background: var(--da-card-bg, #ffffff);
   color: #4f46e5;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.16);
+  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.18), 0 1px 3px rgba(15, 23, 42, 0.12);
+  transform: translateY(-1px);
 }
 
 .vak-seg__icon {
-  font-size: 14px;
+  font-size: 19px;
+  line-height: 1;
 }
 
 .vak-seg__count {
-  font-size: 11px;
-  font-weight: 800;
-  padding: 1px 7px;
+  font-size: 12.5px;
+  font-weight: 900;
+  min-width: 26px;
+  text-align: center;
+  padding: 3px 9px;
   border-radius: 999px;
   background: rgba(100, 116, 139, 0.16);
   color: var(--da-text-2, #64748b);
@@ -294,20 +303,20 @@
 
 .vak-search__icon {
   position: absolute;
-  left: 10px;
-  font-size: 12px;
+  left: 12px;
+  font-size: 14px;
   opacity: 0.6;
   pointer-events: none;
 }
 
 .vak-search__input {
   width: 100%;
-  padding: 7px 28px 7px 30px;
-  border-radius: 10px;
-  border: 1px solid rgba(100, 116, 139, 0.25);
+  padding: 10px 32px 10px 36px;
+  border-radius: 12px;
+  border: 1.5px solid rgba(100, 116, 139, 0.25);
   background: rgba(100, 116, 139, 0.05);
   color: inherit;
-  font-size: 13px;
+  font-size: 14px;
   font-family: inherit;
   outline: none;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
@@ -339,15 +348,20 @@
 }
 
 .vak-linkbtn {
-  border: none;
-  background: transparent;
+  border: 1.5px solid rgba(79, 70, 229, 0.28);
+  background: rgba(79, 70, 229, 0.06);
   color: #4f46e5;
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 13.5px;
+  font-weight: 800;
   cursor: pointer;
-  padding: 5px 8px;
-  border-radius: 8px;
+  padding: 9px 16px;
+  border-radius: 999px;
   font-family: inherit;
+  transition: background 0.16s ease, transform 0.16s ease;
+}
+
+.vak-linkbtn:hover {
+  transform: translateY(-1px);
 }
 
 .vak-linkbtn:hover {
@@ -362,26 +376,29 @@
 }
 
 .vak-tab {
-  border: 1px solid rgba(100, 116, 139, 0.25);
+  border: 1.5px solid rgba(100, 116, 139, 0.25);
   background: transparent;
   color: inherit;
   border-radius: 999px;
-  padding: 5px 13px;
-  font-size: 12px;
-  font-weight: 700;
+  padding: 9px 18px;
+  font-size: 13.5px;
+  font-weight: 800;
   cursor: pointer;
   font-family: inherit;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease,
+    box-shadow 0.16s ease;
 }
 
 .vak-tab:hover {
   background: rgba(100, 116, 139, 0.08);
+  transform: translateY(-1px);
 }
 
 .vak-tab--active {
   background: rgba(79, 70, 229, 0.12);
-  border-color: rgba(79, 70, 229, 0.45);
+  border-color: rgba(79, 70, 229, 0.5);
   color: #4f46e5;
+  box-shadow: 0 3px 10px rgba(79, 70, 229, 0.16);
 }
 
 /* ---------- Jadval ---------- */
@@ -868,5 +885,506 @@ body.dark .vak-section__sub,
 
   .vak-detail {
     padding-left: 16px;
+  }
+}
+/* =====================================================================
+   XONALAR KESIMI — xona tanlash tugmalari va hafta setkasi
+   (VacancyAnalysis.jsx dagi RoomsTab)
+   ===================================================================== */
+
+/* ---------- Ma'lumot qutisi ---------- */
+.vak-infobox {
+  margin-bottom: 14px;
+  padding: 13px 16px;
+  border-radius: 14px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  font-weight: 600;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: #b45309;
+}
+
+body.dark .vak-infobox,
+.dark .vak-infobox {
+  color: #fcd34d;
+}
+
+/* ---------- Xona tanlash tugmalari ---------- */
+.vak-rpicker {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 12px;
+  margin: 4px 0 18px;
+}
+
+.vak-rbtn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1.5px solid rgba(100, 116, 139, 0.2);
+  background: var(--da-card-bg, #ffffff);
+  color: inherit;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease,
+    background 0.18s ease;
+}
+
+.vak-rbtn:hover {
+  transform: translateY(-2px);
+  border-color: rgba(79, 70, 229, 0.4);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.1);
+}
+
+.vak-rbtn--active {
+  border-color: rgba(79, 70, 229, 0.75);
+  background: rgba(79, 70, 229, 0.07);
+  box-shadow: 0 10px 24px rgba(79, 70, 229, 0.2);
+}
+
+.vak-rbtn__icon {
+  font-size: 30px;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
+.vak-rbtn__body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.vak-rbtn__name {
+  font-size: 16px;
+  font-weight: 900;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vak-rbtn--active .vak-rbtn__name {
+  color: #4f46e5;
+}
+
+.vak-rbtn__flag {
+  margin-left: 6px;
+  font-size: 13px;
+}
+
+.vak-rbtn__meta {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--da-text-2, #64748b);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vak-rbtn__bar {
+  display: block;
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(100, 116, 139, 0.16);
+  overflow: hidden;
+}
+
+.vak-rbtn__fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.vak-rbtn__fill--ok {
+  background: linear-gradient(90deg, #6366f1, #22c55e);
+}
+
+.vak-rbtn__fill--hot {
+  background: linear-gradient(90deg, #f59e0b, #ef4444);
+}
+
+.vak-rbtn__hours {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  flex: 0 0 auto;
+  padding-left: 6px;
+  border-left: 1px dashed rgba(100, 116, 139, 0.25);
+  min-width: 52px;
+}
+
+.vak-rbtn__hours b {
+  font-size: 19px;
+  font-weight: 900;
+  line-height: 1.1;
+}
+
+.vak-rbtn__hours small {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--da-text-2, #64748b);
+}
+
+/* ---------- Tanlangan xona paneli ---------- */
+.vak-rpanel {
+  border: 1.5px solid rgba(100, 116, 139, 0.18);
+  border-radius: 18px;
+  overflow: hidden;
+  background: var(--da-card-bg, #ffffff);
+}
+
+.vak-rpanel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 16px 18px;
+  background: linear-gradient(135deg, rgba(79, 70, 229, 0.1), rgba(14, 165, 233, 0.08));
+  border-bottom: 1px solid rgba(100, 116, 139, 0.16);
+}
+
+.vak-rpanel__id {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.vak-rpanel__icon {
+  font-size: 38px;
+  line-height: 1;
+}
+
+.vak-rpanel__name {
+  font-size: 20px;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.vak-rpanel__sub {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--da-text-2, #64748b);
+  margin-top: 3px;
+}
+
+.vak-rpanel__stats {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.vak-rstat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 82px;
+  padding: 8px 12px;
+  border-radius: 13px;
+  background: var(--da-card-bg, #ffffff);
+  border: 1px solid rgba(100, 116, 139, 0.16);
+}
+
+.vak-rstat__val {
+  font-size: 19px;
+  font-weight: 900;
+  line-height: 1.15;
+}
+
+.vak-rstat__lab {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--da-text-2, #64748b);
+  white-space: nowrap;
+}
+
+.vak-rstat--ok .vak-rstat__val {
+  color: #059669;
+}
+
+.vak-rstat--warn .vak-rstat__val {
+  color: #b45309;
+}
+
+.vak-rstat--bad .vak-rstat__val {
+  color: #dc2626;
+}
+
+/* ---------- Hafta setkasi ---------- */
+.vak-rgridwrap {
+  overflow-x: auto;
+}
+
+.vak-rgrid {
+  width: 100%;
+  min-width: 860px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12.5px;
+}
+
+.vak-rgrid th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 10px 8px;
+  text-align: center;
+  font-size: 12.5px;
+  font-weight: 900;
+  background: rgba(100, 116, 139, 0.1);
+  border-bottom: 1px solid rgba(100, 116, 139, 0.2);
+  white-space: nowrap;
+}
+
+.vak-rgrid__timehead {
+  text-align: left !important;
+  min-width: 116px;
+}
+
+.vak-rgrid__dayname {
+  display: block;
+}
+
+.vak-rgrid__dayhours {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--da-text-2, #64748b);
+}
+
+.vak-rgrid__shift td {
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 800;
+  color: #4f46e5;
+  background: rgba(79, 70, 229, 0.08);
+  border-bottom: 1px solid rgba(100, 116, 139, 0.14);
+}
+
+.vak-rgrid__time {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(100, 116, 139, 0.12);
+  border-right: 1px solid rgba(100, 116, 139, 0.12);
+  background: rgba(100, 116, 139, 0.045);
+  white-space: nowrap;
+}
+
+.vak-rgrid__time strong {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 900;
+}
+
+.vak-rgrid__time span {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--da-text-2, #64748b);
+}
+
+.vak-rgrid__ntrow .vak-rgrid__time strong {
+  color: #b45309;
+}
+
+.vak-rcell {
+  vertical-align: top;
+  padding: 5px;
+  min-width: 118px;
+  border-bottom: 1px solid rgba(100, 116, 139, 0.12);
+  border-right: 1px solid rgba(100, 116, 139, 0.08);
+}
+
+.vak-rcell--free {
+  text-align: center;
+}
+
+.vak-rcell--nt {
+  background: rgba(245, 158, 11, 0.06);
+  text-align: center;
+}
+
+.vak-rcell__freetxt {
+  font-size: 11px;
+  font-weight: 700;
+  color: #94a3b8;
+  opacity: 0.75;
+}
+
+.vak-rcell--bad {
+  background: rgba(239, 68, 68, 0.08);
+  outline: 2px dashed rgba(239, 68, 68, 0.45);
+  outline-offset: -3px;
+}
+
+.vak-rcell__warn {
+  font-size: 10.5px;
+  font-weight: 900;
+  color: #dc2626;
+  margin-bottom: 4px;
+  text-align: center;
+}
+
+/* ---------- Katakdagi dars kartasi ---------- */
+.vak-rcard {
+  border: 1.5px solid;
+  border-radius: 11px;
+  padding: 7px 9px;
+  margin-bottom: 5px;
+  line-height: 1.35;
+}
+
+.vak-rcard:last-child {
+  margin-bottom: 0;
+}
+
+.vak-rcard__cls {
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 0.2px;
+}
+
+.vak-rcard__lock {
+  margin-left: 5px;
+  font-size: 10px;
+}
+
+.vak-rcard__sub {
+  font-size: 11.5px;
+  font-weight: 700;
+  margin-top: 1px;
+}
+
+.vak-rcard__t,
+.vak-rcard__g {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--da-text-2, #64748b);
+  margin-top: 2px;
+}
+
+.vak-rcard__cap {
+  margin-top: 3px;
+  font-size: 10px;
+  font-weight: 800;
+  color: #b45309;
+}
+
+/* ---------- Xona bo'yicha ro'yxatlar ---------- */
+.vak-rlists {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+  padding: 16px 18px;
+  border-top: 1px solid rgba(100, 116, 139, 0.14);
+  background: rgba(100, 116, 139, 0.035);
+}
+
+.vak-rlist__title {
+  font-size: 12.5px;
+  font-weight: 900;
+  margin-bottom: 7px;
+}
+
+.vak-rlist__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
+/* ---------- Tungi rejim ---------- */
+body.dark .vak-rbtn,
+.dark .vak-rbtn {
+  background: rgba(148, 163, 184, 0.07);
+  border-color: rgba(148, 163, 184, 0.2);
+}
+
+body.dark .vak-rbtn--active,
+.dark .vak-rbtn--active {
+  background: rgba(165, 180, 252, 0.14);
+  border-color: rgba(165, 180, 252, 0.6);
+  box-shadow: none;
+}
+
+body.dark .vak-rbtn--active .vak-rbtn__name,
+.dark .vak-rbtn--active .vak-rbtn__name {
+  color: #a5b4fc;
+}
+
+body.dark .vak-rpanel,
+.dark .vak-rpanel {
+  background: rgba(148, 163, 184, 0.05);
+  border-color: rgba(148, 163, 184, 0.2);
+}
+
+body.dark .vak-rpanel__head,
+.dark .vak-rpanel__head {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.18), rgba(14, 165, 233, 0.12));
+}
+
+body.dark .vak-rstat,
+.dark .vak-rstat {
+  background: rgba(148, 163, 184, 0.1);
+  border-color: rgba(148, 163, 184, 0.2);
+}
+
+body.dark .vak-rstat--ok .vak-rstat__val,
+.dark .vak-rstat--ok .vak-rstat__val {
+  color: #6ee7b7;
+}
+
+body.dark .vak-rstat--warn .vak-rstat__val,
+body.dark .vak-rcard__cap,
+body.dark .vak-rgrid__ntrow .vak-rgrid__time strong,
+.dark .vak-rstat--warn .vak-rstat__val,
+.dark .vak-rcard__cap,
+.dark .vak-rgrid__ntrow .vak-rgrid__time strong {
+  color: #fcd34d;
+}
+
+body.dark .vak-rstat--bad .vak-rstat__val,
+body.dark .vak-rcell__warn,
+.dark .vak-rstat--bad .vak-rstat__val,
+.dark .vak-rcell__warn {
+  color: #fca5a5;
+}
+
+body.dark .vak-rgrid__shift td,
+.dark .vak-rgrid__shift td {
+  color: #a5b4fc;
+  background: rgba(165, 180, 252, 0.12);
+}
+
+/* ---------- Kichik ekran ---------- */
+@media (max-width: 640px) {
+  .vak-rpicker {
+    grid-template-columns: 1fr;
+  }
+
+  .vak-seg {
+    width: 100%;
+  }
+
+  .vak-seg__btn {
+    flex: 1 1 auto;
+    justify-content: center;
+    padding: 11px 14px;
+  }
+
+  .vak-rpanel__stats {
+    width: 100%;
+  }
+
+  .vak-rstat {
+    flex: 1 1 auto;
   }
 }

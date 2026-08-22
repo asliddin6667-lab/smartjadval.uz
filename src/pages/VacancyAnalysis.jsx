@@ -1,4 +1,6 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
+import { DAYS } from "../utils/constants";
+import { groupSlotsByShift, shiftSlotNumbers } from "../utils/shiftSlots";
 import "./vacancy.css";
 
 // =====================================================================
@@ -1123,14 +1125,633 @@ function TeachersTab({ data }) {
   );
 }
 
+// =====================================================================
+//  TAB 4 — XONALAR (hafta setkasi)
+//
+//  Xona tanlanadi → o'sha xonada HAFTA davomida qaysi kunda, qaysi
+//  soatda qaysi sinf o'tirishi setkada ko'rinadi.
+//
+//  Ma'lumot manbai — tayyor `schedule` (dars jadvali). Jadval hali
+//  tuzilmagan bo'lsa, setka bo'sh chiqadi va ogohlantirish beriladi.
+//
+//  BANDLIK: xona bir kun-soatda band bo'lsa 1 soat sanaladi (guruhli
+//  dars ikki yozuv bo'lsa ham — bitta karta, bitta soat).
+//  TO'QNASHUV: bitta xonada vaqti KESISHADIGAN slotlarda ikki HAR XIL
+//  dars turgan bo'lsa — qizil bilan belgilanadi (generator qoidasi
+//  bilan bir xil: bandlik slot id emas, VAQT bo'yicha).
+// =====================================================================
+
+const ROOM_ICONS = {
+  "Oddiy": "🏫",
+  "IT xona": "💻",
+  "Laboratoriya": "🔬",
+  "Sport zal": "⚽",
+};
+
+const roomIcon = (type) => ROOM_ICONS[type] || "🚪";
+
+const ROOM_PALETTE = [
+  "#4f46e5", "#0891b2", "#16a34a", "#d97706", "#db2777",
+  "#7c3aed", "#0284c7", "#059669", "#ea580c", "#be123c",
+  "#0d9488", "#9333ea", "#65a30d", "#c2410c", "#2563eb",
+];
+
+function hashText(text = "") {
+  return String(text).split("").reduce((sum, ch) => sum + ch.charCodeAt(0), 0);
+}
+
+function subjectTone(subject, fallbackName = "") {
+  if (subject?.color) return subject.color;
+  return ROOM_PALETTE[hashText(subject?.name || fallbackName) % ROOM_PALETTE.length];
+}
+
+function toRgba(hex = "#4f46e5", alpha = 1) {
+  const raw = String(hex).replace("#", "");
+  const full = raw.length === 3 ? raw.split("").map((c) => c + c).join("") : raw;
+  const v = parseInt(full, 16);
+  if (Number.isNaN(v)) return `rgba(79, 70, 229, ${alpha})`;
+  return `rgba(${(v >> 16) & 255}, ${(v >> 8) & 255}, ${v & 255}, ${alpha})`;
+}
+
+// Dars soatimi? (obed/tanaffus — dars emas)
+function isLessonSlot(ts) {
+  const type = ts?.type || "lesson";
+  return type !== "lunch" && type !== "break";
+}
+
+function lessonClassIds(l) {
+  const ids = Array.isArray(l?.classIds) ? l.classIds.filter(Boolean) : [];
+  if (ids.length) return ids;
+  return l?.classId ? [l.classId] : [];
+}
+
+// Bitta katakdagi yozuvlarni BITTA kartaga birlashtiruvchi kalit
+// (Schedule.jsx dagi groupLessons bilan bir xil mantiq).
+function cardKeyOf(l) {
+  if (l?.pairKey) return `p:${l.pairKey}:${l.blockIndex ?? ""}`;
+  if (l?.groupKey) return `g:${l.groupKey}:${l.subjectId}:${l.blockIndex ?? ""}`;
+  return `s:${l?.subjectId}:${lessonClassIds(l).slice().sort().join("-")}:${l?.blockIndex ?? ""}`;
+}
+
+const minutesOf = (t) => {
+  const [h, m] = String(t || "").split(":").map(Number);
+  return (h || 0) * 60 + (m || 0);
+};
+
+// Vaqti kesishadigan slotlarni bitta "band"ga birlashtiradi.
+// Ikki smena bir xil soatda o'tishi mumkin — id boshqa, vaqt bir xil.
+function slotBucketMap(slots = []) {
+  const n = slots.length;
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (x) => {
+    let r = x;
+    while (parent[r] !== r) r = parent[r];
+    return r;
+  };
+  const hasClock = (s) => Boolean(s?.startTime && s?.endTime);
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (!hasClock(slots[i]) || !hasClock(slots[j])) continue;
+      const a1 = minutesOf(slots[i].startTime), a2 = minutesOf(slots[i].endTime);
+      const b1 = minutesOf(slots[j].startTime), b2 = minutesOf(slots[j].endTime);
+      if (!(a1 < b2 && b1 < a2)) continue;
+      const ra = find(i), rb = find(j);
+      if (ra !== rb) parent[rb] = ra;
+    }
+  }
+  const out = new Map();
+  slots.forEach((s, i) => out.set(s.id, `b${find(i)}`));
+  return out;
+}
+
+// ---------------------------------------------------------------------
+//  XONALAR BANDLIGINI HISOBLASH
+//  Natija: { rooms: [...], weekCapacity, noRoomCards, usedCount, ... }
+// ---------------------------------------------------------------------
+function computeRoomUsage({ rooms = [], schedule = {}, timeslots = [], classes = [], subjects = [], teachers = [] }) {
+  const classMap = new Map(classes.map((c) => [c.id, c]));
+  const subjectMap = new Map(subjects.map((s) => [s.id, s]));
+  const teacherMap = new Map(teachers.map((t) => [t.id, t]));
+
+  const slots = [...timeslots].sort(
+    (a, b) => Number(a.lessonNumber || 0) - Number(b.lessonNumber || 0)
+  );
+  const lessonSlots = slots.filter(isLessonSlot);
+  const bucketOf = slotBucketMap(slots);
+
+  const state = new Map();
+  const accOf = (rid) => {
+    let a = state.get(rid);
+    if (!a) {
+      a = {
+        cells: new Map(),          // `${day}__${slotId}` -> { cards: [] }
+        busyKeys: new Set(),       // band kun-soatlar
+        cardCount: 0,
+        classHours: new Map(),     // classId -> soat
+        teacherHours: new Map(),   // teacherId -> soat
+        subjectHours: new Map(),   // subjectId -> soat
+        dayHours: new Map(),       // day -> soat
+        bucketCards: new Map(),    // `${day}__${bucket}` -> Map(cardKey -> Set(cellKey))
+      };
+      state.set(rid, a);
+    }
+    return a;
+  };
+
+  let noRoomCards = 0;
+
+  DAYS.forEach((day) => {
+    slots.forEach((ts) => {
+      const cell = schedule?.[day]?.[ts.id];
+      if (!Array.isArray(cell) || !cell.length) return;
+
+      // (xona × karta) bo'yicha guruhlash — bitta karta ikki xonada
+      // bo'lishi mumkin (masalan "bir vaqtda 2 fan" turli xonalarda).
+      const byRoom = new Map();
+      const emptyRoomCards = new Set();
+      cell.forEach((l) => {
+        const key = cardKeyOf(l);
+        const rid = l?.roomId || "";
+        if (!rid) { emptyRoomCards.add(key); return; }
+        let m = byRoom.get(rid);
+        if (!m) byRoom.set(rid, (m = new Map()));
+        let parts = m.get(key);
+        if (!parts) m.set(key, (parts = []));
+        parts.push(l);
+      });
+      noRoomCards += emptyRoomCards.size;
+
+      byRoom.forEach((cards, rid) => {
+        const a = accOf(rid);
+        const cellKey = `${day}__${ts.id}`;
+        const bKey = `${day}__${bucketOf.get(ts.id) || `s:${ts.id}`}`;
+
+        let bc = a.bucketCards.get(bKey);
+        if (!bc) a.bucketCards.set(bKey, (bc = new Map()));
+
+        const list = [];
+        const classSeen = new Set();
+        const teacherSeen = new Set();
+
+        cards.forEach((parts, key) => {
+          let bs = bc.get(key);
+          if (!bs) bc.set(key, (bs = new Set()));
+          bs.add(cellKey);
+
+          const classIds = [];
+          const subjectIds = [];
+          const teacherIds = [];
+          const groupNames = [];
+          parts.forEach((p) => {
+            lessonClassIds(p).forEach((cid) => { if (!classIds.includes(cid)) classIds.push(cid); });
+            if (p.subjectId && !subjectIds.includes(p.subjectId)) subjectIds.push(p.subjectId);
+            [p.teacherId, p.alternating ? p.altTeacherId : null].forEach((tid) => {
+              if (tid && !teacherIds.includes(tid)) teacherIds.push(tid);
+            });
+            if (p.groupPart && !groupNames.includes(p.groupPart)) groupNames.push(p.groupPart);
+          });
+
+          const students = classIds.reduce(
+            (mx, cid) => Math.max(mx, Number(classMap.get(cid)?.studentCount || 0)),
+            0
+          );
+
+          list.push({
+            key,
+            locked: parts.some((p) => p.locked),
+            classNames: classIds.map((cid) => classMap.get(cid)?.name || "?"),
+            subjectNames: subjectIds.map((sid) => subjectMap.get(sid)?.name || "Fan"),
+            teacherNames: teacherIds.map((tid) => teacherMap.get(tid)?.name || "—"),
+            groupNames,
+            students,
+            color: subjectTone(subjectMap.get(subjectIds[0]), subjectIds[0] || key),
+          });
+
+          classIds.forEach((cid) => classSeen.add(cid));
+          teacherIds.forEach((tid) => teacherSeen.add(tid));
+          subjectIds.forEach((sid) => a.subjectHours.set(sid, (a.subjectHours.get(sid) || 0) + 1));
+          a.cardCount += 1;
+        });
+
+        if (!list.length) return;
+        a.cells.set(cellKey, { cards: list });
+        if (isLessonSlot(ts)) {
+          a.busyKeys.add(cellKey);
+          a.dayHours.set(day, (a.dayHours.get(day) || 0) + 1);
+        }
+        classSeen.forEach((cid) => a.classHours.set(cid, (a.classHours.get(cid) || 0) + 1));
+        teacherSeen.forEach((tid) => a.teacherHours.set(tid, (a.teacherHours.get(tid) || 0) + 1));
+      });
+    });
+  });
+
+  const weekCapacity = lessonSlots.length * DAYS.length;
+
+  const list = rooms.map((r) => {
+    const a = state.get(r.id);
+    const cells = a?.cells || new Map();
+    const conflictCells = new Set();
+    if (a) {
+      a.bucketCards.forEach((cardMap) => {
+        if (cardMap.size < 2) return;
+        cardMap.forEach((cellKeys) => cellKeys.forEach((ck) => conflictCells.add(ck)));
+      });
+    }
+    const capacity = Number(r.capacity || 0);
+    let overCapacity = 0;
+    cells.forEach((c) => {
+      if (capacity && c.cards.some((x) => x.students > capacity)) overCapacity += 1;
+    });
+
+    const busy = a ? a.busyKeys.size : 0;
+    const rows = (map, nameOf) =>
+      (map ? [...map.entries()] : [])
+        .map(([id, hours]) => ({ id, name: nameOf(id), hours }))
+        .sort((x, y) => y.hours - x.hours || uzCmp(x.name, y.name));
+
+    return {
+      id: r.id,
+      name: r.name || "Xona",
+      type: r.type || "Oddiy",
+      icon: roomIcon(r.type),
+      capacity,
+      cells,
+      conflictCells,
+      busy,
+      free: Math.max(0, weekCapacity - busy),
+      pct: weekCapacity ? Math.round((busy / weekCapacity) * 100) : 0,
+      cardCount: a?.cardCount || 0,
+      dayHours: a?.dayHours || new Map(),
+      classRows: rows(a?.classHours, (id) => classMap.get(id)?.name || "?"),
+      subjectRows: rows(a?.subjectHours, (id) => subjectMap.get(id)?.name || "Fan"),
+      teacherRows: rows(a?.teacherHours, (id) => teacherMap.get(id)?.name || "—"),
+      conflicts: conflictCells.size,
+      overCapacity,
+    };
+  });
+
+  list.sort((x, y) => y.busy - x.busy || uzCmp(x.name, y.name));
+
+  return {
+    rooms: list,
+    weekCapacity,
+    lessonSlotCount: lessonSlots.length,
+    noRoomCards,
+    usedCount: list.filter((r) => r.busy > 0).length,
+    idleCount: list.filter((r) => r.busy === 0).length,
+    conflictCount: list.filter((r) => r.conflicts > 0).length,
+    totalBusy: list.reduce((n, r) => n + r.busy, 0),
+    avgPct: list.length ? Math.round(list.reduce((n, r) => n + r.pct, 0) / list.length) : 0,
+  };
+}
+
+function RoomsTab({ rooms = [], schedule = {}, timeslots = [], shifts = [], classes = [], subjects = [], teachers = [] }) {
+  const [q, setQ] = useState("");
+  const [filter, setFilter] = useState("all");   // all | busy | free | conflict
+  const [selId, setSelId] = useState("");
+
+  const usage = useMemo(
+    () => computeRoomUsage({ rooms, schedule, timeslots, classes, subjects, teachers }),
+    [rooms, schedule, timeslots, classes, subjects, teachers]
+  );
+
+  const slotGroups = useMemo(() => groupSlotsByShift(timeslots, shifts), [timeslots, shifts]);
+  const slotNumById = useMemo(() => shiftSlotNumbers(slotGroups), [slotGroups]);
+
+  const shown = useMemo(() => {
+    let r = usage.rooms;
+    if (filter === "busy") r = r.filter((x) => x.busy > 0);
+    else if (filter === "free") r = r.filter((x) => x.busy === 0);
+    else if (filter === "conflict") r = r.filter((x) => x.conflicts > 0);
+    const s = q.trim().toLowerCase();
+    if (s) {
+      r = r.filter(
+        (x) =>
+          x.name.toLowerCase().includes(s) ||
+          x.type.toLowerCase().includes(s) ||
+          x.classRows.some((c) => c.name.toLowerCase().includes(s))
+      );
+    }
+    return r;
+  }, [usage.rooms, filter, q]);
+
+  const active =
+    shown.find((r) => r.id === selId) ||
+    shown[0] ||
+    usage.rooms.find((r) => r.id === selId) ||
+    usage.rooms[0] ||
+    null;
+
+  if (!rooms.length) {
+    return (
+      <div className="vak-empty">
+        <div className="vak-empty__icon">🚪</div>
+        <div className="vak-empty__title">Xonalar kiritilmagan</div>
+        <div className="vak-empty__text">
+          «Xonalar» bo'limida sinf xonalari va kabinetlarni qo'shing — shundan keyin
+          har bir xonaning haftalik bandligi shu yerda ko'rinadi.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <MiniStats
+        items={[
+          { value: usage.rooms.length, label: "Jami xona" },
+          { value: usage.usedCount, label: "Jadvalda band xona", tone: usage.usedCount ? "ok" : undefined },
+          { value: usage.idleCount, label: "Ishlatilmagan xona", tone: usage.idleCount ? "warn" : "ok" },
+          {
+            value: `${usage.avgPct}%`,
+            label: "O'rtacha bandlik",
+            tone: usage.avgPct >= 80 ? "warn" : usage.avgPct > 0 ? "ok" : undefined,
+          },
+          {
+            value: usage.noRoomCards,
+            label: "Xonasiz dars",
+            tone: usage.noRoomCards ? "warn" : "ok",
+          },
+        ]}
+      />
+
+      {usage.totalBusy === 0 && (
+        <div className="vak-infobox">
+          📭 Dars jadvali hali tuzilmagan yoki darslarga xona biriktirilmagan — setka bo'sh
+          ko'rinadi. «Dars jadvali» bo'limida jadvalni tuzing, «Sinf fanlari»da esa fanga
+          xona tanlang.
+        </div>
+      )}
+
+      <Toolbar
+        value={q}
+        onChange={setQ}
+        placeholder="Xona, turi yoki sinf bo'yicha qidirish..."
+        chips={
+          <>
+            <button
+              type="button"
+              className={`vak-tab ${filter === "all" ? "vak-tab--active" : ""}`}
+              onClick={() => setFilter("all")}
+            >
+              Hammasi ({usage.rooms.length})
+            </button>
+            <button
+              type="button"
+              className={`vak-tab ${filter === "busy" ? "vak-tab--active" : ""}`}
+              onClick={() => setFilter("busy")}
+            >
+              Band ({usage.usedCount})
+            </button>
+            <button
+              type="button"
+              className={`vak-tab ${filter === "free" ? "vak-tab--active" : ""}`}
+              onClick={() => setFilter("free")}
+            >
+              Bo'sh ({usage.idleCount})
+            </button>
+            {usage.conflictCount > 0 && (
+              <button
+                type="button"
+                className={`vak-tab ${filter === "conflict" ? "vak-tab--active" : ""}`}
+                onClick={() => setFilter("conflict")}
+              >
+                ⚠️ To'qnashuv ({usage.conflictCount})
+              </button>
+            )}
+          </>
+        }
+      />
+
+      {/* ——— Xona tanlash tugmalari ——— */}
+      {shown.length === 0 ? (
+        <div className="vak-dim vak-c" style={{ padding: "18px 0" }}>Mos xona topilmadi</div>
+      ) : (
+        <div className="vak-rpicker">
+          {shown.map((r) => (
+            <button
+              key={r.id}
+              type="button"
+              className={`vak-rbtn ${active?.id === r.id ? "vak-rbtn--active" : ""}`}
+              onClick={() => setSelId(r.id)}
+              title={`${r.name} — haftasiga ${r.busy} soat band`}
+            >
+              <span className="vak-rbtn__icon">{r.icon}</span>
+              <span className="vak-rbtn__body">
+                <span className="vak-rbtn__name">
+                  {r.name}
+                  {r.conflicts > 0 && <span className="vak-rbtn__flag">⚠️</span>}
+                </span>
+                <span className="vak-rbtn__meta">
+                  {r.type}{r.capacity ? ` · 👥 ${r.capacity}` : ""}
+                </span>
+                <span className="vak-rbtn__bar">
+                  <span
+                    className={`vak-rbtn__fill vak-rbtn__fill--${r.pct >= 80 ? "hot" : "ok"}`}
+                    style={{ width: `${Math.min(100, r.pct)}%` }}
+                  />
+                </span>
+              </span>
+              <span className="vak-rbtn__hours">
+                <b>{r.busy}</b>
+                <small>soat</small>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* ——— Tanlangan xona: hafta setkasi ——— */}
+      {active && (
+        <div className="vak-rpanel">
+          <div className="vak-rpanel__head">
+            <div className="vak-rpanel__id">
+              <span className="vak-rpanel__icon">{active.icon}</span>
+              <div>
+                <div className="vak-rpanel__name">{active.name}</div>
+                <div className="vak-rpanel__sub">
+                  {active.type}
+                  {active.capacity ? ` · 👥 ${active.capacity} o'rin` : ""}
+                  {active.classRows.length ? ` · ${active.classRows.length} ta sinf foydalanadi` : ""}
+                </div>
+              </div>
+            </div>
+            <div className="vak-rpanel__stats">
+              <div className="vak-rstat">
+                <span className="vak-rstat__val">{active.busy}</span>
+                <span className="vak-rstat__lab">Band soat</span>
+              </div>
+              <div className="vak-rstat">
+                <span className="vak-rstat__val">{active.free}</span>
+                <span className="vak-rstat__lab">Bo'sh soat</span>
+              </div>
+              <div className={`vak-rstat ${active.pct >= 80 ? "vak-rstat--warn" : "vak-rstat--ok"}`}>
+                <span className="vak-rstat__val">{active.pct}%</span>
+                <span className="vak-rstat__lab">Bandlik</span>
+              </div>
+              {active.conflicts > 0 && (
+                <div className="vak-rstat vak-rstat--bad">
+                  <span className="vak-rstat__val">{active.conflicts}</span>
+                  <span className="vak-rstat__lab">To'qnashuv</span>
+                </div>
+              )}
+              {active.overCapacity > 0 && (
+                <div className="vak-rstat vak-rstat--warn">
+                  <span className="vak-rstat__val">{active.overCapacity}</span>
+                  <span className="vak-rstat__lab">Sig'imdan ortiq</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="vak-rgridwrap">
+            <table className="vak-rgrid">
+              <thead>
+                <tr>
+                  <th className="vak-rgrid__timehead">Vaqt / Dars</th>
+                  {DAYS.map((day) => (
+                    <th key={day}>
+                      <span className="vak-rgrid__dayname">{day}</span>
+                      <span className="vak-rgrid__dayhours">{active.dayHours.get(day) || 0} soat</span>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {slotGroups.map((g) => (
+                  <Fragment key={g.id}>
+                    {slotGroups.length > 1 && (
+                      <tr className="vak-rgrid__shift">
+                        <td colSpan={DAYS.length + 1}>🕐 {g.name} · {g.range}</td>
+                      </tr>
+                    )}
+                    {g.slots.map((slot) => {
+                      const teaching = isLessonSlot(slot);
+                      const num = slotNumById.get(slot.id) || slot.lessonNumber;
+                      return (
+                        <tr key={slot.id} className={teaching ? "" : "vak-rgrid__ntrow"}>
+                          <td className="vak-rgrid__time">
+                            <strong>
+                              {teaching
+                                ? `${num || ""}-dars`
+                                : (slot.title || (slot.type === "lunch" ? "🍽️ Obed" : "Tanaffus"))}
+                            </strong>
+                            <span>{slot.startTime || ""} – {slot.endTime || ""}</span>
+                          </td>
+                          {DAYS.map((day) => {
+                            const cellKey = `${day}__${slot.id}`;
+                            const cell = active.cells.get(cellKey);
+                            const bad = active.conflictCells.has(cellKey);
+                            if (!cell) {
+                              return (
+                                <td key={day} className={`vak-rcell ${teaching ? "vak-rcell--free" : "vak-rcell--nt"}`}>
+                                  {teaching
+                                    ? <span className="vak-rcell__freetxt">bo'sh</span>
+                                    : <span className="vak-rcell__freetxt">—</span>}
+                                </td>
+                              );
+                            }
+                            return (
+                              <td key={day} className={`vak-rcell ${bad ? "vak-rcell--bad" : ""}`}>
+                                {bad && <div className="vak-rcell__warn">⚠️ To'qnashuv</div>}
+                                {cell.cards.map((card, i) => (
+                                  <div
+                                    key={i}
+                                    className="vak-rcard"
+                                    style={{
+                                      background: toRgba(card.color, 0.12),
+                                      borderColor: toRgba(card.color, 0.34),
+                                    }}
+                                  >
+                                    <div className="vak-rcard__cls" style={{ color: card.color }}>
+                                      {card.classNames.join(", ") || "—"}
+                                      {card.locked && <span className="vak-rcard__lock">🔒</span>}
+                                    </div>
+                                    <div className="vak-rcard__sub">{card.subjectNames.join(" / ")}</div>
+                                    {card.teacherNames.length > 0 && (
+                                      <div className="vak-rcard__t">👤 {card.teacherNames.join(", ")}</div>
+                                    )}
+                                    {card.groupNames.length > 0 && (
+                                      <div className="vak-rcard__g">👥 {card.groupNames.join(" · ")}</div>
+                                    )}
+                                    {active.capacity > 0 && card.students > active.capacity && (
+                                      <div className="vak-rcard__cap">
+                                        ⚠️ {card.students} o'quvchi · sig'im {active.capacity}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {(active.classRows.length > 0 || active.subjectRows.length > 0) && (
+            <div className="vak-rlists">
+              {active.classRows.length > 0 && (
+                <div className="vak-rlist">
+                  <div className="vak-rlist__title">🏫 Shu xonadan foydalanadigan sinflar</div>
+                  <div className="vak-rlist__chips">
+                    {active.classRows.map((c) => (
+                      <span key={c.id} className="vak-chip">{c.name} · {c.hours} soat</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {active.subjectRows.length > 0 && (
+                <div className="vak-rlist">
+                  <div className="vak-rlist__title">📚 Xonada o'tiladigan fanlar</div>
+                  <div className="vak-rlist__chips">
+                    {active.subjectRows.map((s) => (
+                      <span key={s.id} className="vak-chip">{s.name} · {s.hours} soat</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {active.teacherRows.length > 0 && (
+                <div className="vak-rlist">
+                  <div className="vak-rlist__title">👨‍🏫 Xonada dars beradigan ustozlar</div>
+                  <div className="vak-rlist__chips">
+                    {active.teacherRows.map((t) => (
+                      <span key={t.id} className="vak-chip">{t.name} · {t.hours} soat</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {usage.noRoomCards > 0 && (
+        <div className="vak-note">
+          ℹ️ Jadvalda <b>{usage.noRoomCards}</b> ta darsga xona biriktirilmagan — ular hech bir
+          setkada ko'rinmaydi. Xonani «Sinf fanlari» bo'limida fanga biriktirasiz.
+        </div>
+      )}
+    </>
+  );
+}
+
 // ---------------------------------------------------------------------
 //  TO'LIQ HISOBOT — bitta maktab uchun
 //  props:
 //    data         — computeVacancy() natijasi
 //    showTeachers — Sinflar/Ustozlar kesimlarini ko'rsatish (default: true)
+//    roomCtx      — { rooms, schedule, timeslots, shifts, classes, subjects,
+//                     teachers }. Berilsa "🚪 Xonalar" kesimi qo'shiladi
+//                     (maktab paneli). Tuman panelida berilmaydi — u yerda
+//                     boshqa maktabning jadvali yo'q.
 // ---------------------------------------------------------------------
-export function VacancyReport({ data, showTeachers = true }) {
-  const [tab, setTab] = useState("subjects"); // subjects | classes | teachers
+export function VacancyReport({ data, showTeachers = true, roomCtx = null }) {
+  const [tab, setTab] = useState("subjects"); // subjects | classes | teachers | rooms
 
   if (!data || !data.hasData) {
     return (
@@ -1160,6 +1781,9 @@ export function VacancyReport({ data, showTeachers = true }) {
     { id: "subjects", icon: "📚", label: "Fanlar", count: data.subjects.length },
     { id: "classes", icon: "🏫", label: "Sinflar", count: data.classes.length },
     { id: "teachers", icon: "👨‍🏫", label: "Ustozlar", count: data.teachers.length },
+    ...(roomCtx
+      ? [{ id: "rooms", icon: "🚪", label: "Xonalar", count: (roomCtx.rooms || []).length }]
+      : []),
   ].filter((t) => (showTeachers ? true : t.id === "subjects"));
 
   const active = TABS.some((t) => t.id === tab) ? tab : "subjects";
@@ -1210,6 +1834,7 @@ export function VacancyReport({ data, showTeachers = true }) {
         {active === "subjects" && <SubjectsTab data={data} />}
         {active === "classes" && <ClassesTab data={data} />}
         {active === "teachers" && <TeachersTab data={data} />}
+        {active === "rooms" && roomCtx && <RoomsTab {...roomCtx} />}
       </div>
 
       {data.needy && (
@@ -1228,15 +1853,29 @@ export function VacancyReport({ data, showTeachers = true }) {
 //  Maktab foydalanuvchisi uchun tayyor sahifa bo'lagi — Tahlil
 //  (Analytics) sahifasiga qo'yiladi. Xom state'lardan o'zi hisoblaydi.
 // ---------------------------------------------------------------------
-export default function VacancyAnalysis({ classes, subjects, teachers, classSubjects }) {
+export default function VacancyAnalysis({
+  classes = [],
+  subjects = [],
+  teachers = [],
+  classSubjects = {},
+  rooms = [],
+  timeslots = [],
+  shifts = [],
+  schedule = {},
+}) {
   const data = useMemo(
     () => computeVacancy({ classes, subjects, teachers, classSubjects }),
     [classes, subjects, teachers, classSubjects]
   );
+  // "🚪 Xonalar" kesimi uchun kerakli xom ma'lumot (dars jadvali ham).
+  const roomCtx = useMemo(
+    () => ({ rooms, schedule, timeslots, shifts, classes, subjects, teachers }),
+    [rooms, schedule, timeslots, shifts, classes, subjects, teachers]
+  );
   return (
     <div className="vak-card">
-      <div className="vak-card__title">💼 Vakansiya va yuklama tahlili</div>
-      <VacancyReport data={data} />
+      <div className="vak-card__title">💼 Vakansiya, yuklama va xonalar tahlili</div>
+      <VacancyReport data={data} roomCtx={roomCtx} />
     </div>
   );
 }
