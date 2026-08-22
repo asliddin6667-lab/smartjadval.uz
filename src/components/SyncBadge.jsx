@@ -39,11 +39,29 @@ export default function SyncBadge({ state, onRetry, retrying = false }) {
 
   const hideSaved = hiddenStamp === stamp;
 
+  // "Saqlanmoqda..." 12 soniyadan ortiq cho'zilsa — bu normal emas.
+  // Foydalanuvchi nima bo'layotganini bilsin va qo'lda urinib ko'ra olsin.
+  const [slowStamp, setSlowStamp] = useState(0);
+  useEffect(() => {
+    if (kind !== "pending" && kind !== "saving") return;
+    const t = setTimeout(() => setSlowStamp(stamp), 12000);
+    return () => clearTimeout(t);
+  }, [kind, stamp]);
+
+  const slow = slowStamp === stamp && (kind === "pending" || kind === "saving");
+
   if (kind === "idle") return null;
   if (kind === "saved" && hideSaved) return null;
 
   const s = STYLES[kind] || STYLES.idle;
-  const bad = kind === "offline" || kind === "error";
+  const failed = kind === "offline" || kind === "error";
+  // Uzoq cho'zilgan "saqlanmoqda" ham qizil ko'rinadi va tugma beradi
+  const bad = failed || slow;
+  const label = failed
+    ? "Saqlanmadi — internetni tekshiring"
+    : slow
+      ? "Saqlash cho'zilyapti..."
+      : s.text;
 
   return (
     <div
@@ -54,13 +72,15 @@ export default function SyncBadge({ state, onRetry, retrying = false }) {
         position: "fixed", right: 16, bottom: 16, zIndex: 2700,
         display: "inline-flex", alignItems: "center", gap: 9,
         minHeight: 34, padding: bad ? "7px 10px 7px 13px" : "0 14px",
-        borderRadius: 999, background: s.bg, color: "#fff",
+        borderRadius: 999,
+        background: slow && !failed ? "linear-gradient(135deg,#f59e0b,#d97706)" : s.bg,
+        color: "#fff",
         fontSize: 12.5, fontWeight: 800, maxWidth: "min(92vw, 420px)",
         boxShadow: "0 6px 18px rgba(15,23,42,.28)",
       }}
     >
-      <span aria-hidden="true">{s.icon}</span>
-      <span>{bad ? "Saqlanmadi — internetni tekshiring" : s.text}</span>
+      <span aria-hidden="true">{slow && !failed ? "⏳" : s.icon}</span>
+      <span>{label}</span>
       {bad && (
         <button
           type="button"

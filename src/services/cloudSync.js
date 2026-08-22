@@ -436,6 +436,10 @@ export async function pushToCloud(userId, { force = false, overwrite = false } =
   const meta = getMeta(userId);
 
   if (!force && !meta.dirty && hash === meta.lastHash) {
+    // Yuboradigan narsa yo'q. Holatni BO'SHATISH shart — aks holda
+    // `schedulePush()` qo'ygan "pending" nishoni ("Saqlanmoqda...")
+    // ekranda abadiy qotib qoladi.
+    if (syncState.state === "pending" || syncState.state === "saving") emitState("idle");
     return { ok: true, reason: "unchanged" };
   }
 
@@ -630,6 +634,9 @@ async function pushWithRetry(userId, opts = {}) {
       emitState("pending", "Qayta urinilmoqda...");
       await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt] || 20000));
       if (!hasUnsyncedChanges(userId) && !opts.force) {
+        // Boshqa yo'l bilan hal bo'lgan (masalan `reconcile`) — nishonni
+        // "pending" holatida qoldirmaymiz.
+        emitState("idle");
         return { ok: true, reason: "resolved" };
       }
     } else {
