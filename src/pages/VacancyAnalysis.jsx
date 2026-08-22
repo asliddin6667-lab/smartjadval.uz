@@ -82,6 +82,16 @@ const POOL_CLASS_FIELDS = [
 export function poolSignature(a) {
   if (!a || typeof a !== "object") return null;
 
+  // 0) "Bir vaqtda 2 fan" + parallel sinflar (`pairGroupKey`).
+  //    1-guruh fanini guruhdagi BARCHA sinf bitta ustozdan, AYNI SOATDA
+  //    o'qiydi — demak ustozga ham, kerakli soatga ham BIR MARTA yoziladi.
+  //    Kalit faqat `pairEnabled` yoqilganda ishlaydi: rejim o'chirilganda
+  //    qolib ketgan eski kalit sinflarni noto'g'ri birlashtirmasin.
+  if (a.pairEnabled) {
+    const pairKey = String(a.pairGroupKey || "").trim();
+    if (pairKey) return `id:${pairKey}`;
+  }
+
   // 1) Aniq nomlangan hovuz ID
   for (const f of POOL_ID_FIELDS) {
     const v = a[f];
@@ -206,6 +216,24 @@ export function computeVacancy(d) {
       }
 
       entries.push({ clsId: c.id, clsName: c.name || "?", h, sid, slots, sig });
+
+      // ——— "Bir vaqtda 2 fan": 2-GURUH ———
+      // Sinf ikkiga bo'linadi va 2-guruh AYNI SOATDA boshqa fanni boshqa
+      // ustozdan o'qiydi. Bu mustaqil o'rin: o'z fani, o'z ustozi, o'z
+      // vakansiyasi — shuning uchun alohida yozuv sifatida kiritiladi.
+      // `sig` YO'Q: parallel guruhda ham 2-guruh fani har sinfda BOSHQA,
+      // demak sinflar bo'yicha birlashtirilmaydi.
+      // `pairPart` — soat 1-guruh bilan bir xil soatda o'tadi, shuning uchun
+      // sinfning setka soatiga (`lessonHours`) IKKINCHI marta qo'shilmaydi.
+      if (a.pairEnabled && a.pairSubjectId) {
+        entries.push({
+          clsId: c.id, clsName: c.name || "?", h,
+          sid: a.pairSubjectId,
+          slots: [a.pairTeacherId || ""],
+          sig: null,
+          pairPart: true,
+        });
+      }
     }
   }
 
@@ -227,7 +255,8 @@ export function computeVacancy(d) {
 
     // --- sinf kesimi: dars soati har bir sinfda o'z setkasi bo'yicha
     if (agg) {
-      agg.lessonHours += e.h;
+      // 2-guruh 1-guruh bilan AYNI soatda o'tadi — setka soati oshmaydi
+      if (!e.pairPart) agg.lessonHours += e.h;
       agg._subjSet.add(e.sid);
       if (e.sig) agg.pooledHours += e.h;
     }
@@ -308,6 +337,7 @@ export function computeVacancy(d) {
         vacantSlots,
         pooled: !!e.sig,
         poolLabel: e.sig ? poolLabel(e.sig, e.clsName) : "",
+        pairPart: !!e.pairPart,
       });
     }
   }
@@ -812,6 +842,14 @@ function ClassesTab({ data }) {
                                       {dt.subjectName}
                                       {dt.pooled && (
                                         <span className="vak-tagmini" title={dt.poolLabel}>🔗 hovuz</span>
+                                      )}
+                                      {dt.pairPart && (
+                                        <span
+                                          className="vak-tagmini"
+                                          title="Bir vaqtda 2 fan — 2-guruh: 1-guruh bilan ayni soatda o'tadi"
+                                        >
+                                          👥 2-guruh
+                                        </span>
                                       )}
                                     </td>
                                     <td className="vak-c"><b>{dt.hours}</b></td>
