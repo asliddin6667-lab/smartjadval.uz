@@ -727,6 +727,7 @@ export default function SchedulePage({
     classes.forEach((c) => (classSubjects?.[c.id] || []).forEach((a) => {
       requiredTotal += Number(a.weeklyHours || 0);
       if (a.swapEnabled && a.swapSubjectId) requiredTotal += Number(a.weeklyHours || 0);
+      if (a.pairEnabled && a.pairSubjectId) requiredTotal += Number(a.weeklyHours || 0);
     }));
 
     const seed = lockedSeed();
@@ -760,8 +761,15 @@ export default function SchedulePage({
       const deepB = budgetFor(requiredTotal, "deep");
       const FAST_ROUNDS = 6;      // 6 ta strategiya — har biri bir marta
       const MAX_ROUNDS = 24;
+      // Ustoz sig'imi yetmasa — 100% natija MUMKIN EMAS (bitta ustoz bir vaqtda
+      // ikki sinfda tura olmaydi). Bunday ma'lumotda uzoq qidirish vaqtni behuda
+      // sarflaydi: qisqa chegara qo'yamiz va sababni ro'yxatda ko'rsatamiz.
+      const hardBlocked = teacherLoadRows().some((r) => r.overSlots);
       // Vaqt chegarasi maktab hajmiga moslashadi (avval hammaga 45 s edi)
-      const TIME_CAP_MS = Math.max(9000, Math.min(30000, 6000 + requiredTotal * 9));
+      const TIME_CAP_MS = Math.min(
+        hardBlocked ? 10000 : 30000,
+        Math.max(9000, Math.min(30000, 6000 + requiredTotal * 9)),
+      );
       const STALL_LIMIT = 4;
       const start = Date.now();
 
@@ -793,10 +801,18 @@ export default function SchedulePage({
         // Tezkor bosqichda strategiyalar navbatma-navbat (xilma-xillik),
         // chuqur bosqichda esa g'olib strategiya boshqa seed bilan qayta uriniladi.
         const strategy = fast ? r % 6 : bestStrategy;
-        const cand = generateSchedule(
+        const raw = generateSchedule(
           classes, subjects, teachers, rooms, timeslots, classSubjects, lunchGroups, seed,
           { solveMs: b.solveMs, compactMs: b.compactMs, polishMs: b.polishMs, strategy, quiet: true }
         );
+        // Har bir nomzod darhol zichlanadi: oyna kamaysa — aynan shu variant
+        // saqlanadi. Zichlash ~0.1 s turadi, lekin tanlov sifati sezilarli oshadi
+        // (sinovda eng yaxshi natijadagi oynalar 13 tadan 9 taga tushdi).
+        let cand = raw;
+        try {
+          const packed = compactSchedule(classes, timeslots, lunchGroups, raw, classSubjects, teachers, subjects, rooms);
+          if (packed && countPlacedUnits(packed) >= countPlacedUnits(raw) && countGaps(packed) < countGaps(raw)) cand = packed;
+        } catch { /* zichlash ixtiyoriy — xato bo'lsa asl nomzod qoladi */ }
         const placed = countPlacedUnits(cand);
         const over = countOverCap(cand);
         const gaps = countGaps(cand);
@@ -825,10 +841,12 @@ export default function SchedulePage({
         // Hammasi joylashdi va oyna yo'q — bir necha urinish yaxshilanmasa yoki
         // vaqtning yarmi ketgan bo'lsa, shu natija bilan tugatamiz
         if (full && bestGaps === 0 && (stall >= 4 || elapsed > TIME_CAP_MS * 0.5)) break;
+        // Ma'lumotdagi ziddiyat tufayli to'liq natija bo'lmasa — ortiqcha kutmaymiz
+        if (hardBlocked && !fast && stall >= 2) break;
         // Chuqur bosqichda yaxshilanish to'xtadi.
         // MUHIM: kun o'rtasida bo'sh soat (oyna) qolgan bo'lsa — to'xtamaymiz,
         // vaqt tugagunicha oynasiz variant qidiriladi.
-        if (!fast && stall >= STALL_LIMIT && bestGaps === 0) break;
+        if (!fast && stall >= (bestGaps === 0 ? STALL_LIMIT : STALL_LIMIT + 2)) break;
         if (elapsed > TIME_CAP_MS) break;
         // Tezkor bosqich tugadi, lekin chuqur urinishga vaqt qolmadi
         if (r + 1 === FAST_ROUNDS && elapsed > TIME_CAP_MS * 0.6) break;
@@ -1058,6 +1076,21 @@ export default function SchedulePage({
 
   function suggestionsFor(subjectId) {
     const sugg = [];
+    // Shu fanni o'qitadigan ustozlardan birortasining sig'imi yetmayaptimi?
+    // Agar shunday bo'lsa — asl sabab shu, umumiy maslahatlar keyin keladi.
+    teacherLoadRows()
+      .filter((r) => (r.overSlots || r.overLimit) && r.subjectIds.has(subjectId))
+      .slice(0, 2)
+      .forEach((r) => {
+        if (r.overSlots) {
+          sugg.push("⛔ Asosiy sabab — " + r.name + ": " + r.hours + " soat kerak, bo'sh soat " + r.avail
+            + " ta (" + (r.hours - r.avail) + " soat ortiqcha). Bitta ustoz bir vaqtda ikki sinfda tura olmaydi —"
+            + " shu fanga ikkinchi ustoz qo'shing yoki soatni kamaytiring.");
+        } else {
+          sugg.push("⛔ " + r.name + ": yuklama " + r.hours + " soat, «maksimal haftalik soat» esa " + r.max
+            + ". Limitni oshiring yoki yukni boshqa ustozga bo'ling.");
+        }
+      });
     sugg.push("🔁 Bu fanni «Parallel» qiling — bir ustoz bir vaqtda bir nechta teng sinfga o'tadi (Jismoniy tarbiya, Musiqa kabi). Sinf fanlari → «Parallel dars»ni yoqing va parallel nomi yozing (masalan «1-sinf Jismoniy»).");
     const tc = teacherClassCount(subjectId);
     const overloaded = Object.entries(tc).filter(([, set]) => set.size >= 3).sort((a, b) => b[1].size - a[1].size);
@@ -1067,8 +1100,121 @@ export default function SchedulePage({
     return sugg;
   }
 
+  // ——— USTOZ SIG'IMI (eng ko'p uchraydigan "soat tushmadi" sababi) ———
+  // Ustoz bir vaqtda faqat bitta sinfda bo'la oladi. Shuning uchun uning
+  // haftalik dars soati o'z smenasidagi bo'sh slotlardan KO'P bo'lsa, jadval
+  // hech qanday algoritm bilan to'liq chiqmaydi — bu ma'lumotdagi ziddiyat.
+  // Parallel (daraja guruhi) va «Parallel sinflar» darslari BIR MARTA sanaladi:
+  // ular bir vaqtda bir nechta sinfga o'tiladi.
+  function computeTeacherLoadRows() {
+    const need = new Map();   // teacherId -> Map(dars oqimi -> soat)
+    const rel = new Map();    // teacherId -> { classes:Set, subjects:Set }
+    const touch = (tid) => {
+      let r = rel.get(tid);
+      if (!r) { r = { classes: new Set(), subjects: new Set() }; rel.set(tid, r); }
+      return r;
+    };
+    const add = (tid, key, hours, classId, subjectId) => {
+      const h = Number(hours || 0);
+      if (!tid || h <= 0) return;
+      const m = need.get(tid) || new Map();
+      m.set(key, Math.max(m.get(key) || 0, h));
+      need.set(tid, m);
+      const r = touch(tid);
+      if (classId) r.classes.add(classId);
+      if (subjectId) r.subjects.add(subjectId);
+    };
+
+    classes.forEach((cls) => {
+      (classSubjects?.[cls.id] || []).forEach((a, idx) => {
+        const h = Number(a.weeklyHours || 0);
+        const lg = String(a.levelGroupKey || "").trim();
+        const pg = String(a.pairGroupKey || "").trim();
+        if (a.levelGroupEnabled && a.levelGroups?.length) {
+          // Daraja guruhlari: bir xil kalitli sinflar birga o'qiydi
+          a.levelGroups.forEach((g, gi) => add(g.teacherId, `LG|${lg}|${a.subjectId}|${gi}`, h, cls.id, a.subjectId));
+        } else {
+          add(a.teacherId, pg ? `PG|${pg}|${a.subjectId}` : `C|${cls.id}|${idx}`, h, cls.id, a.subjectId);
+          if (a.splitEnabled && a.teacherId2) add(a.teacherId2, `C2|${cls.id}|${idx}`, h, cls.id, a.subjectId);
+        }
+        if (a.swapEnabled && a.swapTeacherId) add(a.swapTeacherId, `SW|${cls.id}|${idx}`, h, cls.id, a.swapSubjectId);
+        if (a.pairEnabled && a.pairTeacherId) add(a.pairTeacherId, `PR|${cls.id}|${idx}`, h, cls.id, a.pairSubjectId);
+        if (a.weekAltEnabled && a.weekAltTeacherId) add(a.weekAltTeacherId, `WA|${cls.id}|${idx}`, Number(a.weekAltHours || 1), cls.id, a.weekAltSubjectId);
+      });
+    });
+
+    const rows = [];
+    need.forEach((m, tid) => {
+      const t = teacherMap.get(tid);
+      const info = rel.get(tid) || { classes: new Set(), subjects: new Set() };
+      const hours = [...m.values()].reduce((s, x) => s + x, 0);
+      const off = new Set(Array.isArray(t?.offDays) ? t.offDays : []);
+      const bs = t?.blockedSlots && typeof t.blockedSlots === "object" ? t.blockedSlots : {};
+      let avail = 0;
+      DAYS.forEach((day) => {
+        if (off.has(day)) return;
+        const bl = new Set(Array.isArray(bs[day]) ? bs[day] : []);
+        sortedTimeslots.forEach((ts) => {
+          if (!isTeachingSlot(ts) || bl.has(ts.id)) return;
+          // Ustoz shu soatda kamida bitta o'z sinfiga dars bera oladimi?
+          const ok = [...info.classes].some((cid) => {
+            const c = classes.find((x) => x.id === cid);
+            if (Array.isArray(c?.offDays) && c.offDays.includes(day)) return false;
+            return slotAllowsClass(ts, cid) && !classHasLunchAt(ts, cid, lunchGroups, day);
+          });
+          if (ok) avail += 1;
+        });
+      });
+      const max = Number(t?.maxWeeklyHours || 0);
+      rows.push({
+        id: tid,
+        name: getName(teacherMap, tid),
+        hours,
+        avail,
+        max,
+        classNames: [...info.classes].map((cid) => classes.find((c) => c.id === cid)?.name).filter(Boolean),
+        subjectIds: info.subjects,
+        overSlots: hours > avail,
+        overLimit: max > 0 && hours > max,
+      });
+    });
+    return rows.sort((a, b) => (b.hours - b.avail) - (a.hours - a.avail));
+  }
+
+  // Natija render davomida bir marta hisoblanadi (ro'yxatda ko'p marta kerak).
+  const teacherLoadCache = useMemo(
+    () => computeTeacherLoadRows(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [classes, classSubjects, teachers, sortedTimeslots, lunchGroups],
+  );
+  const teacherLoadRows = () => teacherLoadCache;
+
+  // Deyarli har soati band ustozlar — kun o'rtasidagi oynaning asosiy sababi:
+  // bunday ustozning darsini boshqa soatga surib bo'lmaydi, chunki u soatda
+  // boshqa sinfda dars berayotgan bo'ladi.
+  function tightTeachers() {
+    return teacherLoadRows()
+      .filter((r) => r.avail > 0 && r.hours / r.avail >= 0.8)
+      .slice(0, 4);
+  }
+
+  // Ustoz sig'imi bo'yicha ogohlantirishlar (matn ko'rinishida)
+  function teacherCapacityWarnings() {
+    return teacherLoadRows()
+      .filter((r) => r.overSlots || r.overLimit)
+      .slice(0, 6)
+      .map((r) => {
+        const where = r.classNames.slice(0, 5).join(", ") + (r.classNames.length > 5 ? "…" : "");
+        if (r.overSlots) {
+          return `👤 ${r.name}: haftada ${r.hours} soat dars berishi kerak, lekin uning smenasida atigi ${r.avail} ta dars soati bor — ${r.hours - r.avail} soat HECH QANDAY jadvalga sig'maydi (${where}). Yechim: shu fanlarga ikkinchi ustoz qo'ying yoki soatni kamaytiring.`;
+        }
+        return `👤 ${r.name}: ${r.hours} soat yuklama, lekin «maksimal haftalik soat» ${r.max} qilib belgilangan (${where}). Limitni oshiring yoki yukni bo'ling.`;
+      });
+  }
+
   function capacityWarnings() {
-    const warns = [];
+    // Avval ustoz sig'imi: bu "soat tushmadi"ning eng ko'p uchraydigan sababi
+    const warns = [...teacherCapacityWarnings()];
     classes.forEach((cls) => {
       const perDay = sortedTimeslots.filter((ts) => isTeachingSlot(ts) && slotAllowsClass(ts, cls.id)).length;
       const offDays = Array.isArray(cls.offDays) ? cls.offDays : [];
@@ -1856,6 +2002,28 @@ export default function SchedulePage({
                 <div style={{ fontSize: 12, color: "#9a3412", marginTop: 4 }}>
                   Sozlagandan so'ng «⚡ Avtomatik jadval»ni qayta bosing. Yoki bo'sh katakdagi <b>＋</b> orqali qo'lda qo'shing.
                 </div>
+              </div>
+            );
+          })()}
+
+          {setSchedule && gapTotal > 0 && (() => {
+            const tight = tightTeachers();
+            return (
+              <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 12, padding: 14, marginBottom: 16 }}>
+                <div style={{ fontWeight: 800, color: "#1e40af", fontSize: 15 }}>
+                  🧲 {gapTotal} ta oyna (kun o'rtasidagi bo'sh soat) qoldi
+                </div>
+                <div style={{ fontSize: 13, color: "#1e3a8a", marginTop: 6 }}>
+                  Yuqoridagi «🧲 Oynani yopish» tugmasini bosing — jadval qayta zichlanadi.
+                </div>
+                {tight.length > 0 && (
+                  <div style={{ fontSize: 13, color: "#1e3a8a", marginTop: 6 }}>
+                    Sabab: quyidagi ustozlarning deyarli har soati band, shuning uchun ularning darsini
+                    boshqa soatga surib bo'lmaydi —{" "}
+                    {tight.map((r) => `${r.name} (${r.hours}/${r.avail} soat)`).join(", ")}.
+                    {" "}Shu ustozlarning fanlariga yordamchi ustoz qo'shsangiz, oynalar yo'qoladi.
+                  </div>
+                )}
               </div>
             );
           })()}

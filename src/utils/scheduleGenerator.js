@@ -3855,6 +3855,130 @@ export function compactSchedule(
     }
   }
 
+  // ——— KUNLAR ARO KO'CHIRISH: oynani boshqa kundagi dars bilan to'ldirish ———
+  // Kun boshida yoki o'rtasida bo'sh katak qolsa, uni SHU kundagi dars bilan
+  // to'ldirib bo'lmasligi mumkin (ustoz o'sha soatda boshqa sinfda band).
+  // Bunday holda BOSHQA KUNdagi dars tortib olinadi; katakni bitta birlik
+  // to'sib tursa — avval o'sha birlik boshqa joyga suriladi (ejection).
+  // Qabul mezoni: ta'sirlangan sinflarda oyna soni QAT'IY kamayishi shart,
+  // shuning uchun bu bosqich hech qachon yangi oyna yaratmaydi.
+  const unitsBlocking = (u, d, i) => {
+    const res = new Set(resOfUnit(u));
+    const out = new Set();
+    for (let o = 0; o < u.len; o++) {
+      for (const v of unitsAt(d, i + o)) {
+        if (v === u) continue;
+        if (resOfUnit(v).some((r) => res.has(r))) out.add(v);
+      }
+    }
+    return [...out];
+  };
+
+  const firstHoleOf = (ci, d) => {
+    const cBase = ci * DT + d * T;
+    let hole = -1;
+    let lastOcc = -1;
+    for (let k = 0; k < T; k++) {
+      if (blocked[cBase + k]) continue;
+      if (classGrid[cBase + k]) lastOcc = k;
+      else if (hole < 0) hole = k;
+    }
+    return hole >= 0 && lastOcc > hole ? hole : -1;
+  };
+
+  // Ikkilamchi mezon: darslar kun boshiga qanchalik yaqin (oyna teng bo'lganda
+  // shu ko'rsatkich yaxshilansa ham ko'chirish qabul qilinadi — shu tufayli
+  // qidiruv "tekis joy"da qotib qolmaydi va keyingi qadamda oyna yopiladi).
+  const tailOf = (cIdxs) => {
+    let sum = 0;
+    for (const ci of cIdxs) {
+      for (let d = 0; d < D; d++) {
+        const cBase = ci * DT + d * T;
+        for (let k = T - 1; k >= 0; k--) {
+          if (blocked[cBase + k]) continue;
+          if (classGrid[cBase + k]) { sum += k + 1; break; }
+        }
+      }
+    }
+    return sum;
+  };
+
+  const transplant = (ci, d, hole, stopAt) => {
+    const cands = units
+      .filter((u) => !u.locked && u.cIdxs.includes(ci) && !(u.d === d && u.i <= hole && hole < u.i + u.len))
+      .sort((a, b) => (b.d === d ? 1 : 0) - (a.d === d ? 1 : 0) || b.i - a.i);
+    for (const u of cands) {
+      if (Date.now() > stopAt) return false;
+      if (hole + u.len > T) continue;
+      const oldD = u.d;
+      const oldI = u.i;
+      const blockers = unitsBlocking(u, d, hole);
+      const v = blockers.length === 1 && !blockers[0].locked && blockers[0].domain.length > 1 ? blockers[0] : null;
+      const uni = v ? unionArr(u.cIdxs, v.cIdxs) : u.cIdxs;
+      const before = gapsOf(uni);
+      const tailBefore = tailOf(uni);
+      const better = () => { const g = gapsOf(uni); return g < before || (g === before && tailOf(uni) < tailBefore); };
+      setBits(u, oldD, oldI, 0);
+      // 1) to'g'ridan-to'g'ri
+      if (fits(u, d, hole)) {
+        setBits(u, d, hole, 1);
+        if (better()) {
+          bumpSubj(u, oldD, -1); bumpSubj(u, d, +1);
+          u.d = d; u.i = hole;
+          return true;
+        }
+        setBits(u, d, hole, 0);
+      }
+      // 2) to'siqni surib
+      if (v) {
+        const vd = v.d;
+        const vi = v.i;
+        setBits(v, vd, vi, 0);
+        for (const cand of v.domain) {
+          if (cand.d === vd && cand.i === vi) continue;
+          if (!fits(v, cand.d, cand.i)) continue;
+          setBits(v, cand.d, cand.i, 1);
+          if (fits(u, d, hole)) {
+            setBits(u, d, hole, 1);
+            if (better()) {
+              bumpSubj(v, vd, -1); bumpSubj(v, cand.d, +1);
+              v.d = cand.d; v.i = cand.i;
+              bumpSubj(u, oldD, -1); bumpSubj(u, d, +1);
+              u.d = d; u.i = hole;
+              return true;
+            }
+            setBits(u, d, hole, 0);
+          }
+          setBits(v, cand.d, cand.i, 0);
+        }
+        setBits(v, vd, vi, 1);
+      }
+      setBits(u, oldD, oldI, 1);
+    }
+    return false;
+  };
+
+  const transplantPass = (ms) => {
+    const stopAt = Date.now() + Math.max(0, ms);
+    let fixed = 0;
+    for (let ci = 0; ci < C; ci++) {
+      for (let d = 0; d < D; d++) {
+        let guard = 0;
+        while (guard < 8 && Date.now() < stopAt) {
+          guard += 1;
+          const hole = firstHoleOf(ci, d);
+          if (hole < 0) break;
+          if (!transplant(ci, d, hole, stopAt)) break;
+          fixed += 1;
+        }
+      }
+      if (Date.now() > stopAt) break;
+    }
+    return fixed;
+  };
+  const tpBudget = Math.max(500, Math.min(2200, C * 60));
+  transplantPass(tpBudget);
+
   // ——— ASOSIY FANLARNI KUN BOSHIGA TARTIBLASH ———
   const coreStop = Date.now() + 1200;
   for (let round = 0; round < 6 && Date.now() < coreStop; round++) {
@@ -3973,6 +4097,7 @@ export function compactSchedule(
         if (gapChainFix(ci, d)) any = true;
       }
     }
+    if (transplantPass(Math.round(tpBudget / 2))) any = true;
     if (!any) break;
   }
 
