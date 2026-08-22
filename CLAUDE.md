@@ -65,44 +65,81 @@ effektlari, `readLocalData()`, hamda [cloudSync.js](src/services/cloudSync.js) d
 `SYNC_KEYS` + `EMPTY`. Bittasi unutilsa — ma'lumot bulutga bormaydi yoki qaytishda
 yo'qoladi.
 
-### Local-first saqlash
+### Saqlash: bulut yagona haqiqat manbai (cloudSync v5)
 
-localStorage — **asosiy ish nusxasi**, Supabase — zaxira va qurilmalararo ko'prik.
+**BULUT — YAGONA HAQIQAT MANBAI.** localStorage endi "asosiy nusxa" emas: u tezkor
+kesh va internet uzilganda ko'rsatiladigan nusxa. Qaysi qurilmadan kirilmasin,
+ekranda bulutdagi oxirgi holat turadi.
+
+Fayllar:
+[schoolBlob.js](src/services/schoolBlob.js) — ma'lumot shakli (SYNC_KEYS, EMPTY,
+encode/decode, hash), [cloudSync.js](src/services/cloudSync.js) — sinxronizatsiya
+dvigateli, [versionService.js](src/services/versionService.js) — bulutdagi versiya
+tarixi, [Backups.jsx](src/pages/Backups.jsx) — "Zaxira nusxalar" sahifasi,
+[SyncBadge.jsx](src/components/SyncBadge.jsx) — o'ng pastdagi holat nishoni.
 
 - Kalit formati: `smartjadval_user_<userId>_<key>` ([storageService.js](src/services/storageService.js)).
   Prefiks rejimga bog'liq — lokal rejimda `smartjadval_dev_` (pastga qarang).
-- Kirishda localStorage'dan darhol o'qiladi va ilova OCHILADI; bulut fonda
-  sinxronlanadi. To'liq ekranli kutish faqat qurilmada umuman ma'lumot bo'lmasa.
 - Bulutda hammasi **bitta JSONB blob**: `schools` jadvalida `owner_id` bo'yicha bitta
-  qator, ichida barcha SYNC_KEYS.
-- `schedulePush()` debounce bilan yuboradi (1s kutish, 3s maksimal), `flushPush()`
-  sahifa yopilishida/chiqishda majburan yuboradi.
-- **Konflikt: "oxirgi o'zgarish g'olib" (v4).** Blob ichida `_rev` (versiya raqami),
-  `_ts` (mahalliy o'zgarish vaqti) va `_dev` yuradi; `sync_meta_<userId>` da esa
-  `baseRev` (shu qurilma ko'rgan oxirgi versiya), `lastHash` (djb2), `localTs`,
-  `cloudUpdatedAt` saqlanadi. Kirishda avval `readCloudHead()` faqat shu maydonlarni
-  so'raydi (2 MB blob emas):
-  - bulut oldinda + mahalliy toza → **tortiladi**;
-  - bulut biz bilgan holatda + mahalliy o'zgargan → **yuboriladi**;
-  - ikkalasi ham o'zgargan → `_ts` bo'yicha yangirog'i qo'llanadi, yutqazgan nusxa
-    `conflict_<userId>` kalitiga zaxira sifatida tushadi (`getConflictBackup()`).
+  qator, ichida barcha SYNC_KEYS + `_rev`/`_ts`/`_dev`.
+- **Yozish — CAS (compare-and-swap).** `pushToCloud()`
+  `UPDATE ... WHERE owner_id = ? AND data->>'_rev' = <baseRev>` yuboradi. Bulut
+  oldinga ketgan bo'lsa 0 qator o'zgaradi va push `stale` qaytaradi — ya'ni eski
+  qurilma yangi ma'lumot ustidan **yoza olmaydi**. CAS so'rovining o'zi rad etilsa
+  (PostgREST JSON filtrni qo'llamasa) `guardedUpsert()` ga o'tiladi — u ham avval
+  `readCloudHead()` bilan bulut holatini tekshiradi.
+- **Konflikt — kalitma-kalit uchtomonlama birlashtirish** (`threeWayMerge`,
+  `reconcile`). `sync_meta_<userId>.keyHashes` — biz oxirgi ko'rgan bulut holatining
+  HAR BIR kaliti hash'i. Har kalit uchun: faqat mahalliy o'zgargan → mahalliy qoladi;
+  faqat bulut o'zgargan → bulutniki; ikkalasi ham → **bulut ustun**, mahalliy nusxa
+  esa versiya tarixiga va `conflict_<userId>` ga zaxiraga tushadi.
+  **Qurilma soati ishlatilmaydi** — noto'g'ri sana ma'lumotni yo'qota olmaydi
+  (v4 da aynan shu ma'lumot yo'qolishiga sabab bo'lgan).
+- Avtosaqlash: `schedulePush()` debounce (0.7s kutish, 2.5s maksimal) →
+  `pushWithRetry()` (4 urinish) → `startAutoSync()` "qorovul"i har 10 soniyada
+  yuborilmagan o'zgarishni jo'natadi yoki bulutni tekshiradi (oyna faol bo'lganda)
+  → `flushPush()` sahifa yopilishida/chiqishda → `beforeunload` ogohlantirishi.
 - `pushToCloud()` `updated_at` ni **qo'lda yozadi**. `schools` jadvalida UPDATE uchun
   trigger yo'q — busiz u INSERT vaqtida qotib qolardi va boshqa qurilma "bulut
   o'zgarmagan" deb ma'lumotni umuman tortmasdi.
-- `checkRemote()` oyna qayta faollashganda bulutni tekshiradi va boshqa qurilmadagi
-  o'zgarishni darhol ekranga tushiradi (`onRemoteUpdate` → App.jsx). Mahalliyda
-  yuborilmagan o'zgarish bo'lsa — tegmaydi.
+- `checkRemote()` boshqa qurilmadagi o'zgarishni ekranga tushiradi
+  (`onRemoteUpdate` → App.jsx). Mahalliyda yuborilmagan o'zgarish bo'lsa — tegmaydi
+  (avval o'sha ketadi).
+- **Internet yo'q → FAQAT O'QISH.** Sinxronizatsiya holati `offline`/`error` bo'lsa
+  App.jsx `<main>` ustidagi `guardClick`/`guardFocus` barcha tahrirlashni bloklaydi
+  va qizil banner chiqaradi (mehmon rejimi bilan bir xil naqsh; qulfdan chiqarish
+  atributi — `data-sync-allow`). Bir martalik uzilishda qulflanmaydi — ketma-ket
+  ikki muvaffaqiyatsiz tekshiruv kerak (`headFailures`).
 - App.jsx `syncDone` bayrog'i: kirishdagi sinxronizatsiya tugamaguncha `schedulePush`
-  chaqirilmaydi (push tortishdan tez — eski nusxa yangi ma'lumot ustidan yozilmasin).
+  chaqirilmaydi va tahrirlash ham kutdiriladi (`syncPending`).
 - `SYNC_KEYS` ga yangi kalit qo'shsangiz — hozirgi ro'yxatni `LEGACY_KEY_SETS` ga
-  ko'chiring. Aks holda `lastHash` barcha qurilmalarda mos kelmay qoladi va hammasi
-  o'zini "o'zgargan" deb hisoblab, bir-birining ustidan yozadi.
+  ko'chiring (ikkalasi ham schoolBlob.js da). Aks holda `lastHash` barcha
+  qurilmalarda mos kelmay qoladi.
 - `classSubjects` "sim uchun" siqiladi (`encodeBlob`/`decodeBlob`, `WIRE_VERSION = 3`):
   `CS_DEFAULTS` dagi default qiymatlar tashlanadi, qaytarishda tiklanadi.
   **`classSubjects` yozuviga yangi maydon qo'shsangiz — `CS_DEFAULTS` ni ham yangilang**,
   aks holda qiymat bulutdan noto'g'ri tiklanadi.
 - `demo@smartjadval.uz` hisobi hech qachon bulutga yozilmaydi; ma'lumoti bo'sh bo'lsa
   [demoData.js](src/utils/demoData.js) dan avtomatik to'ldiriladi.
+
+### Zaxira nusxalar (versiya tarixi)
+
+`schools` da faqat OXIRGI holat turadi. Har bir muvaffaqiyatli yuborishdan keyin
+holatning to'liq nusxasi `school_backups` jadvaliga tushadi
+([versionService.js](src/services/versionService.js)):
+
+- avtomatik zaxira — har 4 daqiqada bir martadan ko'p emas (`AUTO_GAP`);
+- **majburiy** zaxira — konfliktda yutqazgan nusxa, tiklashdan oldingi holat,
+  "💾 Hozirgi holatni zaxiraga olish" tugmasi;
+- server trigger har foydalanuvchida oxirgi **40** tasini qoldiradi;
+- "Zaxira nusxalar" sahifasi ro'yxatni ko'rsatadi va `restoreBlob()` orqali
+  tiklaydi (tiklashdan oldingi holat ham avtomatik arxivlanadi — orqaga qaytish
+  mumkin). Shu qurilmada qolgan `conflict_<userId>` zaxirasi ham shu sahifada
+  ko'rinadi.
+
+SQL: [school_backups_setup.sql](school_backups_setup.sql) — Supabase SQL Editor'da
+bir marta ishga tushiriladi. Jadval bo'lmasa versiya tarixi jimgina o'chadi
+(sinxronizatsiya baribir ishlayveradi), sahifada esa ogohlantirish chiqadi.
 
 **LOKAL REJIM** ([devMode.js](src/services/devMode.js)): `npm run dev` da
 (`import.meta.env.DEV`) cloudSync butunlay o'chadi — na push, na pull. Bundan tashqari
@@ -179,7 +216,7 @@ anon kalit kodda hardcoded (env fayl yo'q, GitHub Pages statik hosting).
 `flowType: 'pkce'` va `detectSessionInUrl: true` — parol tiklash havolasi shularsiz
 ishlamaydi.
 
-Jadvallar: `profiles`, `schools`, `districts`, `schedule_submissions`, `notifications`,
+Jadvallar: `profiles`, `schools`, `school_backups`, `districts`, `schedule_submissions`, `notifications`,
 `audit_log`, `district_excel_data`, `standard_hours`.
 RPC: `admin_set_subscription`, `admin_set_role`, `admin_set_status`, `admin_create_user`,
 `admin_delete_user`, `admin_set_district`, `admin_set_location`, `admin_set_phone`,
@@ -204,6 +241,8 @@ Jadval SQL i: [standard_hours_setup.sql](standard_hours_setup.sql) — Supabase 
 Editor'da bir marta ishga tushiriladi.
 
 ⚠️ [supabase_setup.sql](supabase_setup.sql) faqat `profiles` + admin RPC larini qamraydi.
+Repoda yana ikkita SQL bor: [standard_hours_setup.sql](standard_hours_setup.sql) va
+[school_backups_setup.sql](school_backups_setup.sql) (versiya tarixi).
 `schools`, `districts`, `district_excel_data` va tuman modulining migratsiyalari repoda
 YO'Q — ular faqat Supabase loyihasida yashaydi. Shu jadvallarga ustun qo'shish kerak
 bo'lsa, SQL Dashboard'da qo'lda bajariladi.

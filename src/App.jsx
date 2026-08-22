@@ -18,6 +18,7 @@ import LunchGroupsPage from "./pages/LunchGroups";
 import StandardHoursPage from "./pages/StandardHours";
 import SchedulePage from "./pages/Schedule";
 import SavedSchedulesPage from "./pages/SavedSchedules";
+import BackupsPage from "./pages/Backups";
 import TeacherReplacePage from "./pages/TeacherReplace";
 import TeacherAvailabilityPage from "./pages/TeacherAvailability";
 import AnalyticsPage from "./pages/Analytics";
@@ -33,8 +34,10 @@ import {
 } from "./services/authService";
 import {
   syncOnLogin, schedulePush, flushPush, cleanupLegacyKeys,
-  checkRemote, onRemoteUpdate,
+  checkRemote, onRemoteUpdate, onSyncState, startAutoSync, stopAutoSync,
+  forceSyncNow, hasUnsyncedChanges,
 } from "./services/cloudSync";
+import SyncBadge from "./components/SyncBadge";
 import { buildDemoSchoolData } from "./utils/demoData";
 import { isLocalOnly, announceMode } from "./services/devMode";
 
@@ -59,7 +62,7 @@ const LOCAL_ONLY = isLocalOnly();
 const PAGE_IDS = [
   "dashboard", "classes", "subjects", "teachers", "teacherAvailability", "classSubjects",
   "rooms", "timeslots", "lunchGroups", "schedule", "savedSchedules", "teacherReplace",
-  "analytics", "importExport", "users", "standardHours", "settings",
+  "analytics", "importExport", "backups", "users", "standardHours", "settings",
 ];
 
 function pageFromHash() {
@@ -157,6 +160,11 @@ export default function App() {
 
   // Birinchi marta ochilayotgan qurilma — bulutni kutish shart
   const [firstLoad, setFirstLoad] = useState(false);
+
+  // ——— Bulut holati (o'ng pastdagi nishon va "faqat o'qish" qulfi) ———
+  // cloudSync.onSyncState dan keladi: pending | saving | saved | offline | error
+  const [syncState, setSyncState] = useState({ state: "idle", message: "", at: 0 });
+  const [retrying, setRetrying] = useState(false);
 
   // ——— Mehmon rejimi holatlari ———
   const [paywallOpen, setPaywallOpen] = useState(false);
@@ -269,6 +277,24 @@ export default function App() {
     };
   }, []);
 
+  // ——— Bulut holatini kuzatish (nishon + "faqat o'qish" qulfi) ———
+  useEffect(() => onSyncState(setSyncState), []);
+
+  // ——— Yuborilmagan o'zgarish bilan sahifani yopishga urinish ———
+  // Brauzer o'zining standart ogohlantirishini ko'rsatadi.
+  useEffect(() => {
+    if (!userId || isDistrictAdmin || LOCAL_ONLY) return;
+    function onBeforeUnload(e) {
+      if (!hasUnsyncedChanges(userId)) return;
+      flushPush().catch(() => {});
+      e.preventDefault();
+      e.returnValue = "";
+      return "";
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [userId, isDistrictAdmin]);
+
   // Yuklanganda profil serverdan yangilanadi
   useEffect(() => {
     if (!currentUser) return;
@@ -366,7 +392,7 @@ export default function App() {
 
       // Bulutdan yangi ma'lumot kelgan bo'lsa — ekranni yangilaymiz.
       // Boshqa hollarda mahalliy nusxa allaqachon to'g'ri, tegmaymiz.
-      if (syncResult.action === "pulled" || !localHasData) {
+      if (syncResult.action === "pulled" || syncResult.action === "merged" || !localHasData) {
         const fresh = readLocalData(currentUser);
         applyData(fresh);
         if (!localHasData) finishBoot();
@@ -377,21 +403,23 @@ export default function App() {
       setSyncDone(true);
 
       if (syncResult.action === "offline") {
-        addToast("Internet yo'q — mahalliy nusxada ishlayapsiz", "warning");
-      } else if (syncResult.action === "recovered") {
         addToast(
-          syncResult.conflict
-            ? "Shu qurilmadagi o'zgarishlar yangiroq edi — ular qo'llandi"
-            : "Saqlanmagan o'zgarishlar bulutga yuborildi",
-          "success"
+          "Bulutga ulanib bo'lmadi — faqat o'qish rejimi (o'zgartirish bloklandi)",
+          "warning"
+        );
+      } else if (syncResult.action === "recovered") {
+        addToast("Saqlanmagan o'zgarishlar bulutga yuborildi ✓", "success");
+      } else if (syncResult.action === "merged") {
+        // Kalitma-kalit birlashtirildi. Konflikt bo'lsa — yutqazgan nusxa
+        // "Zaxira nusxalar" sahifasida turadi, yo'qolmaydi.
+        addToast(
+          syncResult.conflicted?.length
+            ? "Boshqa qurilmadagi o'zgarishlar qo'llandi. Shu qurilmadagi eski nusxa «Zaxira nusxalar» bo'limida saqlandi"
+            : "Ma'lumotlar bulut bilan birlashtirildi ✓",
+          syncResult.conflicted?.length ? "warning" : "success"
         );
       } else if (syncResult.action === "pulled" && localHasData) {
-        addToast(
-          syncResult.conflict
-            ? "Boshqa qurilmadagi o'zgarishlar yangiroq edi — ular qo'llandi"
-            : "Ma'lumotlar boshqa qurilmadan yangilandi",
-          "info"
-        );
+        addToast("Ma'lumotlar bulutdan yangilandi", "info");
       }
     })();
 
@@ -412,22 +440,24 @@ export default function App() {
     if (!userId || isDistrictAdmin || !dataReady || !syncDone) return;
     if (currentUser?.email === "demo@smartjadval.uz") return;
 
-    const off = onRemoteUpdate(() => {
+    const off = onRemoteUpdate((info) => {
       applySchoolData(readLocalData(currentUser));
-      addToast("Ma'lumotlar boshqa qurilmadan yangilandi", "info");
+      addToast(
+        info?.merged
+          ? "O'zgarishlar bulut bilan birlashtirildi"
+          : "Ma'lumotlar boshqa qurilmadan yangilandi",
+        "info"
+      );
     });
 
-    function onWake() {
-      if (document.visibilityState !== "visible") return;
-      checkRemote(userId).catch(() => {});
-    }
+    // "Qorovul": har 10 soniyada yuborilmagan o'zgarishni jo'natadi yoki
+    // bulutni tekshiradi; oyna faollashganda va internet qaytganda darhol.
+    startAutoSync(userId);
+    checkRemote(userId, { force: true }).catch(() => {});
 
-    window.addEventListener("visibilitychange", onWake);
-    window.addEventListener("focus", onWake);
     return () => {
       off();
-      window.removeEventListener("visibilitychange", onWake);
-      window.removeEventListener("focus", onWake);
+      stopAutoSync();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, isDistrictAdmin, dataReady, syncDone]);
@@ -463,9 +493,47 @@ export default function App() {
     else document.body.classList.remove("dark-mode");
   }, [darkMode]);
 
+  // ——— Zaxira nusxadan tiklangan ma'lumotni ekranga qo'yish ———
+  // cloudSync.restoreBlob localStorage'ga yozib, bulutga ham yuborgan —
+  // bu yerda faqat React holati yangilanadi.
+  const handleRestoreVersion = useCallback((blob) => {
+    if (!blob) return;
+    applySchoolData({
+      settings: blob.settings && Object.keys(blob.settings).length ? blob.settings : emptySettings,
+      classes: blob.classes || [],
+      subjects: blob.subjects || [],
+      teachers: blob.teachers || [],
+      classSubjects: blob.classSubjects || {},
+      rooms: blob.rooms || [],
+      timeslots: blob.timeslots || [],
+      lunchGroups: blob.lunchGroups || [],
+      shifts: blob.shifts || [],
+      schedule: blob.schedule || {},
+      savedSchedules: blob.savedSchedules || [],
+    });
+  }, [applySchoolData]);
+
+  // ——— Bulutga qayta ulanishga urinish (nishondagi tugma) ———
+  async function handleRetrySync() {
+    if (!userId || retrying) return;
+    setRetrying(true);
+    try {
+      const res = await forceSyncNow(userId);
+      if (res.ok) {
+        applySchoolData(readLocalData(currentUser));
+        addToast("Bulut bilan aloqa tiklandi ✓", "success");
+      } else {
+        addToast("Hali ham ulanib bo'lmadi — internetni tekshiring", "error");
+      }
+    } finally {
+      setRetrying(false);
+    }
+  }
+
   async function handleLogout() {
     // Chiqishdan oldin yuborilmagan o'zgarishlarni bulutga jo'natamiz
     try { await flushPush(); } catch { /* internet yo'q — mahalliy qoladi */ }
+    stopAutoSync();
     logout();
     setCurrentUser(null);
     setDataReady(false);
@@ -565,6 +633,33 @@ export default function App() {
   const subState = checkSubscription(currentUser);
   const locked = subState.blocked;
 
+  // =====================================================================
+  //  BULUT QULFI — "FAQAT O'QISH" REJIMI
+  //
+  //  Bulutga yozib bo'lmayotgan bo'lsa (internet yo'q, server javob
+  //  bermayapti) tahrirlash BLOKLANADI. Sabab: mahalliy nusxa bulutdan
+  //  ajralib ketsa, keyin qaysidir qurilma ikkinchisining ishini bosib
+  //  o'tadi — aynan shu ma'lumot yo'qotishga olib kelgan edi.
+  //
+  //  Ma'lumotni KO'RISH, Excel'ga chiqarish va chop etish ishlayveradi.
+  // =====================================================================
+  const isDemoUser = currentUser.email === "demo@smartjadval.uz";
+  const cloudBlocked =
+    !LOCAL_ONLY && !isDemoUser &&
+    (syncState.state === "offline" || syncState.state === "error");
+
+  // Kirishdagi sinxronizatsiya hali tugamagan (odatda 1 soniyacha).
+  // Shu paytda kiritilgan o'zgarish bulutdan kelayotgan nusxa ostida
+  // qolib ketishi mumkin — shuning uchun qisqa vaqt kutdiramiz.
+  const syncPending = !LOCAL_ONLY && !isDemoUser && dataReady && !syncDone;
+
+  function warnReadOnly() {
+    addToast(
+      "Bulutga ulanish yo'q — o'zgartirish saqlanmaydi. Internetni tekshiring va «Qayta urinish» tugmasini bosing",
+      "warning"
+    );
+  }
+
   if (locked && showPayPage) {
     return (
       <>
@@ -596,6 +691,20 @@ export default function App() {
   }
 
   function guardClick(e) {
+    // 1) BULUT QULFI — ulanish yo'q yoki bulut hali yuklanmagan bo'lsa
+    if (cloudBlocked || syncPending) {
+      const el = e.target.closest?.(
+        "button, a, input, select, textarea, label, [role='button'], .btn"
+      );
+      if (el && !el.closest("[data-sync-allow]")) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (cloudBlocked) warnReadOnly();
+        else addToast("Bulutdan oxirgi holat yuklanmoqda — bir soniya kuting", "info");
+        return;
+      }
+    }
+    // 2) MEHMON REJIMI (obuna tugagan)
     if (!locked) return;
     const el = e.target.closest?.(
       "button, a, input, select, textarea, label, [role='button'], .btn"
@@ -608,9 +717,16 @@ export default function App() {
   }
 
   function guardFocus(e) {
-    if (!locked) return;
     const t = e.target;
-    if (t && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName) && !t.closest("[data-pw-allow]")) {
+    const isField = t && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName);
+    if ((cloudBlocked || syncPending) && isField && !t.closest("[data-sync-allow]")) {
+      t.blur();
+      e.stopPropagation();
+      if (cloudBlocked) warnReadOnly();
+      return;
+    }
+    if (!locked) return;
+    if (isField && !t.closest("[data-pw-allow]")) {
       t.blur();
       e.stopPropagation();
       setPaywallOpen(true);
@@ -642,6 +758,13 @@ export default function App() {
           {...pageProps} settings={settings} setSchedule={setSchedule}
           savedSchedules={savedSchedules} setSavedSchedules={setSavedSchedules}
           setActivePage={handleNavigate}
+        />
+      );
+      case "backups": return (
+        <BackupsPage
+          currentUser={currentUser}
+          toast={addToast}
+          onRestore={handleRestoreVersion}
         />
       );
       case "teacherReplace": return <TeacherReplacePage {...pageProps} setSchedule={setSchedule} setClassSubjects={setClassSubjects} />;
@@ -701,6 +824,39 @@ export default function App() {
           onClickCapture={guardClick}
           onFocusCapture={guardFocus}
         >
+          {cloudBlocked && (
+            <div
+              data-sync-allow
+              data-pw-allow
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                gap: 12, flexWrap: "wrap",
+                background: "linear-gradient(135deg, rgba(220,38,38,.1), rgba(239,68,68,.1))",
+                border: "1.5px solid rgba(220,38,38,.4)",
+                borderRadius: 14, padding: "10px 16px", marginBottom: 16,
+              }}
+            >
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#b91c1c", lineHeight: 1.55 }}>
+                📴 Bulut bilan aloqa yo'q — <b>faqat o'qish rejimi</b>.
+                Ma'lumotni ko'rish va Excel'ga chiqarish mumkin, lekin o'zgartirish
+                vaqtincha bloklandi (o'zgarish saqlanmay yo'qolib ketmasligi uchun).
+              </div>
+              <button
+                type="button"
+                onClick={handleRetrySync}
+                disabled={retrying}
+                style={{
+                  border: "none", borderRadius: 11, height: 38, padding: "0 16px",
+                  background: "linear-gradient(135deg,#dc2626,#b91c1c)", color: "#fff",
+                  fontSize: 13.5, fontWeight: 800, cursor: retrying ? "wait" : "pointer",
+                  boxShadow: "0 5px 14px rgba(220,38,38,.3)", whiteSpace: "nowrap",
+                }}
+              >
+                {retrying ? "Ulanmoqda..." : "🔄 Qayta urinish"}
+              </button>
+            </div>
+          )}
+
           {locked && (
             <div
               data-pw-allow
@@ -732,6 +888,11 @@ export default function App() {
           {renderPage()}
         </main>
       </div>
+
+      {/* Bulutga saqlash holati — o'ng pastda */}
+      {!LOCAL_ONLY && !isDemoUser && (
+        <SyncBadge state={syncState} onRetry={handleRetrySync} retrying={retrying} />
+      )}
 
       {/* Lokal rejim — bulut uzilgan. Faqat `npm run dev` da ko'rinadi. */}
       {LOCAL_ONLY && (

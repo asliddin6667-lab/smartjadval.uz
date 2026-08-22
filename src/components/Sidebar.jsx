@@ -151,6 +151,13 @@ const ICONS = {
       <path d="m13 17 5-5-5-5" />
     </svg>
   ),
+  backups: (
+    <svg {...svgProps}>
+      <ellipse cx="12" cy="5" rx="9" ry="3" />
+      <path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5" />
+      <path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3" />
+    </svg>
+  ),
 };
 
 const NAV_ITEMS = [
@@ -168,6 +175,7 @@ const NAV_ITEMS = [
   { id: "teacherReplace", label: "Ustoz almashtirish" },
   { id: "analytics", label: "Jadval tahlili" },
   { id: "importExport", label: "Excel" },
+  { id: "backups", label: "Zaxira nusxalar" },
   { id: "users", label: "Foydalanuvchilar", superOnly: true },
   { id: "standardHours", label: "Standart soatlar", superOnly: true },
   { id: "settings", label: "Sozlamalar" },
