@@ -3289,9 +3289,15 @@ export function compactSchedule(
 
   // ——— Darslarni "birlik"larga ajratamiz ———
   const units = [];
-  const baseKeyOf = (l) => (l.swap
-    ? `SWAP|${classIdsOf(l).slice().sort().join("+")}`
-    : `${l.subjectId}|${l.groupKey || ""}|${classIdsOf(l).slice().sort().join("+")}`);
+  // "Bir vaqtda 2 fan" ikki (ba'zan uch) yozuvdan iborat: 1-guruh fani va
+  // har sinfning 2-guruh fani. Ular BITTA soatda turishi SHART, shuning uchun
+  // zichlashda ham bitta birlik bo'lib ko'chadi — `pairKey` ularni bog'laydi.
+  // Busiz har yozuv alohida ko'chib, juft dars bo'linib ketardi.
+  const baseKeyOf = (l) => (l.pairKey
+    ? `PAIR|${l.pairKey}`
+    : l.swap
+      ? `SWAP|${classIdsOf(l).slice().sort().join("+")}`
+      : `${l.subjectId}|${l.groupKey || ""}|${classIdsOf(l).slice().sort().join("+")}`);
   const perDay = [];
   for (let d = 0; d < D; d++) {
     const day = DAYS[d];
@@ -3353,18 +3359,35 @@ export function compactSchedule(
         const cIdxs = [...cSet].map((cid) => cIdxOf.get(cid)).filter((x) => x !== undefined);
         if (!cIdxs.length) locked = true;
         const subjectId = entries[0]?.subjectId || "";
-        // Kunlik fan limiti: blok o'lchami yoki soat/kun nisbati
-        let cap = len;
-        for (const cid of cSet) {
-          const ci = cIdxOf.get(cid);
-          if (ci === undefined) continue;
-          if (doubleSet.has(`${cid}|${subjectId}`)) cap = Math.max(cap, 2);
-          const h = hoursMap.get(`${cid}|${subjectId}`) || 0;
+        // Kunlik fan limiti: blok o'lchami yoki soat/kun nisbati.
+        // Juft darsda (va almashinuvda) bitta birlik ichida BIR NECHTA fan
+        // bo'ladi — limit shuning uchun (sinf + fan) juftligi bo'yicha yuriladi,
+        // aks holda 2-guruh fani umuman hisobga olinmay qolardi.
+        const capFor = (cid, ci, sid) => {
+          let cap = len;
+          if (doubleSet.has(`${cid}|${sid}`)) cap = Math.max(cap, 2);
+          const h = hoursMap.get(`${cid}|${sid}`) || 0;
           const ud = Math.max(1, usableDays[ci] || 1);
           if (h > 0) cap = Math.max(cap, Math.ceil(h / ud));
+          return cap;
+        };
+        const subjKeys = [];
+        const seenSubjKey = new Set();
+        for (const l of entries) {
+          if (!l.subjectId) continue;
+          for (const cid of classIdsOf(l)) {
+            const ci = cIdxOf.get(cid);
+            if (ci === undefined) continue;
+            const k = `${ci}|${l.subjectId}`;
+            if (seenSubjKey.has(k)) continue;
+            seenSubjKey.add(k);
+            subjKeys.push({ ci, subjectId: l.subjectId, cap: capFor(cid, ci, l.subjectId) });
+          }
         }
+        let cap = len;
+        for (const sk of subjKeys) if (sk.subjectId === subjectId) cap = Math.max(cap, sk.cap);
         units.push({
-          d, i, len, locked, entries, spaced, core, cap,
+          d, i, len, locked, entries, spaced, core, cap, subjKeys,
           parts: parts.map((x) => x.entries),
           cIdxs, tids: [...tSet], rids: [...rSet],
           subjectId,
@@ -3385,8 +3408,8 @@ export function compactSchedule(
   const classDayCount = new Int16Array(C * D);
   const subjDay = new Map(); // `${ci}|${d}|${subjectId}` -> soni
   const bumpSubj = (u, d, sign) => {
-    for (const ci of u.cIdxs) {
-      const k = `${ci}|${d}|${u.subjectId}`;
+    for (const sk of u.subjKeys) {
+      const k = `${sk.ci}|${d}|${sk.subjectId}`;
       subjDay.set(k, (subjDay.get(k) || 0) + sign * u.len);
     }
   };
@@ -3407,11 +3430,11 @@ export function compactSchedule(
   let rearrange = false;
   const fits = (u, d, i) => {
     // Bir kunda bir fan limiti (o'z hissasini chiqarib tashlaydi)
-    if (u.subjectId && !rearrange) {
-      for (const ci of u.cIdxs) {
-        let n = subjDay.get(`${ci}|${d}|${u.subjectId}`) || 0;
+    if (!rearrange) {
+      for (const sk of u.subjKeys) {
+        let n = subjDay.get(`${sk.ci}|${d}|${sk.subjectId}`) || 0;
         if (d === u.d) n -= u.len;
-        if (n + u.len > u.cap) return false;
+        if (n + u.len > sk.cap) return false;
       }
     }
     for (let o = 0; o < u.len; o++) {

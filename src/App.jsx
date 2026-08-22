@@ -739,10 +739,10 @@ export default function App() {
     switch (activePage) {
       case "dashboard": return <DashboardPage {...pageProps} setActivePage={handleNavigate} />;
       case "classes": return <ClassesPage {...pageProps} setClasses={setClasses} />;
-      case "subjects": return <SubjectsPage {...pageProps} setSubjects={setSubjects} setClassSubjects={setClassSubjects} />;
+      case "subjects": return <SubjectsPage {...pageProps} setSubjects={setSubjects} setClassSubjects={setClassSubjects} setSchedule={setSchedule} />;
       case "teachers": return <TeachersPage {...pageProps} setTeachers={setTeachers} />;
       case "teacherAvailability": return <TeacherAvailabilityPage {...pageProps} setTeachers={setTeachers} />;
-      case "classSubjects": return <ClassSubjectsPage {...pageProps} setClassSubjects={setClassSubjects} />;
+      case "classSubjects": return <ClassSubjectsPage {...pageProps} setClassSubjects={setClassSubjects} setSchedule={setSchedule} />;
       case "rooms": return <RoomsPage {...pageProps} setRooms={setRooms} />;
       case "timeslots": return <TimeslotsPage {...pageProps} setTimeslots={setTimeslots} shifts={shifts} setShifts={setShifts} />;
       case "lunchGroups": return <LunchGroupsPage {...pageProps} setLunchGroups={setLunchGroups} shifts={shifts} />;

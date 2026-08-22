@@ -6,6 +6,7 @@ import {
 import { sortByName, cmpName } from "../utils/sortHelpers";
 import { normName, buildCurriculumIndex, hoursFromRow, namesForGrade as curriculumNamesForGrade } from "../utils/curriculum";
 import { getCachedCurriculum, fetchStandardHours } from "../services/standardHoursService";
+import { removeSubjectLessons, removeClassesLessons } from "../utils/scheduleCleanup";
 import "../styles/cs-mobile.css";
 
 function teacherSubjectIds(teacher) {
@@ -221,7 +222,7 @@ function computeTeacherHours(classSubjects) {
   return load;
 }
 
-export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, classSubjects, setClassSubjects, toast }) {
+export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, classSubjects, setClassSubjects, schedule, setSchedule, toast }) {
   // Superadmin belgilagan standart soatlar (bulutdan; kelmasa — ichki reja)
   const [curriculum, setCurriculum] = useState(() => getCachedCurriculum());
   useEffect(() => {
@@ -452,8 +453,19 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
     const current = classSubjects[selectedClassId] || [];
     const subject = subjectById(subjectId);
     if (current.some(a => a.subjectId === subjectId)) {
+      // Fan ro'yxatdan chiqsa — jadvalda qolgan darslari ham ketishi kerak.
+      // Aks holda o'chirilgan fan dars jadvalida "arvoh" bo'lib turaverardi.
+      const cleaned = setSchedule ? removeSubjectLessons(schedule, selectedClassId, subjectId) : null;
+      if (cleaned?.removed) {
+        const name = subject?.name || "Fan";
+        const msg = `"${name}" dars jadvalida ${cleaned.removed} ta darsda turibdi.
+Fan bilan birga ular ham o'chsinmi?`;
+        if (!confirm(msg)) return;
+        setSchedule(cleaned.schedule);
+      }
       saveAssignments(current.filter(a => a.subjectId !== subjectId));
       if (openSettings === subjectId) setOpenSettings(null);
+      if (cleaned?.removed) toast?.(`Jadvaldan ${cleaned.removed} ta dars olib tashlandi`, "success");
     } else {
       // Ustoz avtomatik tanlanmaydi — foydalanuvchi o'zi tanlaydi
       saveAssignments([...current, makeAssignment(subject)]);
@@ -784,19 +796,28 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
     const next = { ...classSubjects };
     delete next[selectedClassId];
     setClassSubjects(next);
+    // Fanlar bilan birga shu sinfning jadvaldagi darslari ham ketadi
+    const cleaned = setSchedule ? removeClassesLessons(schedule, [selectedClassId]) : null;
+    if (cleaned?.removed) setSchedule(cleaned.schedule);
     setOpenSettings(null);
     closeClearDialog();
-    toast(`${selectedClass?.name || "Sinf"} — ${count} ta fan o'chirildi ✓`, "success");
+    const tail = cleaned?.removed ? ` (jadvaldan ${cleaned.removed} ta dars olindi)` : "";
+    toast(`${selectedClass?.name || "Sinf"} — ${count} ta fan o'chirildi ✓${tail}`, "success");
   }
 
   // Barcha sinflardagi fanlarni o'chirish (ikki bosqichli tasdiq)
   function clearAllClasses() {
     const totalSubjects = Object.values(classSubjects || {}).reduce((sum, l) => sum + (l || []).length, 0);
     if (!totalSubjects) { toast("O'chiriladigan fan yo'q", "warning"); return; }
+    const affected = Object.keys(classSubjects || {});
     setClassSubjects({});
+    // Fanlarsiz jadval ma'nosini yo'qotadi — darslar ham tozalanadi
+    const cleaned = setSchedule ? removeClassesLessons(schedule, affected) : null;
+    if (cleaned?.removed) setSchedule(cleaned.schedule);
     setOpenSettings(null);
     closeClearDialog();
-    toast(`Barcha sinflardan ${totalSubjects} ta fan o'chirildi ✓`, "success");
+    const tail = cleaned?.removed ? ` (jadvaldan ${cleaned.removed} ta dars olindi)` : "";
+    toast(`Barcha sinflardan ${totalSubjects} ta fan o'chirildi ✓${tail}`, "success");
   }
 
   function classInLevelGroup(classId, subjectId, key) {

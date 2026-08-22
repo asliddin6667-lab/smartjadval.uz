@@ -178,8 +178,11 @@ Sozlama maydonlari: `pairEnabled`, `pairSubjectId`, `pairTeacherId`, `pairRoomId
 (guruh nomlari — `groupName1`/`groupName2`, 1-guruh ustozi/xonasi — `teacherId`/`roomId`).
 Generatorda `type: "pair"` so'rovi; dars yozuvlari `pairKey` bilan bog'lanadi —
 shu kalit ularni [Schedule.jsx](src/pages/Schedule.jsx) `groupLessons()` da BITTA
-karta qiladi va [moveResolver.js](src/utils/moveResolver.js) `sameCard()` da birga
-ko'chiradi. 2-fanni "Sinf fanlari" ro'yxatida ALOHIDA belgilash shart emas
+karta qiladi, [moveResolver.js](src/utils/moveResolver.js) `sameCard()` da birga
+ko'chiradi va `compactSchedule()` ning `baseKeyOf()` sida BITTA birlik qiladi.
+**Uchala joyda ham `pairKey` hisobga olinishi SHART** — bittasida unutilsa, juft
+dars bo'linib, guruhlar har xil soatga (hatto har xil kunga) tarqalib ketadi.
+2-fanni "Sinf fanlari" ro'yxatida ALOHIDA belgilash shart emas
 (belgilansa — soat ikki marta hisoblanadi, UI ogohlantiradi).
 
 **Parallel sinflar (`pairGroupKey`).** Bir nechta sinf 1-guruh fanini BIRGA,

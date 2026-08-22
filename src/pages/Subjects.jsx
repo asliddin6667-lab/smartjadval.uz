@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from "react";
 import ConfirmModal from "../components/ConfirmModal";
 import { genId } from "../utils/helpers";
 import { SUBJECT_COLORS, STANDARD_SUBJECTS, STANDARD_SUBJECTS_RU, EDU_LANGS } from "../utils/constants";
+import { removeSubjectEverywhere } from "../utils/scheduleCleanup";
 
 // ——— Standart fan nomlari to'plami (uz + ru) — eski ma'lumotni aniqlash uchun ———
 const STANDARD_NAME_SET = new Set(
@@ -31,7 +32,7 @@ export function subjectVisibleTo(s, currentUserId) {
   return s.ownerId === currentUserId;
 }
 
-export default function SubjectsPage({ subjects, setSubjects, classSubjects = {}, setClassSubjects = null, toast, currentUser = null, currentUserId = null }) {
+export default function SubjectsPage({ subjects, setSubjects, classSubjects = {}, setClassSubjects = null, schedule = {}, setSchedule = null, toast, currentUser = null, currentUserId = null }) {
   // Foydalanuvchi ID si: App.jsx `currentUser` ni pageProps orqali uzatadi
   const uid = currentUserId || currentUser?.id || null;
 
@@ -133,9 +134,19 @@ export default function SubjectsPage({ subjects, setSubjects, classSubjects = {}
       }
       setClassSubjects(next);
     }
+    // Jadvalda qolgan darslari ham ketadi — aks holda o'chirilgan fan
+    // dars jadvalida "arvoh" bo'lib turaverardi.
+    let lessons = 0;
+    if (setSchedule) {
+      const cleaned = removeSubjectEverywhere(schedule, deleteId);
+      if (cleaned.schedule !== schedule) { setSchedule(cleaned.schedule); lessons = cleaned.removed; }
+    }
     setSubjects(subjects.filter(s => s.id !== deleteId));
     setDeleteId(null);
-    toast(orphans ? `Fan o'chirildi (${orphans} ta sinf biriktirmasi ham tozalandi)` : "Fan o'chirildi", "error");
+    const parts = [];
+    if (orphans) parts.push(`${orphans} ta sinf biriktirmasi`);
+    if (lessons) parts.push(`${lessons} ta dars`);
+    toast(parts.length ? `Fan o'chirildi (${parts.join(', ')} ham tozalandi)` : "Fan o'chirildi", "error");
   }
 
   function addStandardSubjects(lang = "uz") {
