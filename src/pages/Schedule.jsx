@@ -176,7 +176,11 @@ export default function SchedulePage({
   function groupLessons(lessons = []) {
     const grouped = new Map();
     lessons.forEach((lesson) => {
-      const key = [lesson.subjectId, lesson.groupKey || "", lesson.blockIndex ?? ""].join("__");
+      // "Bir vaqtda 2 fan" — ikki HAR XIL fan bitta katakda, bitta karta
+      // bo'lib turadi (`pairKey` ularni bog'laydi).
+      const key = lesson.pairKey
+        ? ["pair", lesson.pairKey, lesson.blockIndex ?? ""].join("__")
+        : [lesson.subjectId, lesson.groupKey || "", lesson.blockIndex ?? ""].join("__");
       if (!grouped.has(key)) grouped.set(key, { ...lesson, parts: [] });
       grouped.get(key).parts.push(lesson);
     });
@@ -185,9 +189,17 @@ export default function SchedulePage({
 
   function lessonDetails(lesson) {
     const subject = subjectMap.get(lesson.subjectId);
-    const subjectName = lesson.subjectName || subject?.name || "Fan";
-    const color = subjectColor(subject, hashText(subjectName));
+    const baseName = lesson.subjectName || subject?.name || "Fan";
+    const color = subjectColor(subject, hashText(baseName));
     const parts = lesson.parts?.length ? lesson.parts : [lesson];
+
+    // ——— BIR VAQTDA 2 FAN ———
+    // Kartada ikkala fan nomi ko'rinadi: «Ona tili / Rus tili»
+    const isPair = Boolean(lesson.pairKey) &&
+      new Set(parts.map((p) => p.subjectId)).size > 1;
+    const subjectName = isPair
+      ? uniqBy(parts.map((p) => subjectMap.get(p.subjectId)?.name || "Fan"), (n) => n).join(" / ")
+      : baseName;
 
     const uniqueClassNames = uniqBy(
       parts.flatMap((part) => classIdsOf(part).map((id) => classes.find((c) => c.id === id)?.name).filter(Boolean)),
@@ -197,6 +209,7 @@ export default function SchedulePage({
     return {
       subject,
       subjectName,
+      isPair,
       color,
       bg: rgba(color, 0.10),
       border: rgba(color, 0.30),
@@ -241,9 +254,17 @@ export default function SchedulePage({
             {detail.parts.map((part, index) => {
               const teacher = getName(teacherMap, part.teacherId, "Ustoz tanlanmagan");
               const room = part.roomId ? getName(roomMap, part.roomId, "Xona") : "Xonasiz";
+              // Bir vaqtda 2 fan bo'lsa — har guruh o'z fani bilan ko'rinadi
+              const partSubject = detail.isPair
+                ? (subjectMap.get(part.subjectId)?.name || "Fan")
+                : "";
               return (
-                <div className="pretty-group-line" key={`${part.teacherId}-${index}`}>
+                <div
+                  className={`pretty-group-line${partSubject ? " with-subject" : ""}`}
+                  key={`${part.teacherId}-${index}`}
+                >
                   <span>{part.groupPart || part.groupName || `${index + 1}-guruh`}</span>
+                  {partSubject && <i>{partSubject}</i>}
                   <b>{teacher}</b>
                   <em>{room}</em>
                 </div>
@@ -261,6 +282,12 @@ export default function SchedulePage({
         {isAlt && (
           <div className="pretty-alt-chip">
             ⇄ Juft/toq hafta almashinuvi{altTeacher ? ` · ${altName}: ${altTeacher}` : ""}
+          </div>
+        )}
+
+        {detail.isPair && (
+          <div className="pretty-pair-chip">
+            🧩 Bir vaqtda 2 fan — sinf ikkiga bo'linadi
           </div>
         )}
 
@@ -632,6 +659,7 @@ export default function SchedulePage({
       (classSubjects?.[cls.id] || []).forEach((a) => {
         if (a.subjectId) subjectIds.add(a.subjectId);
         if (a.swapEnabled && a.swapSubjectId) subjectIds.add(a.swapSubjectId);
+        if (a.pairEnabled && a.pairSubjectId) subjectIds.add(a.pairSubjectId);
       });
       subjectIds.forEach((sid) => {
         const cap = subjectDayCap(cls.id, sid);
@@ -872,6 +900,7 @@ export default function SchedulePage({
     list.forEach((a) => {
       if (a.subjectId === subjectId) req += Number(a.weeklyHours || 0);
       if (a.swapEnabled && a.swapSubjectId === subjectId) req += Number(a.weeklyHours || 0);
+      if (a.pairEnabled && a.pairSubjectId === subjectId) req += Number(a.weeklyHours || 0);
     });
     return req;
   }
@@ -889,7 +918,8 @@ export default function SchedulePage({
   function subjectDayCap(classId, subjectId) {
     const list = classSubjects?.[classId] || [];
     const a = list.find((x) => x.subjectId === subjectId)
-      || list.find((x) => x.swapEnabled && x.swapSubjectId === subjectId);
+      || list.find((x) => x.swapEnabled && x.swapSubjectId === subjectId)
+      || list.find((x) => x.pairEnabled && x.pairSubjectId === subjectId);
     const need = requiredHours(classId, subjectId);
     const base = a && (a.allowDouble || (a.swapEnabled && a.swapSubjectId === subjectId)) ? 2 : 1;
     return Math.max(base, Math.ceil(need / usableDaysOf(classId)) || 1);
@@ -901,6 +931,7 @@ export default function SchedulePage({
     list.forEach((a) => {
       if (a.subjectId) subjectIds.add(a.subjectId);
       if (a.swapEnabled && a.swapSubjectId) subjectIds.add(a.swapSubjectId);
+      if (a.pairEnabled && a.pairSubjectId) subjectIds.add(a.pairSubjectId);
     });
     const result = [];
     subjectIds.forEach((sid) => {
@@ -1019,6 +1050,7 @@ export default function SchedulePage({
           (a.levelGroups || []).forEach((g) => add(g.teacherId, cls.name));
         }
         if (a.swapEnabled && a.swapSubjectId === subjectId) add(a.swapTeacherId, cls.name);
+        if (a.pairEnabled && a.pairSubjectId === subjectId) add(a.pairTeacherId, cls.name);
       });
     });
     return map;
@@ -1417,6 +1449,9 @@ export default function SchedulePage({
         const classOff = new Set(Array.isArray(cls.offDays) ? cls.offDays : []);
         const subjectIds = new Set();
         (classSubjects?.[cls.id] || []).forEach((a) => {
+          // "Bir vaqtda 2 fan" darslari qo'lda to'ldirilmaydi: sinf ikkiga
+          // bo'lingan, yolg'iz dars qo'yish jadvalni buzadi.
+          if (a.pairEnabled) return;
           if (a.subjectId) subjectIds.add(a.subjectId);
           if (a.swapEnabled && a.swapSubjectId) subjectIds.add(a.swapSubjectId);
         });

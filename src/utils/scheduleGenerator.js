@@ -79,6 +79,14 @@ export function normalizeAssignment(item, subject) {
     weekAltHours: Number(item.weekAltHours || 1),
     levelGroupEnabled: Boolean(item.levelGroupEnabled),
     levelGroupKey: (item.levelGroupKey || "").trim(),
+    // ——— BIR VAQTDA 2 FAN ———
+    // Sinf ikkiga bo'linadi va guruhlar BIR VAQTDA turli fan o'qiydi
+    // (masalan 1-guruh Ona tili, 2-guruh Rus tili). Almashinuv YO'Q —
+    // har guruh o'z fanida qoladi (`swapEnabled` dan farqi shu).
+    pairEnabled: Boolean(item.pairEnabled),
+    pairSubjectId: item.pairSubjectId || "",
+    pairTeacherId: item.pairTeacherId || "",
+    pairRoomId: item.pairRoomId || "",
     isCore: Boolean(item.isCore),
     // ——— ORA KUNDA (kun oralab): Du → Cho → Ju ———
     spacedDays: Boolean(item.spacedDays),
@@ -261,6 +269,32 @@ export function validateScheduleData(classes, subjects, teachers, rooms, timeslo
           } else if (altSubject && !getTeacherSubjectIds(altTeacher).includes(a.weekAltSubjectId)) {
             errors.push(`${altTeacher.name} ${altSubject.name} faniga biriktirilmagan`);
           }
+        }
+      }
+
+      // ——— BIR VAQTDA 2 FAN ———
+      if (a.pairEnabled) {
+        const pairSubject = subjects.find((s) => s.id === a.pairSubjectId);
+        if (!a.pairSubjectId || !pairSubject) {
+          errors.push(`${cls.name}: ${subject.name} bilan birga o'tadigan 2-fan tanlanmagan`);
+        } else if (a.pairSubjectId === a.subjectId) {
+          errors.push(`${cls.name}: ${subject.name} — 2-fan boshqa fan bo'lishi kerak`);
+        }
+        if (!a.pairTeacherId) {
+          errors.push(`${cls.name}: ${subject.name} bilan birga o'tadigan 2-fan ustozi tanlanmagan`);
+        } else {
+          const pairTeacher = teachers.find((t) => t.id === a.pairTeacherId);
+          if (!pairTeacher) {
+            errors.push(`${cls.name}: ${subject.name} 2-fan ustozi topilmadi`);
+          } else if (pairSubject && !getTeacherSubjectIds(pairTeacher).includes(a.pairSubjectId)) {
+            errors.push(`${pairTeacher.name} ${pairSubject.name} faniga biriktirilmagan`);
+          }
+          if (a.teacherId && a.teacherId === a.pairTeacherId) {
+            errors.push(`${cls.name}: ${subject.name} — ikki fan bir vaqtda o'tadi, ustozlar bir xil bo'lmasin`);
+          }
+        }
+        if (a.roomId && a.pairRoomId && a.roomId === a.pairRoomId) {
+          errors.push(`${cls.name}: ${subject.name} — ikki fan bir vaqtda o'tadi, xonalar bir xil bo'lmasin`);
         }
       }
 
@@ -625,6 +659,7 @@ function attemptSchedule(
       const h = Number(raw.weeklyHours || 0);
       addKeyHours(ci, sIdxOf.get(raw.subjectId), h);
       if (raw.swapEnabled && raw.swapSubjectId) addKeyHours(ci, sIdxOf.get(raw.swapSubjectId), h);
+      if (raw.pairEnabled && raw.pairSubjectId) addKeyHours(ci, sIdxOf.get(raw.pairSubjectId), h);
       if (raw.weekAltEnabled && raw.weekAltSubjectId) {
         addKeyHours(ci, sIdxOf.get(raw.weekAltSubjectId), Number(raw.weekAltHours || 1));
       }
@@ -769,6 +804,32 @@ function attemptSchedule(
         return;
       }
 
+      // ——— BIR VAQTDA 2 FAN ———
+      // Sinf ikkiga bo'linadi: 1-guruh shu fanni, 2-guruh boshqa fanni
+      // AYNI PAYTDA o'qiydi. Ikki ustoz ham shu soatda band bo'ladi,
+      // ikkala fanning kunlik limiti ham hisobga olinadi (`swapSubjectId`
+      // orqali — u generatorda "ikkinchi fan indeksi" sifatida ishlaydi).
+      if (a.pairEnabled && a.pairSubjectId && a.pairTeacherId) {
+        blocks.forEach((blockSize) => {
+          simpleRequests.push({
+            type: "pair", classIds: [cls.id],
+            subjectId: a.subjectId, pairSubjectId: a.pairSubjectId,
+            // kunlik fan limiti ikkala fan uchun ham hisoblansin
+            swapSubjectId: a.pairSubjectId,
+            teacherId: a.teacherId, pairTeacherId: a.pairTeacherId,
+            teacherIds: [a.teacherId, a.pairTeacherId],
+            roomId: a.roomId || "", pairRoomId: a.pairRoomId || "",
+            roomIds: [a.roomId || "", a.pairRoomId || ""].filter(Boolean),
+            groupName1: a.groupName1 || "1-guruh",
+            groupName2: a.groupName2 || "2-guruh",
+            pairKey: `${cls.id}__${a.subjectId}__${a.pairSubjectId}`,
+            blockSize, priority: a.weeklyHours + (blockSize === 2 ? 10 : 0) + 18,
+            isCore: a.isCore, spacedDays: a.spacedDays,
+          });
+        });
+        return;
+      }
+
       if (a.splitEnabled && a.swapEnabled && a.swapSubjectId && a.swapTeacherId) {
         const swapBlocks = Math.max(1, Number(a.weeklyHours || 1));
         for (let k = 0; k < swapBlocks; k++) {
@@ -867,6 +928,12 @@ function attemptSchedule(
       if (!tA || !tB) return false;
       if (!teacherSubjSet.get(tA.id).has(req.subjectId)) return false;
       if (!teacherSubjSet.get(tB.id).has(req.swapSubjectId)) return false;
+    } else if (req.type === "pair") {
+      const tA = teacherById.get(req.teacherId);
+      const tB = teacherById.get(req.pairTeacherId);
+      if (!tA || !tB) return false;
+      if (!teacherSubjSet.get(tA.id).has(req.subjectId)) return false;
+      if (!teacherSubjSet.get(tB.id).has(req.pairSubjectId)) return false;
     } else if (req.type === "weekAlt") {
       const tA = teacherById.get(req.teacherId);
       const tB = teacherById.get(req.altTeacherId);
@@ -910,7 +977,7 @@ function attemptSchedule(
     //   asosiy fanlar (Ingliz tili, Rus tili, Matematika va h.k.).
     // 2-pog'ona: oddiy bir sinf + bir ustoz darslar.
     const multiResource = req.type === "levelGroup" || req.type === "group" ||
-      req.type === "split" || req.type === "swap" || req.type === "weekAlt" ||
+      req.type === "split" || req.type === "swap" || req.type === "pair" || req.type === "weekAlt" ||
       (req.classIds?.length || 1) >= 2 || req.tids.length >= 2;
     const otherConstrained = (req.blockSize || 1) >= 2 ||
       Boolean(req.groupKey) || Boolean(req.spacedDays) || Boolean(req.isCore);
@@ -1117,6 +1184,25 @@ function attemptSchedule(
         alternating: true, altSubjectId: req.altSubjectId, altTeacherId: req.altTeacherId,
         altRoomId: req.altRoomId || "", blockSize: 1, blockIndex,
       }];
+    }
+    if (req.type === "pair") {
+      // Ikki guruh, ikki HAR XIL fan, bitta soat. `pairKey` ikkalasini
+      // bitta "karta" qilib bog'laydi — jadvalda birga ko'rinadi va
+      // birga ko'chadi (Schedule.jsx groupLessons, moveResolver sameCard).
+      return [
+        {
+          subjectId: req.subjectId, classId: req.classIds[0], classIds: req.classIds,
+          teacherId: req.teacherId, roomId: req.roomId || "",
+          groupPart: req.groupName1, splitEnabled: true, pairEnabled: true,
+          pairKey: req.pairKey, blockSize: req.blockSize, blockIndex,
+        },
+        {
+          subjectId: req.pairSubjectId, classId: req.classIds[0], classIds: req.classIds,
+          teacherId: req.pairTeacherId, roomId: req.pairRoomId || "",
+          groupPart: req.groupName2, splitEnabled: true, pairEnabled: true,
+          pairKey: req.pairKey, blockSize: req.blockSize, blockIndex,
+        },
+      ];
     }
     if (req.type === "split") {
       return req.splitGroups.map((g) => ({
@@ -1646,7 +1732,7 @@ function attemptSchedule(
       const subj = subjectById.get(raw.subjectId);
       if (!subj) continue;
       const a = normalizeAssignment(raw, subj);
-      if (a.levelGroupEnabled || a.splitEnabled || a.swapEnabled || a.weekAltEnabled || a.groupKey) continue;
+      if (a.levelGroupEnabled || a.splitEnabled || a.swapEnabled || a.pairEnabled || a.weekAltEnabled || a.groupKey) continue;
       const tid = a.teacherId;
       if (!tid) continue;
       const t = teacherById.get(tid);
@@ -3023,6 +3109,11 @@ export function compactSchedule(
         const k2 = `${cid}|${a.swapSubjectId}`;
         hoursMap.set(k2, (hoursMap.get(k2) || 0) + Number(a.weeklyHours || 0));
       }
+      // Bir vaqtda 2 fan — 2-fan ham shu sinfning fanlari qatorida
+      if (a.pairEnabled && a.pairSubjectId) {
+        const k3 = `${cid}|${a.pairSubjectId}`;
+        hoursMap.set(k3, (hoursMap.get(k3) || 0) + Number(a.weeklyHours || 0));
+      }
     });
   });
 
@@ -3770,6 +3861,7 @@ function totalWeeklyHours(classSubjects = {}) {
     (Array.isArray(list) ? list : []).forEach((a) => {
       total += Number(a?.weeklyHours || 0);
       if (a?.swapEnabled && a?.swapSubjectId) total += Number(a?.weeklyHours || 0);
+      if (a?.pairEnabled && a?.pairSubjectId) total += Number(a?.weeklyHours || 0);
       if (a?.weekAltEnabled && a?.weekAltSubjectId) total += Number(a?.weekAltHours || 1);
     });
   });

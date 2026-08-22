@@ -934,6 +934,7 @@ export function buildAutoExcelData(d) {
       const h = Number(a.weeklyHours || 0);
       add(a.subjectId, h);
       if (a.swapEnabled && a.swapSubjectId) add(a.swapSubjectId, h);
+      if (a.pairEnabled && a.pairSubjectId) add(a.pairSubjectId, h);
     }
   }
   const setkaRows = [...bySubject.values()]

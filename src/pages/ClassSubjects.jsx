@@ -36,6 +36,10 @@ const POOL_SHARED_FIELDS = [
   "groupKey",
   "splitEnabled",
   "swapEnabled",
+  "pairEnabled",
+  "pairSubjectId",
+  "pairTeacherId",
+  "pairRoomId",
   "weekAltEnabled",
   "weekAltSubjectId",
   "weekAltTeacherId",
@@ -110,6 +114,11 @@ function makeAssignment(subject, firstTeacherId = "") {
     weekAltTeacherId: "",
     weekAltRoomId: "",
     weekAltHours: 1,
+    // Bir vaqtda 2 fan — sinf ikkiga bo'linadi, har guruh o'z fanini o'qiydi
+    pairEnabled: false,
+    pairSubjectId: "",
+    pairTeacherId: "",
+    pairRoomId: "",
   };
 }
 
@@ -160,6 +169,8 @@ function computeTeacherHours(classSubjects) {
       // 3) Oddiy dars
       add(a.teacherId, h);
       if (a.splitEnabled && a.teacherId2) add(a.teacherId2, h);
+      // Bir vaqtda 2 fan — 2-fan ustozi ham aynan shu soatlarda band bo'ladi
+      if (a.pairEnabled && a.pairTeacherId) add(a.pairTeacherId, h);
     });
   });
 
@@ -725,6 +736,13 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
     if (a.spacedDays) chips.push({ text: "📆 Ora kunda", bg: "#ffedd5", fg: "#9a3412" });
     if (a.groupKey && !a.levelGroupEnabled) chips.push({ text: "🔁 Parallel", bg: "#d1fae5", fg: "#065f46" });
     if (a.splitEnabled && !a.levelGroupEnabled) chips.push({ text: a.swapEnabled ? "🔄 Almashinuv" : "✂️ 2 guruh", bg: "#fce7f3", fg: "#9d174d" });
+    if (a.pairEnabled) {
+      const pairName = subjects.find((x) => x.id === a.pairSubjectId)?.name;
+      chips.push({
+        text: pairName ? `🧩 + ${pairName}` : "🧩 2 fan (fan tanlanmagan)",
+        bg: "#e0e7ff", fg: "#4338ca",
+      });
+    }
     if (a.levelGroupEnabled) chips.push({ text: "🎯 Daraja guruhi", bg: "#dbeafe", fg: "#1e40af" });
     if (a.weekAltEnabled) chips.push({ text: "⇄ Hafta almashinuvi", bg: "#ede9fe", fg: "#6d28d9" });
     return chips;
@@ -909,19 +927,40 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                                 <span>📆 Ora kunda (kun oralab)</span>
                               </label>
                               <label className="cs-toggle" title="Parallel dars">
-                                <input type="checkbox" disabled={a.levelGroupEnabled || a.weekAltEnabled} checked={Boolean(a.groupKey)} onChange={e => updateAssignment(s.id, { parallelEnabled: e.target.checked, weekAltEnabled: false, groupKey: e.target.checked ? (a.groupKey || `${getGradeFromClassName(selectedClass?.name)}-sinf ${s.name} parallel — ${selectedClass?.name || ""}`) : "" })} />
+                                <input type="checkbox" disabled={a.levelGroupEnabled || a.weekAltEnabled || a.pairEnabled} checked={Boolean(a.groupKey)} onChange={e => updateAssignment(s.id, { parallelEnabled: e.target.checked, weekAltEnabled: false, pairEnabled: false, groupKey: e.target.checked ? (a.groupKey || `${getGradeFromClassName(selectedClass?.name)}-sinf ${s.name} parallel — ${selectedClass?.name || ""}`) : "" })} />
                                 <span>🔁 Parallel dars</span>
                               </label>
                               <label className="cs-toggle" title="Sinfni 2 guruhga bo'lish">
-                                <input type="checkbox" disabled={a.levelGroupEnabled || a.weekAltEnabled} checked={Boolean(a.splitEnabled)} onChange={e => updateAssignment(s.id, { splitEnabled: e.target.checked, weekAltEnabled: false })} />
+                                <input type="checkbox" disabled={a.levelGroupEnabled || a.weekAltEnabled || a.pairEnabled} checked={Boolean(a.splitEnabled)} onChange={e => updateAssignment(s.id, { splitEnabled: e.target.checked, weekAltEnabled: false, pairEnabled: false })} />
                                 <span>✂️ 2 guruhga bo'lish</span>
                               </label>
                               <label className="cs-toggle" title="Bir nechta sinfni daraja bo'yicha guruhlash">
-                                <input type="checkbox" checked={Boolean(a.levelGroupEnabled)} onChange={e => updateAssignment(s.id, { levelGroupEnabled: e.target.checked, splitEnabled: false, weekAltEnabled: false, levelGroupKey: a.levelGroupKey || `${getGradeFromClassName(selectedClass?.name)}-sinf ${s.name} — ${selectedClass?.name || ""} guruhi` })} />
+                                <input type="checkbox" checked={Boolean(a.levelGroupEnabled)} onChange={e => updateAssignment(s.id, { levelGroupEnabled: e.target.checked, splitEnabled: false, weekAltEnabled: false, pairEnabled: false, levelGroupKey: a.levelGroupKey || `${getGradeFromClassName(selectedClass?.name)}-sinf ${s.name} — ${selectedClass?.name || ""} guruhi` })} />
                                 <span>🎯 Daraja guruhi (hovuz)</span>
                               </label>
+                              <label className="cs-toggle" title="Sinf ikkiga bo'linadi va bir vaqtning o'zida ikki xil fan o'tadi (masalan: Ona tili + Rus tili)">
+                                <input
+                                  type="checkbox"
+                                  disabled={a.levelGroupEnabled || a.weekAltEnabled || a.splitEnabled}
+                                  checked={Boolean(a.pairEnabled)}
+                                  onChange={e => updateAssignment(s.id, {
+                                    pairEnabled: e.target.checked,
+                                    // Bir vaqtda 2 fan boshqa rejimlar bilan birga ishlamaydi
+                                    splitEnabled: false,
+                                    swapEnabled: false,
+                                    weekAltEnabled: false,
+                                    levelGroupEnabled: false,
+                                    parallelEnabled: false,
+                                    groupKey: "",
+                                    pairSubjectId: e.target.checked ? a.pairSubjectId : "",
+                                    pairTeacherId: e.target.checked ? a.pairTeacherId : "",
+                                    pairRoomId: e.target.checked ? a.pairRoomId : "",
+                                  })}
+                                />
+                                <span>🧩 Bir vaqtda 2 fan</span>
+                              </label>
                               <label className="cs-toggle" title="Butun sinf har hafta ikki fan o'rtasida navbatlashadi (juft/toq hafta)">
-                                <input type="checkbox" disabled={a.levelGroupEnabled} checked={Boolean(a.weekAltEnabled)} onChange={e => updateAssignment(s.id, { weekAltEnabled: e.target.checked, splitEnabled: false, swapEnabled: false, parallelEnabled: false, groupKey: "", weekAltSubjectId: e.target.checked ? a.weekAltSubjectId : "", weekAltTeacherId: e.target.checked ? a.weekAltTeacherId : "" })} />
+                                <input type="checkbox" disabled={a.levelGroupEnabled || a.pairEnabled} checked={Boolean(a.weekAltEnabled)} onChange={e => updateAssignment(s.id, { weekAltEnabled: e.target.checked, splitEnabled: false, swapEnabled: false, parallelEnabled: false, pairEnabled: false, groupKey: "", weekAltSubjectId: e.target.checked ? a.weekAltSubjectId : "", weekAltTeacherId: e.target.checked ? a.weekAltTeacherId : "" })} />
                                 <span>⇄ Hafta almashinuvi (juft/toq)</span>
                               </label>
                             </div>
@@ -1047,6 +1086,124 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                                       </div>
                                     </>
                                   )}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* ——— BIR VAQTDA 2 FAN ———
+                                Sinf ikkiga bo'linadi: 1-guruh shu fanni,
+                                2-guruh boshqa fanni AYNI PAYTDA o'qiydi.
+                                Almashinuv yo'q — har guruh o'z fanida qoladi. */}
+                            {a.pairEnabled && (
+                              <div className="cs-detail cs-pair-detail">
+                                <div className="cs-pair-top">
+                                  <div>
+                                    <div className="cs-pair-title">🧩 Bir vaqtda 2 fan</div>
+                                    <div className="cs-pair-desc">
+                                      Sinf ikkiga bo'linadi va <b>ayni bir soatda</b> ikki xil fan o'tadi:
+                                      1-guruh <b>{s.name}</b>, 2-guruh esa quyida tanlangan fanni o'qiydi.
+                                      Guruhlar almashmaydi, ikkala ustoz ham shu soatda band bo'ladi.
+                                    </div>
+                                  </div>
+                                  <div className="cs-pair-badge">haftada {hoursNow} soat</div>
+                                </div>
+
+                                {/* Ko'rgazmali sxema — jadvalda qanday ko'rinishi */}
+                                <div className="cs-pair-preview">
+                                  <div className="cs-pair-slot">🕘 bitta soat</div>
+                                  <div className="cs-pair-mini cs-pair-mini-1">
+                                    <span>{a.groupName1 || "1-guruh"}</span>
+                                    <b>{s.name}</b>
+                                    <em>{teachers.find(t => t.id === a.teacherId)?.name || "ustoz tanlanmagan"}</em>
+                                  </div>
+                                  <div className="cs-pair-plus">+</div>
+                                  <div className="cs-pair-mini cs-pair-mini-2">
+                                    <span>{a.groupName2 || "2-guruh"}</span>
+                                    <b>{subjects.find(x => x.id === a.pairSubjectId)?.name || "2-fan tanlanmagan"}</b>
+                                    <em>{teachers.find(t => t.id === a.pairTeacherId)?.name || "ustoz tanlanmagan"}</em>
+                                  </div>
+                                </div>
+
+                                <div className="cs-split-groups" style={{ marginTop: 12 }}>
+                                  {/* ——— 1-guruh ——— */}
+                                  <div className="cs-split-card cs-split-card-1">
+                                    <div className="cs-split-head"><span className="cs-split-num">1</span> {s.name}</div>
+                                    <div className="cs-split-field">
+                                      <span className="cs-split-label">Guruh nomi</span>
+                                      <input className="form-control" placeholder="1-guruh" value={a.groupName1 || "1-guruh"} onChange={e => updateAssignment(s.id, { groupName1: e.target.value })} />
+                                    </div>
+                                    <div className="cs-split-field">
+                                      <span className="cs-split-label">👨‍🏫 Ustoz</span>
+                                      <select className="form-control" value={a.teacherId || ""} onChange={e => updateAssignment(s.id, { teacherId: e.target.value })}>
+                                        <option value="">— {s.name} ustozi —</option>
+                                        {availableTeachers.filter(t => t.id !== a.pairTeacherId).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                      </select>
+                                    </div>
+                                    <div className="cs-split-field">
+                                      <span className="cs-split-label">🚪 Xona</span>
+                                      <select className="form-control" value={a.roomId || ""} onChange={e => updateAssignment(s.id, { roomId: e.target.value })}>
+                                        <option value="">Xonasiz</option>
+                                        {sortedRooms.filter(r => r.id !== a.pairRoomId).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                                      </select>
+                                    </div>
+                                  </div>
+
+                                  {/* ——— 2-guruh ——— */}
+                                  <div className="cs-split-card cs-split-card-2">
+                                    <div className="cs-split-head">
+                                      <span className="cs-split-num">2</span>
+                                      {subjects.find(x => x.id === a.pairSubjectId)?.name || "2-fan"}
+                                    </div>
+                                    <div className="cs-split-field">
+                                      <span className="cs-split-label">Guruh nomi</span>
+                                      <input className="form-control" placeholder="2-guruh" value={a.groupName2 || "2-guruh"} onChange={e => updateAssignment(s.id, { groupName2: e.target.value })} />
+                                    </div>
+                                    <div className="cs-split-field">
+                                      <span className="cs-split-label">📚 Fan</span>
+                                      <select className="form-control" value={a.pairSubjectId || ""} onChange={e => updateAssignment(s.id, { pairSubjectId: e.target.value, pairTeacherId: "" })}>
+                                        <option value="">— 2-fanni tanlang —</option>
+                                        {langSubjects.filter(x => x.id !== s.id).map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
+                                      </select>
+                                    </div>
+                                    <div className="cs-split-field">
+                                      <span className="cs-split-label">👨‍🏫 Ustoz</span>
+                                      <select className="form-control" disabled={!a.pairSubjectId} value={a.pairTeacherId || ""} onChange={e => updateAssignment(s.id, { pairTeacherId: e.target.value })}>
+                                        <option value="">— 2-fan ustozi —</option>
+                                        {teachersForSubject(a.pairSubjectId).filter(t => t.id !== a.teacherId).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                      </select>
+                                    </div>
+                                    <div className="cs-split-field">
+                                      <span className="cs-split-label">🚪 Xona</span>
+                                      <select className="form-control" value={a.pairRoomId || ""} onChange={e => updateAssignment(s.id, { pairRoomId: e.target.value })}>
+                                        <option value="">Xonasiz</option>
+                                        {sortedRooms.filter(r => r.id !== a.roomId).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                                      </select>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Yetishmayotgan sozlamalar — generatsiyadan oldin ko'rinsin */}
+                                {(() => {
+                                  const warns = [];
+                                  if (!a.pairSubjectId) warns.push("2-fan tanlanmagan");
+                                  if (!a.teacherId) warns.push(`${s.name} uchun ustoz tanlanmagan`);
+                                  if (a.pairSubjectId && !a.pairTeacherId) warns.push("2-fan ustozi tanlanmagan");
+                                  if (a.pairTeacherId && a.pairTeacherId === a.teacherId) warns.push("ikkala guruhga bitta ustoz qo'yib bo'lmaydi");
+                                  if (a.pairSubjectId && isChecked(a.pairSubjectId)) {
+                                    warns.push(`«${subjects.find(x => x.id === a.pairSubjectId)?.name}» ro'yxatda alohida ham belgilangan — belgini olib tashlang`);
+                                  }
+                                  if (!warns.length) return null;
+                                  return (
+                                    <div className="cs-pair-warn">
+                                      ⚠️ {warns.join(" · ")}
+                                    </div>
+                                  );
+                                })()}
+
+                                <div className="cs-split-note" style={{ marginTop: 10 }}>
+                                  💡 <b>2-fanni ro'yxatdan alohida belgilamang</b> — uning soati va ustozi
+                                  shu yerdan olinadi. Jadvalda bu dars bitta katakda ikki qator bo'lib
+                                  ko'rinadi va ko'chirilganda ikkalasi birga ko'chadi.
                                 </div>
                               </div>
                             )}

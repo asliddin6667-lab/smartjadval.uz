@@ -168,7 +168,20 @@ sifatida ishlatiladi — nomini o'zgartirish saqlangan barcha jadvallarni buzadi
 
 Bir katakda bir nechta dars bo'lishi normal: guruhli fanlar (`splitEnabled`), daraja
 guruhlari (`levelGroupEnabled`), parallel sinflar (`classIds` bir nechta), juft/toq
-hafta almashinuvi (`weekAltEnabled`), fan almashinuvi (`swapEnabled`).
+hafta almashinuvi (`weekAltEnabled`), fan almashinuvi (`swapEnabled`),
+**bir vaqtda 2 fan** (`pairEnabled`).
+
+**Bir vaqtda 2 fan (`pairEnabled`)** — sinf ikkiga bo'linadi va guruhlar AYNI BIR
+SOATDA turli fan o'qiydi (masalan 1-guruh Ona tili, 2-guruh Rus tili). `swapEnabled`
+dan farqi: guruhlar almashmaydi va 2 soatlik blok talab qilinmaydi.
+Sozlama maydonlari: `pairEnabled`, `pairSubjectId`, `pairTeacherId`, `pairRoomId`
+(guruh nomlari — `groupName1`/`groupName2`, 1-guruh ustozi/xonasi — `teacherId`/`roomId`).
+Generatorda `type: "pair"` so'rovi; ikkala dars yozuvi `pairKey` bilan bog'lanadi —
+shu kalit ularni [Schedule.jsx](src/pages/Schedule.jsx) `groupLessons()` da BITTA
+karta qiladi va [moveResolver.js](src/utils/moveResolver.js) `sameCard()` da birga
+ko'chiradi. Kunlik fan limiti uchun 2-fan `swapSubjectId` sifatida uzatiladi.
+2-fanni "Sinf fanlari" ro'yxatida ALOHIDA belgilash shart emas (belgilansa — soat
+ikki marta hisoblanadi, UI ogohlantiradi).
 
 ### Jadval dvigatellari
 

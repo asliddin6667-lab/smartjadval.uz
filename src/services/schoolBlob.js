@@ -109,6 +109,11 @@ export const CS_DEFAULTS = {
   levelGroupEnabled: false,
   levelGroupKey: "",
   levelGroupCount: 0,
+  // Bir vaqtda 2 fan (sinf ikkiga bo'linadi, har guruh o'z fanini o'qiydi)
+  pairEnabled: false,
+  pairSubjectId: "",
+  pairTeacherId: "",
+  pairRoomId: "",
 };
 
 // Bo'sh massiv sifatida tashlanadigan maydonlar

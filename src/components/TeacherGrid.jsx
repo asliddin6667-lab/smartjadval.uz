@@ -102,11 +102,28 @@ export default function TeacherGrid({
     classes.forEach((cls) => {
       (classSubjects?.[cls.id] || []).forEach((a) => {
         if (!a?.subjectId) return;
+
+        // Bir vaqtda 2 fan — 2-fan ustozi o'z fani bilan alohida qator
+        if (a.pairEnabled && a.pairSubjectId && a.pairTeacherId === teacherId) {
+          out.push({
+            classId: cls.id,
+            className: cls.name,
+            subjectId: a.pairSubjectId,
+            subjectName: subjectMap.get(a.pairSubjectId)?.name || "Fan",
+            need: Number(a.weeklyHours || 0),
+            roomId: a.pairRoomId || "",
+            roles: ["2 fan birga"],
+            simple: false,
+          });
+          return;
+        }
+
         const roles = [];
         if (a.teacherId === teacherId) roles.push("asosiy");
         if (a.teacherId2 === teacherId) roles.push("2-guruh");
         if (a.swapEnabled && a.swapTeacherId === teacherId) roles.push("almashinuv");
         if (a.weekAltEnabled && a.weekAltTeacherId === teacherId) roles.push("juft/toq");
+        if (a.pairEnabled && a.teacherId === teacherId) roles.push("2 fan birga");
         if ((a.levelGroups || []).some((g) => g.teacherId === teacherId)) roles.push("daraja guruhi");
         if (!roles.length) return;
         const simple = a.teacherId === teacherId && !a.levelGroupEnabled && !a.splitEnabled && !a.swapEnabled;

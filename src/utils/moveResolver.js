@@ -65,6 +65,12 @@ export function slotAllowsClass(slot, classId) {
 
 // Bitta "karta" — Schedule.jsx dagi groupLessons kaliti bilan bir xil
 export function sameCard(a, b) {
+  // "Bir vaqtda 2 fan": ikki guruh HAR XIL fan o'qiydi, lekin bitta katakda
+  // yashaydi va birga ko'chishi shart — ularni `pairKey` bog'laydi.
+  const pk = a?.pairKey || "";
+  if (pk && pk === (b?.pairKey || "")) {
+    return String(a.blockIndex ?? "") === String(b.blockIndex ?? "");
+  }
   return (
     a.subjectId === b.subjectId &&
     (a.groupKey || "") === (b.groupKey || "") &&

@@ -166,6 +166,11 @@ export default function TeacherAvailabilityPage({
           }
           return;
         }
+        // Bir vaqtda 2 fan — ikkala ustoz ham shu soatlarda band
+        if (a.pairEnabled && a.pairTeacherId) {
+          if (a.teacherId === tid || a.pairTeacherId === tid) total += wh;
+          return;
+        }
         // Almashinuv (2 fan bitta vaqtda) — ikkala ustoz ham band
         if (a.splitEnabled && a.swapEnabled) {
           if (a.teacherId === tid || a.swapTeacherId === tid) total += wh;

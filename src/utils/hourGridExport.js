@@ -285,6 +285,7 @@ export function buildHourGrid({ classes = [], subjects = [], classSubjects = {} 
       };
       add(a.subjectId);
       if (a.swapEnabled && a.swapSubjectId) add(a.swapSubjectId);
+      if (a.pairEnabled && a.pairSubjectId) add(a.pairSubjectId);
     }
   }
 
