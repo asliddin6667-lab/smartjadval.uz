@@ -119,8 +119,38 @@ function makeAssignment(subject, firstTeacherId = "") {
     pairSubjectId: "",
     pairTeacherId: "",
     pairRoomId: "",
+    // Parallel sinflar guruhi (bo'sh — faqat shu sinf)
+    pairGroupKey: "",
   };
 }
+
+// ——— BIR VAQTDA 2 FAN + PARALLEL SINFLAR ———
+// `pairGroupKey` bir nechta sinfni BITTA darsga bog'laydi: 1-guruh fani,
+// ustozi, xonasi va soati hamma a'zoda BIR XIL bo'ladi (parallel dars),
+// 2-guruh fani esa har sinfda BOSHQA bo'lishi mumkin.
+// Diqqat: pairSubjectId/pairTeacherId/pairRoomId shu ro'yxatda YO'Q —
+// ular aynan sinfga xos.
+const PAIR_SHARED_FIELDS = [
+  "weeklyHours",
+  "teacherId",
+  "roomId",
+  "groupName1",
+  "groupName2",
+  "allowDouble",
+  "isCore",
+  "spacedDays",
+];
+
+function pickPairShared(obj = {}) {
+  const out = {};
+  PAIR_SHARED_FIELDS.forEach((k) => {
+    if (Object.prototype.hasOwnProperty.call(obj, k)) out[k] = obj[k];
+  });
+  return out;
+}
+
+// Nechta sinf bitta guruhga kira oladi (joriy sinf + shuncha)
+const PAIR_MAX_EXTRA = 2;
 
 // ——— Ustoz yuklamasi: hovuz va parallel darslar 1 marta hisoblanadi ———
 // Hovuz: 3 sinf birga, bir vaqtda o'qiydi → ustozga 3 soat emas, 1 soat.
@@ -166,7 +196,21 @@ function computeTeacherHours(classSubjects) {
         return;
       }
 
-      // 3) Oddiy dars
+      // 3) Bir vaqtda 2 fan + parallel sinflar: 1-guruh ustozi hamma
+      //    sinfga BIR VAQTDA kiradi — guruh bo'yicha 1 marta hisoblanadi.
+      //    2-guruh ustozi esa har sinfda alohida (fani ham boshqa).
+      const pairKey = a.pairEnabled ? String(a.pairGroupKey || "").trim() : "";
+      if (pairKey) {
+        const sig = `PP|${a.subjectId}|${pairKey}|${a.teacherId}`;
+        if (a.teacherId && !parallelDone.has(sig)) {
+          parallelDone.add(sig);
+          add(a.teacherId, h);
+        }
+        if (a.pairTeacherId) add(a.pairTeacherId, h);
+        return;
+      }
+
+      // 4) Oddiy dars
       add(a.teacherId, h);
       if (a.splitEnabled && a.teacherId2) add(a.teacherId2, h);
       // Bir vaqtda 2 fan — 2-fan ustozi ham aynan shu soatlarda band bo'ladi
@@ -227,6 +271,38 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
   const sameLangClasses = sortByName(classes.filter(c => classLangOf(c) === classLang));
 
   function subjectById(id) { return subjects.find(s => s.id === id); }
+
+  // ——— "Yetim" biriktirmalar ———
+  // Fan "Fanlar" ro'yxatidan o'chirilgan, lekin classSubjects ichida yozuvi qolib ketgan.
+  // Bunday yozuv shu sahifada KO'RINMAYDI (ro'yxat fanlar bo'yicha chiziladi), lekin
+  // generator va "Vakant tahlili" uni hisoblab, "Noma'lum fan" nomi bilan soxta
+  // vakant soat sifatida ko'rsatadi.
+  const knownSubjectIds = new Set(subjects.map(s => s.id));
+  const orphanInfo = (() => {
+    let entries = 0, hours = 0;
+    const classNames = [];
+    for (const c of classes) {
+      const list = Array.isArray(classSubjects[c.id]) ? classSubjects[c.id] : [];
+      let n = 0;
+      for (const a of list) {
+        if (!a || !a.subjectId) continue;
+        if (knownSubjectIds.has(a.subjectId)) continue;
+        n += 1; hours += Number(a.weeklyHours || 0);
+      }
+      if (n) { entries += n; classNames.push(c.name || "?"); }
+    }
+    return { entries, hours, classNames };
+  })();
+
+  function cleanOrphanAssignments() {
+    const next = {};
+    for (const [clsId, list] of Object.entries(classSubjects || {})) {
+      if (!Array.isArray(list)) continue;
+      next[clsId] = list.filter(a => a && a.subjectId && knownSubjectIds.has(a.subjectId));
+    }
+    setClassSubjects(next);
+    toast?.(`${orphanInfo.entries} ta yetim biriktirma tozalandi (${orphanInfo.hours} soat)`, "success");
+  }
 
   // Hovuz (daraja guruhi) tez yaratish: tanlangan sinflarga bir xil guruh biriktiriladi
   function createPool() {
@@ -394,6 +470,47 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
     const pooled = Boolean(a?.levelGroupEnabled) && Boolean(oldKey);
 
     if (!pooled) {
+      // ——— Boshqa rejimga o'tilganda parallel guruh UZILADI ———
+      // "Parallel dars", "2 guruhga bo'lish", "Daraja guruhi", "Hafta
+      // almashinuvi" tugmalari pairEnabled: false yuboradi. Bog'langan
+      // sinflar ham guruhdan chiqarilmasa — ular yolg'iz qolib, jadvalda
+      // egasiz "2-guruh" darslari paydo bo'lardi.
+      const dropKey = patch.pairEnabled === false ? String(a?.pairGroupKey || "").trim() : "";
+      if (dropKey) {
+        const cleared = { pairEnabled: false, pairGroupKey: "", pairSubjectId: "", pairTeacherId: "", pairRoomId: "" };
+        const next = { ...classSubjects };
+        Object.entries(next).forEach(([cid, list]) => {
+          next[cid] = (list || []).map(x => {
+            if (x.subjectId !== subjectId) return x;
+            if (cid === selectedClassId) return { ...x, ...patch, ...cleared };
+            if (x.pairEnabled && String(x.pairGroupKey || "").trim() === dropKey) return { ...x, ...cleared };
+            return x;
+          });
+        });
+        setClassSubjects(next);
+        return;
+      }
+
+      // ——— Bir vaqtda 2 fan: parallel sinflar bilan bog'langan bo'lsa ———
+      // 1-guruhga tegishli maydonlar (soat, ustoz, xona, guruh nomlari,
+      // 2 soat blok, asosiy fan, ora kunda) guruhdagi hamma sinfga yoziladi.
+      const linkKey = a?.pairEnabled ? String(a.pairGroupKey || "").trim() : "";
+      const shared = linkKey ? pickPairShared(patch) : null;
+      if (shared && Object.keys(shared).length) {
+        const next = { ...classSubjects };
+        Object.entries(next).forEach(([cid, list]) => {
+          next[cid] = (list || []).map(x => {
+            if (x.subjectId !== subjectId) return x;
+            if (cid === selectedClassId) return { ...x, ...patch };
+            if (x.pairEnabled && String(x.pairGroupKey || "").trim() === linkKey) {
+              return { ...x, ...shared };
+            }
+            return x;
+          });
+        });
+        setClassSubjects(next);
+        return;
+      }
       saveAssignments(current.map(x => x.subjectId === subjectId ? { ...x, ...patch } : x));
       return;
     }
@@ -413,6 +530,120 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
         return x;
       });
     });
+    setClassSubjects(next);
+  }
+
+  // ═══ BIR VAQTDA 2 FAN — PARALLEL SINFLAR ═══
+
+  // Shu fan bo'yicha guruhga kirgan BOSHQA sinflar (alifbo tartibida)
+  function pairMemberRows(subjectId, pairGroupKey) {
+    const key = String(pairGroupKey || "").trim();
+    if (!subjectId || !key) return [];
+    const rows = [];
+    sortedClasses.forEach((c) => {
+      if (c.id === selectedClassId) return;
+      const found = (classSubjects[c.id] || []).find(
+        x => x.subjectId === subjectId && x.pairEnabled && String(x.pairGroupKey || "").trim() === key
+      );
+      if (found) rows.push({ cls: c, a: found });
+    });
+    return rows;
+  }
+
+  // "🧩 Bir vaqtda 2 fan" tugmasi. O'chirilganda bog'langan sinflar ham
+  // guruhdan chiqadi — aks holda ular yolg'iz qolib, jadvalni buzardi.
+  function togglePairMode(subjectId, on) {
+    const a = getAssignment(subjectId);
+    updateAssignment(subjectId, {
+      pairEnabled: on,
+      // Bir vaqtda 2 fan boshqa rejimlar bilan birga ishlamaydi
+      splitEnabled: false,
+      swapEnabled: false,
+      weekAltEnabled: false,
+      levelGroupEnabled: false,
+      parallelEnabled: false,
+      groupKey: "",
+      pairSubjectId: on ? (a.pairSubjectId || "") : "",
+      pairTeacherId: on ? (a.pairTeacherId || "") : "",
+      pairRoomId: on ? (a.pairRoomId || "") : "",
+      pairGroupKey: on ? String(a.pairGroupKey || "").trim() : "",
+    });
+  }
+
+  // Guruhga yangi sinf qo'shish: 1-guruh sozlamalari nusxalanadi,
+  // 2-guruh fanini foydalanuvchi o'zi tanlaydi.
+  function addPairClass(subjectId, classId) {
+    if (!classId) return;
+    const current = classSubjects[selectedClassId] || [];
+    const a = current.find(x => x.subjectId === subjectId);
+    if (!a) return;
+    const subject = subjectById(subjectId);
+    const key = String(a.pairGroupKey || "").trim()
+      || `${subject?.name || "Fan"} juftligi — ${selectedClass?.name || ""}`;
+
+    const next = { ...classSubjects };
+    next[selectedClassId] = current.map(x => x.subjectId === subjectId ? { ...x, pairGroupKey: key } : x);
+
+    const list = next[classId] || [];
+    const exist = list.find(x => x.subjectId === subjectId);
+    const linked = {
+      ...(exist || makeAssignment(subject)),
+      subjectId,
+      pairEnabled: true,
+      pairGroupKey: key,
+      // 1-guruh — guruhda umumiy
+      weeklyHours: Number(a.weeklyHours || 1),
+      teacherId: a.teacherId || "",
+      roomId: a.roomId || "",
+      groupName1: a.groupName1 || "1-guruh",
+      groupName2: a.groupName2 || "2-guruh",
+      allowDouble: Boolean(a.allowDouble),
+      isCore: Boolean(a.isCore),
+      spacedDays: Boolean(a.spacedDays),
+      // Boshqa rejimlar o'chadi
+      splitEnabled: false,
+      swapEnabled: false,
+      weekAltEnabled: false,
+      levelGroupEnabled: false,
+      parallelEnabled: false,
+      groupKey: "",
+      // 2-guruh — shu sinfning O'Z fani
+      pairSubjectId: exist?.pairSubjectId || "",
+      pairTeacherId: exist?.pairTeacherId || "",
+      pairRoomId: exist?.pairRoomId || "",
+    };
+    next[classId] = exist
+      ? list.map(x => x.subjectId === subjectId ? linked : x)
+      : [...list, linked];
+    setClassSubjects(next);
+    toast?.(`${classes.find(c => c.id === classId)?.name || "Sinf"} guruhga qo'shildi — 2-guruh fanini tanlang`, "success");
+  }
+
+  // Sinfni guruhdan chiqarish. Fan sinfda QOLADI (oddiy dars bo'lib),
+  // faqat parallel bog'lanish uziladi.
+  function removePairClass(subjectId, classId, pairGroupKey) {
+    const key = String(pairGroupKey || "").trim();
+    const next = { ...classSubjects };
+    next[classId] = (next[classId] || []).map(x => (
+      x.subjectId === subjectId
+        ? { ...x, pairEnabled: false, pairGroupKey: "", pairSubjectId: "", pairTeacherId: "", pairRoomId: "" }
+        : x
+    ));
+    // Guruhda boshqa sinf qolmasa — joriy sinfning kaliti ham tozalanadi
+    const left = Object.entries(next).filter(([cid, list]) => cid !== selectedClassId
+      && (list || []).some(x => x.subjectId === subjectId && x.pairEnabled && String(x.pairGroupKey || "").trim() === key));
+    if (!left.length) {
+      next[selectedClassId] = (next[selectedClassId] || []).map(x => (
+        x.subjectId === subjectId ? { ...x, pairGroupKey: "" } : x
+      ));
+    }
+    setClassSubjects(next);
+  }
+
+  // Guruhdagi boshqa sinfning 2-guruh sozlamasini o'zgartirish
+  function updatePairMember(subjectId, classId, patch) {
+    const next = { ...classSubjects };
+    next[classId] = (next[classId] || []).map(x => x.subjectId === subjectId ? { ...x, ...patch } : x);
     setClassSubjects(next);
   }
 
@@ -665,6 +896,12 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
         swapEnabled: false,
         parallelEnabled: false,
         groupKey: "",
+        // "Bir vaqtda 2 fan" daraja guruhi bilan birga ishlamaydi
+        pairEnabled: false,
+        pairGroupKey: "",
+        pairSubjectId: "",
+        pairTeacherId: "",
+        pairRoomId: "",
       };
       next[c.id] = idx >= 0 ? list.map((a, i) => i === idx ? updated : a) : [...list, updated];
     });
@@ -692,6 +929,12 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
         groupKey: key,
         levelGroupEnabled: false,
         levelGroupKey: "",
+        // "Bir vaqtda 2 fan" oddiy parallel dars bilan birga ishlamaydi
+        pairEnabled: false,
+        pairGroupKey: "",
+        pairSubjectId: "",
+        pairTeacherId: "",
+        pairRoomId: "",
       };
       next[c.id] = idx >= 0 ? list.map((a, i) => i === idx ? updated : a) : [...list, updated];
     });
@@ -811,6 +1054,19 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                     <span className="badge badge-info">{assignments.length} fan · {totalHours} soat</span>
                   </div>
                 </div>
+
+                {orphanInfo.entries > 0 && (
+                  <div className="alert alert-warning" style={{ marginBottom: 12 }}>
+                    <div style={{ marginBottom: 8 }}>
+                      ⚠️ <b>{orphanInfo.entries} ta biriktirma o'chirilgan fanga tegishli</b> ({orphanInfo.hours} soat).
+                      Bu yozuvlar ro'yxatda ko'rinmaydi, lekin tahlilda «Noma'lum fan» bo'lib vakant soat sifatida chiqadi.
+                      <div style={{ fontSize: 12, opacity: .85, marginTop: 4 }}>
+                        Sinflar: {orphanInfo.classNames.join(", ")}
+                      </div>
+                    </div>
+                    <button className="btn btn-danger btn-sm" onClick={cleanOrphanAssignments}>🧹 Tozalash</button>
+                  </div>
+                )}
 
                 {langSubjects.length === 0 && (
                   <div className="alert alert-warning" style={{ marginBottom: 12 }}>
@@ -943,19 +1199,7 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                                   type="checkbox"
                                   disabled={a.levelGroupEnabled || a.weekAltEnabled || a.splitEnabled}
                                   checked={Boolean(a.pairEnabled)}
-                                  onChange={e => updateAssignment(s.id, {
-                                    pairEnabled: e.target.checked,
-                                    // Bir vaqtda 2 fan boshqa rejimlar bilan birga ishlamaydi
-                                    splitEnabled: false,
-                                    swapEnabled: false,
-                                    weekAltEnabled: false,
-                                    levelGroupEnabled: false,
-                                    parallelEnabled: false,
-                                    groupKey: "",
-                                    pairSubjectId: e.target.checked ? a.pairSubjectId : "",
-                                    pairTeacherId: e.target.checked ? a.pairTeacherId : "",
-                                    pairRoomId: e.target.checked ? a.pairRoomId : "",
-                                  })}
+                                  onChange={e => togglePairMode(s.id, e.target.checked)}
                                 />
                                 <span>🧩 Bir vaqtda 2 fan</span>
                               </label>
@@ -1105,7 +1349,14 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                                       Guruhlar almashmaydi, ikkala ustoz ham shu soatda band bo'ladi.
                                     </div>
                                   </div>
-                                  <div className="cs-pair-badge">haftada {hoursNow} soat</div>
+                                  <div className="cs-pair-badges">
+                                    {(() => {
+                                      const n = pairMemberRows(s.id, a.pairGroupKey).length;
+                                      if (!n) return null;
+                                      return <div className="cs-pair-badge cs-pair-badge-link">🔗 {n + 1} sinf parallel</div>;
+                                    })()}
+                                    <div className="cs-pair-badge">haftada {hoursNow} soat</div>
+                                  </div>
                                 </div>
 
                                 {/* Ko'rgazmali sxema — jadvalda qanday ko'rinishi */}
@@ -1136,14 +1387,20 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                                       <span className="cs-split-label">👨‍🏫 Ustoz</span>
                                       <select className="form-control" value={a.teacherId || ""} onChange={e => updateAssignment(s.id, { teacherId: e.target.value })}>
                                         <option value="">— {s.name} ustozi —</option>
-                                        {availableTeachers.filter(t => t.id !== a.pairTeacherId).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                        {(() => {
+                                          const busy = new Set([a.pairTeacherId, ...pairMemberRows(s.id, a.pairGroupKey).map(m => m.a.pairTeacherId)].filter(Boolean));
+                                          return availableTeachers.filter(t => !busy.has(t.id)).map(t => <option key={t.id} value={t.id}>{t.name}</option>);
+                                        })()}
                                       </select>
                                     </div>
                                     <div className="cs-split-field">
                                       <span className="cs-split-label">🚪 Xona</span>
                                       <select className="form-control" value={a.roomId || ""} onChange={e => updateAssignment(s.id, { roomId: e.target.value })}>
                                         <option value="">Xonasiz</option>
-                                        {sortedRooms.filter(r => r.id !== a.pairRoomId).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                                        {(() => {
+                                          const busy = new Set([a.pairRoomId, ...pairMemberRows(s.id, a.pairGroupKey).map(m => m.a.pairRoomId)].filter(Boolean));
+                                          return sortedRooms.filter(r => !busy.has(r.id)).map(r => <option key={r.id} value={r.id}>{r.name}</option>);
+                                        })()}
                                       </select>
                                     </div>
                                   </div>
@@ -1182,6 +1439,147 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                                   </div>
                                 </div>
 
+                                {/* ——— PARALLEL SINFLAR ———
+                                    1-guruh fani bir nechta sinfda BITTA dars bo'lib,
+                                    bitta ustozdan o'tadi; 2-guruh esa har sinfda
+                                    O'Z fanini o'qiydi. Faqat shu rejimda ko'rinadi. */}
+                                {(() => {
+                                  const members = pairMemberRows(s.id, a.pairGroupKey);
+                                  const used = new Set([selectedClassId, ...members.map(m => m.cls.id)]);
+                                  const addable = sameLangClasses.filter(c => !used.has(c.id));
+                                  const full = members.length >= PAIR_MAX_EXTRA;
+                                  const g1Teacher = teachers.find(t => t.id === a.teacherId)?.name || "ustoz tanlanmagan";
+                                  return (
+                                    <div className="cs-pp">
+                                      <div className="cs-pp-head">
+                                        <div className="cs-pp-title">
+                                          🔗 Parallel sinflar
+                                          <span className="cs-pp-count">{members.length + 1} sinf</span>
+                                        </div>
+                                        <div className="cs-pp-desc">
+                                          <b>{s.name}</b> (1-guruh) tanlangan sinflarda <b>bitta dars</b> bo'lib,
+                                          ayni vaqtda va <b>bitta ustozdan</b> o'tadi. Har sinfning <b>2-guruhi</b> esa
+                                          o'z fanini o'qiydi — fanlar sinfma-sinf har xil bo'lishi mumkin.
+                                        </div>
+                                      </div>
+
+                                      <div className="cs-pp-list">
+                                        {/* Joriy sinf — sozlamalari yuqoridagi ikki kartada */}
+                                        <div className="cs-pp-card is-owner">
+                                          <div className="cs-pp-card-head">
+                                            <span className="cs-pp-cls">{selectedClass?.name || "Sinf"}</span>
+                                            <span className="cs-pp-tag">shu sinf</span>
+                                          </div>
+                                          <div className="cs-pp-pairline">
+                                            <span className="cs-pp-chip cs-pp-chip-1">1 · {s.name}</span>
+                                            <span className="cs-pp-plus">+</span>
+                                            <span className="cs-pp-chip cs-pp-chip-2">
+                                              2 · {subjects.find(x => x.id === a.pairSubjectId)?.name || "fan tanlanmagan"}
+                                            </span>
+                                          </div>
+                                          <div className="cs-pp-hint">Sozlamalari yuqoridagi ikki kartada</div>
+                                        </div>
+
+                                        {members.map(({ cls, a: m }) => (
+                                          <div className="cs-pp-card" key={cls.id}>
+                                            <div className="cs-pp-card-head">
+                                              <span className="cs-pp-cls">{cls.name}</span>
+                                              <span className="cs-pp-tag cs-pp-tag-link">🔗 parallel</span>
+                                              <button
+                                                type="button"
+                                                className="cs-pp-remove"
+                                                title="Guruhdan chiqarish"
+                                                onClick={() => removePairClass(s.id, cls.id, a.pairGroupKey)}
+                                              >✕</button>
+                                            </div>
+                                            <div className="cs-pp-pairline">
+                                              <span className="cs-pp-chip cs-pp-chip-1">1 · {s.name}</span>
+                                              <span className="cs-pp-plus">+</span>
+                                              <span className="cs-pp-chip cs-pp-chip-2">
+                                                2 · {subjects.find(x => x.id === m.pairSubjectId)?.name || "fan tanlanmagan"}
+                                              </span>
+                                            </div>
+                                            <div className="cs-pp-fields">
+                                              <label className="cs-pp-field">
+                                                <span className="cs-split-label">📚 2-guruh fani</span>
+                                                <select
+                                                  className="form-control"
+                                                  value={m.pairSubjectId || ""}
+                                                  onChange={e => updatePairMember(s.id, cls.id, { pairSubjectId: e.target.value, pairTeacherId: "" })}
+                                                >
+                                                  <option value="">— fanni tanlang —</option>
+                                                  {sortByName(subjects.filter(x => subjectLangOf(x) === classLangOf(cls) && x.id !== s.id))
+                                                    .map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
+                                                </select>
+                                              </label>
+                                              <label className="cs-pp-field">
+                                                <span className="cs-split-label">👨‍🏫 Ustoz</span>
+                                                <select
+                                                  className="form-control"
+                                                  disabled={!m.pairSubjectId}
+                                                  value={m.pairTeacherId || ""}
+                                                  onChange={e => updatePairMember(s.id, cls.id, { pairTeacherId: e.target.value })}
+                                                >
+                                                  <option value="">— ustozni tanlang —</option>
+                                                  {(() => {
+                                                    const busy = new Set([a.teacherId, a.pairTeacherId,
+                                                      ...members.filter(x => x.cls.id !== cls.id).map(x => x.a.pairTeacherId)].filter(Boolean));
+                                                    return teachersForSubject(m.pairSubjectId)
+                                                      .filter(t => !busy.has(t.id))
+                                                      .map(t => <option key={t.id} value={t.id}>{t.name}</option>);
+                                                  })()}
+                                                </select>
+                                              </label>
+                                              <label className="cs-pp-field">
+                                                <span className="cs-split-label">🚪 Xona</span>
+                                                <select
+                                                  className="form-control"
+                                                  value={m.pairRoomId || ""}
+                                                  onChange={e => updatePairMember(s.id, cls.id, { pairRoomId: e.target.value })}
+                                                >
+                                                  <option value="">Xonasiz</option>
+                                                  {(() => {
+                                                    const busy = new Set([a.roomId, a.pairRoomId,
+                                                      ...members.filter(x => x.cls.id !== cls.id).map(x => x.a.pairRoomId)].filter(Boolean));
+                                                    return sortedRooms.filter(r => !busy.has(r.id))
+                                                      .map(r => <option key={r.id} value={r.id}>{r.name}</option>);
+                                                  })()}
+                                                </select>
+                                              </label>
+                                            </div>
+                                            <div className="cs-pp-shared">
+                                              1-guruh: <b>{s.name}</b> · {g1Teacher} · haftada {hoursNow} soat
+                                              <em> — {selectedClass?.name} bilan bir xil</em>
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+
+                                      <div className="cs-pp-add">
+                                        {full ? (
+                                          <span className="cs-pp-add-note">
+                                            ✔ Guruh to'ldi — bir guruhga ko'pi bilan {PAIR_MAX_EXTRA + 1} ta sinf kiradi
+                                          </span>
+                                        ) : addable.length ? (
+                                          <>
+                                            <span className="cs-pp-add-label">➕ Parallel sinf qo'shish</span>
+                                            <select
+                                              className="form-control cs-pp-add-select"
+                                              value=""
+                                              onChange={e => addPairClass(s.id, e.target.value)}
+                                            >
+                                              <option value="">— sinfni tanlang —</option>
+                                              {addable.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                            </select>
+                                          </>
+                                        ) : (
+                                          <span className="cs-pp-add-note">Qo'shish uchun mos sinf yo'q</span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })()}
+
                                 {/* Yetishmayotgan sozlamalar — generatsiyadan oldin ko'rinsin */}
                                 {(() => {
                                   const warns = [];
@@ -1192,6 +1590,34 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
                                   if (a.pairSubjectId && isChecked(a.pairSubjectId)) {
                                     warns.push(`«${subjects.find(x => x.id === a.pairSubjectId)?.name}» ro'yxatda alohida ham belgilangan — belgini olib tashlang`);
                                   }
+
+                                  // ——— Parallel sinflar: hammasi BITTA soatda o'qiydi, resurs takrorlanmasin ———
+                                  const here = selectedClass?.name || "shu sinf";
+                                  const tSeen = new Map();
+                                  const rSeen = new Map();
+                                  if (a.teacherId) tSeen.set(a.teacherId, `${here} 1-guruhi`);
+                                  if (a.pairTeacherId) tSeen.set(a.pairTeacherId, `${here} 2-guruhi`);
+                                  if (a.roomId) rSeen.set(a.roomId, `${here} 1-guruhi`);
+                                  if (a.pairRoomId) rSeen.set(a.pairRoomId, `${here} 2-guruhi`);
+                                  pairMemberRows(s.id, a.pairGroupKey).forEach(({ cls, a: m }) => {
+                                    const where = `${cls.name} 2-guruhi`;
+                                    if (!m.pairSubjectId) warns.push(`${cls.name}: 2-guruh fani tanlanmagan`);
+                                    else if (!m.pairTeacherId) warns.push(`${cls.name}: 2-guruh ustozi tanlanmagan`);
+                                    if (m.pairSubjectId && (classSubjects[cls.id] || []).some(x => x.subjectId === m.pairSubjectId)) {
+                                      warns.push(`${cls.name}: «${subjects.find(x => x.id === m.pairSubjectId)?.name}» ro'yxatda alohida ham belgilangan`);
+                                    }
+                                    if (m.pairTeacherId) {
+                                      if (tSeen.has(m.pairTeacherId)) {
+                                        warns.push(`${teachers.find(t => t.id === m.pairTeacherId)?.name || "Ustoz"} bir vaqtda ikki joyda: ${tSeen.get(m.pairTeacherId)} va ${where}`);
+                                      } else tSeen.set(m.pairTeacherId, where);
+                                    }
+                                    if (m.pairRoomId) {
+                                      if (rSeen.has(m.pairRoomId)) {
+                                        warns.push(`${rooms.find(r => r.id === m.pairRoomId)?.name || "Xona"} xonasi bir vaqtda ikki guruhga berilgan: ${rSeen.get(m.pairRoomId)} va ${where}`);
+                                      } else rSeen.set(m.pairRoomId, where);
+                                    }
+                                  });
+
                                   if (!warns.length) return null;
                                   return (
                                     <div className="cs-pair-warn">

@@ -87,6 +87,10 @@ export function normalizeAssignment(item, subject) {
     pairSubjectId: item.pairSubjectId || "",
     pairTeacherId: item.pairTeacherId || "",
     pairRoomId: item.pairRoomId || "",
+    // PARALLEL SINFLAR: shu kalit bir nechta sinfning "bir vaqtda 2 fan"
+    // sozlamasini BITTA darsga bog'laydi — 1-guruh fanini hamma sinf birga,
+    // bitta ustozdan o'qiydi; 2-guruh fani esa har sinfda boshqa bo'lishi mumkin.
+    pairGroupKey: (item.pairGroupKey || "").trim(),
     isCore: Boolean(item.isCore),
     // ——— ORA KUNDA (kun oralab): Du → Cho → Ju ———
     spacedDays: Boolean(item.spacedDays),
@@ -332,6 +336,55 @@ export function validateScheduleData(classes, subjects, teachers, rooms, timeslo
             errors.push(`${cls.name}: ${subject.name} uchun 1-ustoz va 2-ustoz bir xil bo'lmasin`);
           }
         }
+      }
+    });
+  });
+
+  // ——— BIR VAQTDA 2 FAN: PARALLEL SINFLAR (pairGroupKey) ———
+  // Guruhdagi sinflar bitta soatda o'qiydi, shuning uchun 2-guruh
+  // ustozlari va xonalari sinflar bo'ylab TAKRORLANMASLIGI shart.
+  const pairGroups = new Map();
+  classes.forEach((cls) => {
+    (classSubjects?.[cls.id] || []).forEach((raw) => {
+      const key = String(raw?.pairGroupKey || "").trim();
+      if (!raw?.pairEnabled || !key) return;
+      const gk = `${raw.subjectId}__${key}`;
+      if (!pairGroups.has(gk)) pairGroups.set(gk, []);
+      pairGroups.get(gk).push({ cls, a: raw });
+    });
+  });
+  pairGroups.forEach((members) => {
+    if (members.length < 2) return;
+    const names = members.map((m) => m.cls.name).join(", ");
+    const base = members[0].a;
+    const subject = subjects.find((s) => s.id === base.subjectId);
+    const label = `${names} — ${subject?.name || "Fan"} (parallel)`;
+    // 1-guruh: fan, ustoz va soat hamma sinfda bir xil bo'lishi kerak
+    if (members.some((m) => m.a.teacherId !== base.teacherId)) {
+      errors.push(`${label}: 1-guruh ustozi barcha sinflarda bir xil bo'lishi kerak`);
+    }
+    if (members.some((m) => Number(m.a.weeklyHours || 0) !== Number(base.weeklyHours || 0))) {
+      errors.push(`${label}: haftalik soat barcha sinflarda bir xil bo'lishi kerak`);
+    }
+    // 2-guruh ustozlari — bir vaqtda o'qiydi, takrorlanmasin
+    const tSeen = new Map();
+    const rSeen = new Map();
+    if (base.roomId) rSeen.set(base.roomId, "1-guruh");
+    if (base.teacherId) tSeen.set(base.teacherId, "1-guruh");
+    members.forEach((m) => {
+      const t = m.a.pairTeacherId;
+      if (t) {
+        if (tSeen.has(t)) {
+          const who = teachers.find((x) => x.id === t)?.name || "Ustoz";
+          errors.push(`${label}: ${who} bir vaqtda ikki joyda (${tSeen.get(t)} va ${m.cls.name} 2-guruhi)`);
+        } else tSeen.set(t, `${m.cls.name} 2-guruhi`);
+      }
+      const r = m.a.pairRoomId;
+      if (r) {
+        if (rSeen.has(r)) {
+          const rn = rooms.find((x) => x.id === r)?.name || "Xona";
+          errors.push(`${label}: ${rn} xonasi bir vaqtda ikki guruhga berilgan (${rSeen.get(r)} va ${m.cls.name} 2-guruhi)`);
+        } else rSeen.set(r, `${m.cls.name} 2-guruhi`);
       }
     });
   });
@@ -743,6 +796,9 @@ function attemptSchedule(
   const simpleRequests = [];
   const groupMap = new Map();
   const levelGroupMap = new Map();
+  // "Bir vaqtda 2 fan" so'rovlari. Kalit — pairGroupKey bo'lsa guruh
+  // bo'yicha (bir nechta sinf birga), aks holda har sinf uchun alohida.
+  const pairMap = new Map();
   shuffle(classes, rng).forEach((cls) => {
     const assigned = shuffle(classSubjects[cls.id] || [], rng);
     assigned.forEach((raw) => {
@@ -809,24 +865,49 @@ function attemptSchedule(
       // AYNI PAYTDA o'qiydi. Ikki ustoz ham shu soatda band bo'ladi,
       // ikkala fanning kunlik limiti ham hisobga olinadi (`swapSubjectId`
       // orqali — u generatorda "ikkinchi fan indeksi" sifatida ishlaydi).
+      // PARALLEL SINFLAR (pairGroupKey): bir nechta sinf 1-guruh fanini
+      // BIRGA, bitta ustozdan o'qiydi; 2-guruh fani har sinfda boshqa
+      // bo'lishi mumkin. Kalitsiz — eski, bir sinflik xatti-harakat.
       if (a.pairEnabled && a.pairSubjectId && a.pairTeacherId) {
-        blocks.forEach((blockSize) => {
-          simpleRequests.push({
-            type: "pair", classIds: [cls.id],
-            subjectId: a.subjectId, pairSubjectId: a.pairSubjectId,
-            // kunlik fan limiti ikkala fan uchun ham hisoblansin
-            swapSubjectId: a.pairSubjectId,
-            teacherId: a.teacherId, pairTeacherId: a.pairTeacherId,
-            teacherIds: [a.teacherId, a.pairTeacherId],
-            roomId: a.roomId || "", pairRoomId: a.pairRoomId || "",
-            roomIds: [a.roomId || "", a.pairRoomId || ""].filter(Boolean),
+        const pgKey = String(a.pairGroupKey || "").trim();
+        // Guruh kaliti 1-guruh fani va ustoziga ham bog'lanadi — noto'g'ri
+        // sozlangan sinf boshqa guruhga qo'shilib ketmasin.
+        const key = pgKey
+          ? `PG__${pgKey}__${a.subjectId}__${a.teacherId}`
+          : `ONE__${cls.id}__${a.subjectId}__${a.pairSubjectId}`;
+        if (!pairMap.has(key)) {
+          pairMap.set(key, {
+            type: "pair", classIds: [],
+            subjectId: a.subjectId,
+            teacherId: a.teacherId, roomId: a.roomId || "",
+            // 2-guruh: har sinf uchun o'z fani/ustozi/xonasi
+            pairGroups: [],
             groupName1: a.groupName1 || "1-guruh",
             groupName2: a.groupName2 || "2-guruh",
-            pairKey: `${cls.id}__${a.subjectId}__${a.pairSubjectId}`,
-            blockSize, priority: a.weeklyHours + (blockSize === 2 ? 10 : 0) + 18,
+            blocks, weeklyHours: Number(a.weeklyHours || 0),
             isCore: a.isCore, spacedDays: a.spacedDays,
+            pairKey: pgKey
+              ? `PG__${pgKey}__${a.subjectId}`
+              : `${cls.id}__${a.subjectId}__${a.pairSubjectId}`,
           });
-        });
+        }
+        const pg = pairMap.get(key);
+        if (a.isCore) pg.isCore = true;
+        if (a.spacedDays) pg.spacedDays = true;
+        if (!pg.classIds.includes(cls.id)) {
+          pg.classIds.push(cls.id);
+          pg.pairGroups.push({
+            classId: cls.id,
+            subjectId: a.pairSubjectId,
+            teacherId: a.pairTeacherId,
+            roomId: a.pairRoomId || "",
+          });
+        }
+        // Soat turlicha bo'lsa — eng kattasi olinadi (soat yo'qolmasin)
+        if (blocks.reduce((x, y) => x + y, 0) > pg.blocks.reduce((x, y) => x + y, 0)) {
+          pg.blocks = blocks;
+          pg.weeklyHours = Number(a.weeklyHours || 0);
+        }
         return;
       }
 
@@ -884,6 +965,27 @@ function attemptSchedule(
     });
   });
 
+  const pairRequests = [];
+  for (const pg of pairMap.values()) {
+    const first = pg.pairGroups[0] || {};
+    const teacherIds = [pg.teacherId, ...pg.pairGroups.map((g) => g.teacherId)].filter(Boolean);
+    const roomIds = [pg.roomId, ...pg.pairGroups.map((g) => g.roomId)].filter(Boolean);
+    pg.blocks.forEach((blockSize) => {
+      pairRequests.push({
+        ...pg,
+        // Eski maydonlar (validatsiya/tahlil kodlari uchun) — 1-a'zoniki
+        pairSubjectId: first.subjectId || "",
+        pairTeacherId: first.teacherId || "",
+        pairRoomId: first.roomId || "",
+        // Kunlik fan limiti 2-fan uchun ham hisoblansin
+        swapSubjectId: first.subjectId || "",
+        teacherIds, roomIds, blockSize,
+        priority: pg.weeklyHours + (blockSize === 2 ? 10 : 0) + 18
+          + (pg.classIds.length > 1 ? 12 : 0),
+      });
+    });
+  }
+
   const groupRequests = [];
   for (const group of groupMap.values()) {
     group.blocks.forEach((blockSize) => { groupRequests.push({ ...group, blockSize }); });
@@ -894,7 +996,7 @@ function attemptSchedule(
     group.blocks.forEach((blockSize) => { groupRequests.push({ ...group, teacherIds, roomIds, blockSize }); });
   }
 
-  const allRequests = [...groupRequests, ...simpleRequests];
+  const allRequests = [...groupRequests, ...pairRequests, ...simpleRequests];
   const teacherTotalReq = {};
   allRequests.forEach((r) => {
     (r.teacherIds || [r.teacherId]).filter(Boolean).forEach((id) => {
@@ -930,10 +1032,16 @@ function attemptSchedule(
       if (!teacherSubjSet.get(tB.id).has(req.swapSubjectId)) return false;
     } else if (req.type === "pair") {
       const tA = teacherById.get(req.teacherId);
-      const tB = teacherById.get(req.pairTeacherId);
-      if (!tA || !tB) return false;
-      if (!teacherSubjSet.get(tA.id).has(req.subjectId)) return false;
-      if (!teacherSubjSet.get(tB.id).has(req.pairSubjectId)) return false;
+      if (!tA || !teacherSubjSet.get(tA.id).has(req.subjectId)) return false;
+      const groups = req.pairGroups || [];
+      if (!groups.length) return false;
+      for (const g of groups) {
+        const tB = teacherById.get(g.teacherId);
+        if (!tB || !g.subjectId) return false;
+        if (!subjectById.has(g.subjectId)) return false;
+        if (g.subjectId === req.subjectId) return false;
+        if (!teacherSubjSet.get(tB.id).has(g.subjectId)) return false;
+      }
     } else if (req.type === "weekAlt") {
       const tA = teacherById.get(req.teacherId);
       const tB = teacherById.get(req.altTeacherId);
@@ -958,12 +1066,26 @@ function attemptSchedule(
     req.tIdxs = req.tids.map((tid) => tIdxOf.get(tid)).filter((x) => x !== undefined);
     req.sIdx = sIdxOf.get(req.subjectId) ?? -1;
     req.swapSIdx = req.swapSubjectId ? (sIdxOf.get(req.swapSubjectId) ?? -1) : -1;
+    // "Bir vaqtda 2 fan" parallel sinflarda: 2-guruh fani HAR SINFDA boshqa
+    // bo'lishi mumkin — kunlik fan limiti sinfma-sinf hisoblanadi.
+    req.perClassSIdx = null;
+    if (req.type === "pair" && Array.isArray(req.pairGroups) && req.pairGroups.length) {
+      const sidByClass = new Map(req.pairGroups.map((g) => [g.classId, g.subjectId]));
+      req.perClassSIdx = req.classIds
+        .filter((cid) => cIdxOf.get(cid) !== undefined)
+        .map((cid) => sIdxOf.get(sidByClass.get(cid)) ?? -1);
+    }
     req.roomArrs = req.rids.map((rid) => roomGrid(rid));
     // ——— Kunlik fan limiti (qattiq) ———
     req.dayCap = Math.max(
       dayCapFor(req.cIdxs, req.sIdx, req.blockSize),
       req.swapSIdx >= 0 ? dayCapFor(req.cIdxs, req.swapSIdx, req.blockSize) : 0
     );
+    if (req.perClassSIdx) {
+      req.perClassSIdx.forEach((si, k) => {
+        if (si >= 0) req.dayCap = Math.max(req.dayCap, dayCapFor([req.cIdxs[k]], si, req.blockSize));
+      });
+    }
     req.capRelax = 0;
     req.spacedRelax = 0;
     // ——— Kunlik yuk me'yori (qattiq): 5/7 emas, 6/6 bo'lsin ———
@@ -1009,12 +1131,14 @@ function attemptSchedule(
     const cap = (req.dayCap || req.blockSize) + (req.capRelax || 0) + (capEmergency ? 1 : 0);
     const exD = req.placedRef && req.placedRef.active ? req.placedRef.d : -1;
     const bs = req.blockSize;
-    for (const ci of req.cIdxs) {
+    for (let k = 0; k < req.cIdxs.length; k++) {
+      const ci = req.cIdxs[k];
       let n = classDailySubj[(ci * D + d) * S + req.sIdx];
       if (d === exD) n -= bs;
       if (n + bs > cap) return false;
-      if (req.swapSIdx >= 0) {
-        let m = classDailySubj[(ci * D + d) * S + req.swapSIdx];
+      const si2 = req.perClassSIdx ? req.perClassSIdx[k] : req.swapSIdx;
+      if (si2 >= 0) {
+        let m = classDailySubj[(ci * D + d) * S + si2];
         if (d === exD) m -= bs;
         if (m + bs > cap) return false;
       }
@@ -1186,23 +1310,27 @@ function attemptSchedule(
       }];
     }
     if (req.type === "pair") {
-      // Ikki guruh, ikki HAR XIL fan, bitta soat. `pairKey` ikkalasini
+      // Ikki guruh, ikki HAR XIL fan, bitta soat. `pairKey` ularni
       // bitta "karta" qilib bog'laydi — jadvalda birga ko'rinadi va
       // birga ko'chadi (Schedule.jsx groupLessons, moveResolver sameCard).
-      return [
-        {
-          subjectId: req.subjectId, classId: req.classIds[0], classIds: req.classIds,
-          teacherId: req.teacherId, roomId: req.roomId || "",
-          groupPart: req.groupName1, splitEnabled: true, pairEnabled: true,
-          pairKey: req.pairKey, blockSize: req.blockSize, blockIndex,
-        },
-        {
-          subjectId: req.pairSubjectId, classId: req.classIds[0], classIds: req.classIds,
-          teacherId: req.pairTeacherId, roomId: req.pairRoomId || "",
+      //
+      // 1-guruh darsi PARALLEL: barcha sinflar uchun bitta yozuv (classIds).
+      // 2-guruh darsi esa har sinfda ALOHIDA — fani boshqa bo'lishi mumkin.
+      const out = [{
+        subjectId: req.subjectId, classId: req.classIds[0], classIds: req.classIds,
+        teacherId: req.teacherId, roomId: req.roomId || "",
+        groupPart: req.groupName1, splitEnabled: true, pairEnabled: true,
+        pairKey: req.pairKey, blockSize: req.blockSize, blockIndex,
+      }];
+      (req.pairGroups || []).forEach((g) => {
+        out.push({
+          subjectId: g.subjectId, classId: g.classId, classIds: [g.classId],
+          teacherId: g.teacherId, roomId: g.roomId || "",
           groupPart: req.groupName2, splitEnabled: true, pairEnabled: true,
           pairKey: req.pairKey, blockSize: req.blockSize, blockIndex,
-        },
-      ];
+        });
+      });
+      return out;
     }
     if (req.type === "split") {
       return req.splitGroups.map((g) => ({
@@ -1229,12 +1357,14 @@ function attemptSchedule(
   function applyCounters(req, d, sign) {
     const bs = sign * req.blockSize;
     for (const ti of req.tIdxs) { teacherLoadArr[ti] += bs; teacherDailyArr[ti * D + d] += bs; }
-    for (const ci of req.cIdxs) {
+    for (let k = 0; k < req.cIdxs.length; k++) {
+      const ci = req.cIdxs[k];
+      const si2 = req.perClassSIdx ? req.perClassSIdx[k] : req.swapSIdx;
       classDailySubj[(ci * D + d) * S + req.sIdx] += bs;
-      if (req.swapSIdx >= 0) classDailySubj[(ci * D + d) * S + req.swapSIdx] += bs;
+      if (si2 >= 0) classDailySubj[(ci * D + d) * S + si2] += bs;
       classDayCount[ci * D + d] += bs;
       bumpKeyIdx(ci, req.sIdx, bs);
-      if (req.swapSIdx >= 0) bumpKeyIdx(ci, req.swapSIdx, bs);
+      if (si2 >= 0) bumpKeyIdx(ci, si2, bs);
     }
   }
   function place(req, d, i) {

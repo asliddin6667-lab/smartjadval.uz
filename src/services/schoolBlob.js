@@ -114,6 +114,10 @@ export const CS_DEFAULTS = {
   pairSubjectId: "",
   pairTeacherId: "",
   pairRoomId: "",
+  // Bir vaqtda 2 fan + PARALLEL sinflar: 1-guruh fani bir nechta sinfda
+  // UMUMIY (bitta dars), 2-guruh fani esa har sinfda boshqa bo'lishi mumkin.
+  // Shu kalit bir guruhga kiruvchi sinflarni bog'laydi.
+  pairGroupKey: "",
 };
 
 // Bo'sh massiv sifatida tashlanadigan maydonlar

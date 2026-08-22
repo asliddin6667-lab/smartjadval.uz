@@ -31,7 +31,7 @@ export function subjectVisibleTo(s, currentUserId) {
   return s.ownerId === currentUserId;
 }
 
-export default function SubjectsPage({ subjects, setSubjects, toast, currentUser = null, currentUserId = null }) {
+export default function SubjectsPage({ subjects, setSubjects, classSubjects = {}, setClassSubjects = null, toast, currentUser = null, currentUserId = null }) {
   // Foydalanuvchi ID si: App.jsx `currentUser` ni pageProps orqali uzatadi
   const uid = currentUserId || currentUser?.id || null;
 
@@ -110,9 +110,32 @@ export default function SubjectsPage({ subjects, setSubjects, toast, currentUser
   }
 
   function handleDelete() {
+    // Fan o'chirilganda "Sinf fanlari" dagi biriktirmalar ham tozalanadi.
+    // Aks holda ular ko'rinmas "yetim" yozuv bo'lib qoladi va tahlilda
+    // "Noma'lum fan" nomi bilan soxta vakant soat bo'lib chiqaveradi.
+    let orphans = 0;
+    if (setClassSubjects) {
+      const next = {};
+      for (const [clsId, list] of Object.entries(classSubjects || {})) {
+        if (!Array.isArray(list)) continue;
+        const kept = [];
+        for (const a of list) {
+          if (!a) continue;
+          if (a.subjectId === deleteId) { orphans += 1; continue; }
+          // O'chirilgan fanga qo'shimcha havolalar: almashinuv / juft-hafta / 2-fan
+          const patch = {};
+          if (a.swapSubjectId === deleteId) { patch.swapEnabled = false; patch.swapSubjectId = ""; patch.swapTeacherId = ""; patch.swapRoomId = ""; }
+          if (a.weekAltSubjectId === deleteId) { patch.weekAltEnabled = false; patch.weekAltSubjectId = ""; patch.weekAltTeacherId = ""; patch.weekAltRoomId = ""; }
+          if (a.pairSubjectId === deleteId) { patch.pairEnabled = false; patch.pairGroupKey = ""; patch.pairSubjectId = ""; patch.pairTeacherId = ""; patch.pairRoomId = ""; }
+          kept.push(Object.keys(patch).length ? { ...a, ...patch } : a);
+        }
+        next[clsId] = kept;
+      }
+      setClassSubjects(next);
+    }
     setSubjects(subjects.filter(s => s.id !== deleteId));
     setDeleteId(null);
-    toast("Fan o'chirildi", "error");
+    toast(orphans ? `Fan o'chirildi (${orphans} ta sinf biriktirmasi ham tozalandi)` : "Fan o'chirildi", "error");
   }
 
   function addStandardSubjects(lang = "uz") {

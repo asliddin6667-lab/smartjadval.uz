@@ -176,12 +176,27 @@ SOATDA turli fan o'qiydi (masalan 1-guruh Ona tili, 2-guruh Rus tili). `swapEnab
 dan farqi: guruhlar almashmaydi va 2 soatlik blok talab qilinmaydi.
 Sozlama maydonlari: `pairEnabled`, `pairSubjectId`, `pairTeacherId`, `pairRoomId`
 (guruh nomlari — `groupName1`/`groupName2`, 1-guruh ustozi/xonasi — `teacherId`/`roomId`).
-Generatorda `type: "pair"` so'rovi; ikkala dars yozuvi `pairKey` bilan bog'lanadi —
+Generatorda `type: "pair"` so'rovi; dars yozuvlari `pairKey` bilan bog'lanadi —
 shu kalit ularni [Schedule.jsx](src/pages/Schedule.jsx) `groupLessons()` da BITTA
 karta qiladi va [moveResolver.js](src/utils/moveResolver.js) `sameCard()` da birga
-ko'chiradi. Kunlik fan limiti uchun 2-fan `swapSubjectId` sifatida uzatiladi.
-2-fanni "Sinf fanlari" ro'yxatida ALOHIDA belgilash shart emas (belgilansa — soat
-ikki marta hisoblanadi, UI ogohlantiradi).
+ko'chiradi. 2-fanni "Sinf fanlari" ro'yxatida ALOHIDA belgilash shart emas
+(belgilansa — soat ikki marta hisoblanadi, UI ogohlantiradi).
+
+**Parallel sinflar (`pairGroupKey`).** Bir nechta sinf 1-guruh fanini BIRGA,
+bitta ustozdan o'qishi mumkin, 2-guruh fani esa har sinfda BOSHQA bo'ladi
+(11-A: Matematika + SAT, 11-B: Matematika + Rus tili — Matematika bitta dars).
+Model **oynali**: guruhga kirgan HAR BIR sinfda o'z `classSubjects` yozuvi turadi,
+ularni `pairGroupKey` bog'laydi. 1-guruhga tegishli maydonlar
+(`weeklyHours, teacherId, roomId, groupName1/2, allowDouble, isCore, spacedDays`
+— `PAIR_SHARED_FIELDS`) barcha a'zoda BIR XIL yoziladi; `pairSubjectId/
+pairTeacherId/pairRoomId` esa sinfga xos. Guruhga ko'pi bilan 3 sinf kiradi
+(`PAIR_MAX_EXTRA = 2`). UI — [ClassSubjects.jsx](src/pages/ClassSubjects.jsx)
+"🔗 Parallel sinflar" bo'limi, faqat `pairEnabled` yoqilganda ko'rinadi.
+Generatorda a'zolar `pairMap` orqali BITTA so'rovga birlashadi: `classIds` —
+hamma sinf, `pairGroups[]` — har sinfning 2-guruhi. Kunlik fan limiti
+sinfma-sinf hisoblanadi (`req.perClassSIdx`), guruhsiz holatda esa avvalgidek
+`swapSubjectId` ishlaydi. Ustoz soatlarida 1-guruh ustozi guruh bo'yicha BIR
+MARTA sanaladi (ClassSubjects `computeTeacherHours`, TeacherAvailability).
 
 ### Jadval dvigatellari
 
