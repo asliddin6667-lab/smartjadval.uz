@@ -247,15 +247,19 @@ Ustuvorlik tartibi qat'iy: **joylangan soat → oyna → kunlik yuk tengligi**.
 Shuning uchun oxirgi bosqichda (oyna baribir qolsa) kunlik yuk chegarasi 1 taga
 yon beradi — kun o'rtasida nazoratsiz qolgan sinf notekis yukdan yomonroq.
 
-**Soat yo'qolmasligi uchun ikkita oxirgi chora** (`splitBlockAndPlace`,
-`restorePlace`):
+**«2 SOAT BLOK» — BUZILMAYDIGAN QOIDA.** Blok hech qachon ikkita alohida
+darsga bo'linmaydi: agar sozlamada 2 soat blok belgilangan bo'lsa, u ALBATTA
+ketma-ket ikki soatda turadi. Blokka sinf, ustoz va xona bir vaqtda bo'sh
+KETMA-KET ikki soat kerak; tor jadvalda bunday juftlik o'z-o'zidan qolmasligi
+mumkin. Shuning uchun `forceBlockPlace()` **yo'lni tozalaydi**: to'sib turgan
+darslar oddiy urinishdagidan ancha chuqur zanjir bilan (`EJECT_MAX`) boshqa
+kataklarga suriladi va shu paytda `solveSlack` vaqtincha to'liq ochiladi.
+Chuqur qidiruv qimmat, shuning uchun butun urinishga `forceBudgetMs = 2500`
+umumiy vaqt chegarasi qo'yilgan.
 
-- **2 soatlik blokni bo'lish.** 2 soatlik blokka KETMA-KET ikki bo'sh soat
-  kerak (sinf + ustoz + xona bir vaqtda). Tor jadvalda bunday joy topilmasa,
-  blok ikkita 1 soatlik darsga bo'linadi — "2 soat blok" sozlamasi shu darsda
-  buziladi, lekin soat yo'qolmaydi. `swapEnabled` darsga tegilmaydi (guruh
-  almashinuvi aynan 2 soatga bog'liq).
-- **Bekor qilishda BAND katakka qo'yish taqiqlangan.** `balancePass` ko'chirishni
+**Bekor qilishda soat yo'qolmasligi uchun:**
+
+- **BAND katakka qo'yish taqiqlangan.** `balancePass` ko'chirishni
   bekor qilganda darsni eski katagiga qaytaradi. U katak oraliqda band bo'lib
   qolgan bo'lishi mumkin (kun qayta yig'ilgan) — ilgari dars baribir o'sha
   yerga qo'yilar va **ustoz/xona bir vaqtda ikki joyda** bo'lib qolardi.

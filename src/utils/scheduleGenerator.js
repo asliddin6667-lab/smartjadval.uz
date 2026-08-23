@@ -2052,33 +2052,40 @@ function attemptSchedule(
     });
     return false;
   }
-  // ——— 2 SOATLIK BLOKNI IKKIGA BO'LISH ———
-  // 2 soatlik blokka KETMA-KET ikki bo'sh soat kerak: sinf, ustoz va xona
-  // uchalasi ham bir vaqtda bo'sh bo'lishi shart. Tor jadvalda (ikki smena,
-  // qisqartirilgan shanba, hovuz darslari) bunday joy topilmasligi mumkin.
-  // Shunda blok ikkita 1 soatlik darsga bo'linadi: "2 soat blok" sozlamasi
-  // shu dars uchun buziladi, lekin SOAT YO'QOLMAYDI — bu muhimroq.
-  function splitBlockAndPlace(req) {
+  // ——— 2 SOATLIK BLOKNI MAJBURAN BUTUN HOLDA JOYLASH ———
+  // «2 soat blok» sozlamasi QAT'IY: blok hech qachon ikkita alohida darsga
+  // bo'linmaydi. 2 soatlik blokka KETMA-KET ikki bo'sh soat kerak (sinf,
+  // ustoz va xona uchalasi ham bir vaqtda bo'sh bo'lishi shart), tor
+  // jadvalda esa bunday juftlik o'z-o'zidan qolmasligi mumkin.
+  // Shuning uchun bu yerda YO'L TOZALANADI: to'sib turgan darslar oddiy
+  // urinishdagidan ancha chuqur zanjir bilan boshqa kataklarga suriladi.
+  // Faqat joylashmay qolgan blok uchun ishlaydi — umumiy tezlikka ta'sir
+  // qilmaydi, chunki bunday bloklar juda kam bo'ladi.
+  const EJECT_MAX = { maxDepth: 6, blockersRoot: 8, blockersDeep: 5, tryRoot: 80, tryDeep: 24 };
+  // Chuqur qidiruv qimmat: butun urinish bo'yicha umumiy vaqt chegarasi.
+  // Aks holda bir necha "qaysar" blok generatsiyani cho'zib yuborardi.
+  let forceBudgetMs = 2500;
+  function forceBlockPlace(req) {
     if ((req.blockSize || 1) < 2) return false;
-    // Guruhlar almashinuvi aynan 2 soatga bog'liq — uni bo'lish mumkin emas
-    if (req.type === "swap") return false;
-    let placedNow = 0;
-    for (let k = 0; k < 2; k++) {
-      const h = {
-        ...req, blockSize: 1, placedRef: null, failed: false, done: true,
-        balRelax: 3, capRelax: 2, spacedRelax: 2, splitFromBlock: true,
-      };
-      computeDayCap(h);
-      h.domain = buildDomain(h);
-      if (!h.domain.length) break;
-      refreshFeas(h);
-      const cand = h.feasCount > 0 ? bestCandidate(h, false) : null;
-      if (cand) place(h, cand.d, cand.i);
-      else if (!ejectAndPlace(h, EJECT_INTENSE)) break;
-      pending.push(h);
-      placedNow += 1;
-    }
-    return placedNow > 0;
+    if (forceBudgetMs <= 0) return false;
+    const savedSlack = solveSlack;
+    const savedDeadline = deadline;
+    // Zanjir ishlashi uchun BUTUN taxta bo'yicha chegara ochiladi va
+    // qidiruvga qo'shimcha (cheklangan) vaqt beriladi.
+    const slice = Math.min(900, forceBudgetMs);
+    const t0 = Date.now();
+    solveSlack = 3;
+    deadline = Math.max(deadline, t0 + slice);
+    refreshFeas(req);
+    const cand = req.feasCount > 0 ? bestCandidate(req, false) : null;
+    let ok;
+    if (cand) { place(req, cand.d, cand.i); ok = true; }
+    else ok = ejectAndPlace(req, EJECT_MAX);
+    deadline = savedDeadline;
+    solveSlack = savedSlack;
+    forceBudgetMs -= Date.now() - t0;
+    if (ok) markAffected(req);
+    return ok;
   }
 
   if (deferred.length) {
@@ -2094,8 +2101,8 @@ function attemptSchedule(
       const cand = req.feasCount > 0 ? bestCandidate(req, false) : null;
       if (cand) { place(req, cand.d, cand.i); markAffected(req); continue; }
       if (ejectAndPlace(req, EJECT_INTENSE)) continue;
-      // 2-chora: 2 soatlik blokni ikkita 1 soatlik darsga bo'lish
-      if (splitBlockAndPlace(req)) continue;
+      // 2-chora: 2 soatlik blok uchun yo'lni chuqur zanjir bilan tozalash
+      if (forceBlockPlace(req)) continue;
       // 3-chora: shu fanning boshqa ustoziga o'tkazish
       if (!tryTeacherSwap(req)) still.push(req);
     }
