@@ -1517,9 +1517,15 @@ function attemptSchedule(
     // Kunlik me'yordan oshib ketmasin — darslar kunlarga teng tarqalsin
     let dayCapPenalty = 0;
     for (const ci of req.cIdxs) {
-      const n = classDayCount[ci * D + d] + blockSize;
+      const n0 = classDayCount[ci * D + d];
+      const n = n0 + blockSize;
       const hiD = balHi[ci * D + d];
+      const loD = balLo[ci * D + d];
       if (n > hiD) dayCapPenalty += (n - hiD) * DAYCAP_W;
+      // KAM TO'LGAN KUNGA TORTISH: me'yorga yetmagan kun avval to'ldiriladi.
+      // Busiz "bir kun 3 soat, boshqa kun 6 soat" holati kelib chiqadi —
+      // yuqoridagi jarima faqat oshib ketishni ushlaydi, kam qolishni emas.
+      if (n0 < loD) dayCapPenalty -= Math.min(blockSize, loD - n0) * DAYFILL_W;
     }
     let teacherPenalty = 0;
     for (const ti of req.tIdxs) { teacherPenalty += teacherLoadArr[ti] + teacherDailyArr[ti * D + d]; }
@@ -1560,6 +1566,7 @@ function attemptSchedule(
     return best;
   }
   const DAYCAP_W = 800;
+  const DAYFILL_W = 600;   // kam to'lgan kunga tortish (oyna jarimasidan past)
   const SPACED_W = 900;
   const REPEAT_HARD_W = 260; // bir kunda fan takrorlansa — sezilarli jarima
   // Kun o'rtasida bo'sh soat (oyna) — eng og'ir jarima: sinf nazoratsiz qoladi
@@ -2797,9 +2804,20 @@ function attemptSchedule(
         if (classDeviation(ci) === 0) break;
         const overs = [];
         const unders = [];
+        let hasOver = false;
         for (let d = 0; d < D; d++) {
           if (!dayUsable[ci * D + d]) continue;
+          if (classDayCount[ci * D + d] > balHi[ci * D + d]) hasOver = true;
           if (classDayCount[ci * D + d] < balLo[ci * D + d]) unders.push(d);
+        }
+        // Me'yordan OSHGAN kun bo'lsa — hali to'lmagan (hi dan past) kunlar ham
+        // qabul qiladi: 6/5/5/4/4 → 5/5/5/5/4. Faqat "lo dan past" kunlar bilan
+        // cheklansak, aynan shunday holat tuzatilmay qolardi.
+        if (hasOver) {
+          for (let d = 0; d < D; d++) {
+            if (!dayUsable[ci * D + d] || unders.includes(d)) continue;
+            if (classDayCount[ci * D + d] < balHi[ci * D + d]) unders.push(d);
+          }
         }
         for (let d = 0; d < D; d++) {
           if (!dayUsable[ci * D + d]) continue;
@@ -2809,26 +2827,31 @@ function attemptSchedule(
           if (n > balHi[ci * D + d] || (unders.length && n > balLo[ci * D + d])) overs.push(d);
         }
         overs.sort((a, b) => classDayCount[ci * D + b] - classDayCount[ci * D + a]);
+        // Eng bo'sh kun birinchi bo'lib to'ldiriladi
+        unders.sort((a, b) => classDayCount[ci * D + a] - classDayCount[ci * D + b]);
         if (!overs.length || !unders.length) break;
         let anyDone = false;
         for (const overD of overs) {
         for (const underD of unders) {
         if (anyDone || Date.now() > stop) break;
-        let lastOcc = -1;
-        const oBase = ci * DT + overD * T;
-        for (let k = 0; k < T; k++) if (classGrid[oBase + k]) lastOcc = k;
-        // Faqat kunning OXIRGI darsi ko'chiriladi — shunda o'sha kunda
-        // o'rta katak bo'shab, yangi oyna paydo bo'lmaydi.
+        // Kunning BARCHA darslari nomzod, lekin oxirgisidan boshlanadi: oxirgi
+        // dars ketsa oyna umuman paydo bo'lmaydi, o'rtadagisi ketsa esa kun
+        // prefiks bo'yicha qayta yig'iladi (quyida gapBefore bilan tekshiriladi
+        // — yomonlashsa ko'chirish bekor qilinadi).
+        // Avval faqat oxirgi dars ko'chirilardi: u qimirlamasa (guruhli dars,
+        // ustoz band …) butun kun qotib qolardi — "3 soat / 6 soat"
+        // notekisligining asosiy sababi aynan shu edi.
         const movers = [];
         for (const p of placements) {
           if (!p.active || p.locked || p.d !== overD) continue;
           if (p.req.placedRef !== p) continue;
           if (!p.req.cIdxs.includes(ci)) continue;
-          if (p.startIdx + p.req.blockSize - 1 !== lastOcc) continue;
           movers.push(p);
         }
         let done = false;
-        for (const p0 of shuffle(movers, rng)) {
+        const ordered = shuffle(movers, rng)
+          .sort((a, b) => (b.startIdx + b.req.blockSize) - (a.startIdx + a.req.blockSize));
+        for (const p0 of ordered) {
           if (Date.now() > stop) return fixed;
           const req = p0.req;
           if (!req.domain) continue;
@@ -2842,22 +2865,44 @@ function attemptSchedule(
             const uni = req.cIdxs;
             const before = compactCost(uni);
             const gapBefore = _lastGap;
+            const gapAllBefore = headGapsOf(ALL_C);
             const oldD = cur.d;
             const oldI = cur.startIdx;
             unplace(cur);
             place(req, c.d, c.i);
             let cNow = compactCost(uni);
             let gNow = _lastGap;
+            let rebuilt = false;
             if (gNow > gapBefore) {
-              // Oyna paydo bo'ldi — ikkala kunni ham qayta tartiblaymiz
-              // (dars ketgan kunda ham o'rta katak bo'shab qolishi mumkin)
-              for (const ci2 of req.cIdxs) { prefixRebuildDay(ci2, c.d); prefixRebuildDay(ci2, oldD); }
-              cNow = compactCost(uni);
-              gNow = _lastGap;
+              // Oyna paydo bo'ldi — ikkala kunni ham qayta tartiblaymiz (dars
+              // ketgan kunda ham o'rta katak bo'shab qolishi mumkin). Ikki
+              // marta: birinchi yig'ishdan keyin yangi imkon ochilishi mumkin.
+              rebuilt = true;
+              for (let pass = 0; pass < 2; pass++) {
+                for (const ci2 of req.cIdxs) { prefixRebuildDay(ci2, c.d); prefixRebuildDay(ci2, oldD); }
+                cNow = compactCost(uni);
+                gNow = _lastGap;
+                if (gNow <= gapBefore) break;
+              }
             }
-            if (gNow <= gapBefore && cNow < before) { fixed += 1; done = true; break; }
+            // Kunni qayta yig'ish guruhli darslar orqali BOSHQA sinflarga ham
+            // tegishi mumkin — shuning uchun oyna JAMI bo'yicha tekshiriladi.
+            const gapAllOk = !rebuilt || headGapsOf(ALL_C) <= gapAllBefore;
+            if (gNow <= gapBefore && gapAllOk && cNow < before) { fixed += 1; done = true; break; }
+            // ——— BEKOR QILISH ———
+            // Dars O'SHA KUNIGA qaytariladi: kunlik yuk o'zgarmasligi shart.
+            // Qayta yig'ishdan keyin eski katak band bo'lib qolgan bo'lsa,
+            // o'sha kundagi boshqa bo'sh katak olinadi (boshqa kunga ko'chirsak
+            // balans buzilardi), so'ng ikkala kun zichlab qo'yiladi.
             unplace(req.placedRef);
-            place(req, oldD, oldI);
+            if (fitsAt(req, oldD, oldI)) place(req, oldD, oldI);
+            else {
+              const back = req.domain.find((x) => x.d === oldD && fitsAt(req, x.d, x.i));
+              place(req, back ? back.d : oldD, back ? back.i : oldI);
+            }
+            if (rebuilt) {
+              for (const ci2 of req.cIdxs) { prefixRebuildDay(ci2, oldD); prefixRebuildDay(ci2, c.d); }
+            }
           }
           if (done) break;
           // 2) Band joyga — to'siq darsni boshqa katakka surib
@@ -2990,21 +3035,43 @@ function attemptSchedule(
       balEmergency = false;
       capEmergency = false;
     }
-    // Yakuniy tenglash — lekin oyna qaytib paydo bo'lmasligi shart
-    for (let k = 0; k < 3; k++) {
-      const gapsNow = headGapsOf(ALL_C);
-      let dev = 0;
-      for (let ci = 0; ci < C; ci++) dev += classDeviation(ci);
-      if (dev === 0) break;
-      const moved = balancePass(Math.max(200, left()));
-      const gapsAfter = headGapsOf(ALL_C);
-      if (gapsAfter > gapsNow) {
-        prefixPass(Math.max(200, left()));
-        pullUpPass(Math.max(150, left()));
+    // ——— YAKUNIY TENGLASH: kunlik yuk teng bo'lishi MAJBURIY ———
+    // Oyna qaytib paydo bo'lmasligi shart, shuning uchun har qadamdan keyin
+    // prefiks/zichlash qayta yuritiladi. Bosqich FAQAT chetlanish qolganda
+    // ishga tushadi va o'zining qisqa byudjetidan oshmaydi.
+    let devLeft = 0;
+    for (let ci = 0; ci < C; ci++) devLeft += classDeviation(ci);
+    if (devLeft > 0) {
+      const extra = Math.max(250, Math.min(1200, Math.round(compactBudgetMs * 0.3)));
+      const balStop = Date.now() + Math.max(extra, left());
+      const balLeft = () => balStop - Date.now();
+      const slice = (lo, hi) => Math.max(lo, Math.min(hi, balLeft()));
+      for (let k = 0; k < 8; k++) {
+        let dev = 0;
+        for (let ci = 0; ci < C; ci++) dev += classDeviation(ci);
+        if (dev === 0 || balLeft() <= 0) break;
+        deadline = Math.max(deadline, Date.now() + 400);
+        const gapsNow = headGapsOf(ALL_C);
+        const moved = balancePass(slice(150, 450));
+        if (headGapsOf(ALL_C) > gapsNow) {
+          prefixPass(slice(150, 300));
+          pullUpPass(slice(120, 250));
+        }
+        compactPass(slice(120, 250));
+        prefixPass(slice(120, 250));
+        // balancePass qotib qolsa — darslarni almashtirib qo'zg'atamiz
+        if (!moved && !swapPass(slice(120, 300))) break;
       }
-      if (!moved) break;
-      compactPass(Math.max(150, left()));
-      prefixPass(Math.max(150, left()));
+      // Tenglash/almashtirish paytida oyna paydo bo'lgan bo'lsa — yopamiz.
+      // Oyna baribir birinchi o'rinda turadi: sinf kun o'rtasida bo'sh qolmaydi.
+      for (let k = 0; k < 3 && headGapsOf(ALL_C) > 0; k++) {
+        deadline = Math.max(deadline, Date.now() + 400);
+        prefixPass(300);
+        pullUpPass(250);
+        gapChainPass(300);
+        compactPass(200);
+        prefixPass(200);
+      }
     }
   }
 

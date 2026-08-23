@@ -838,15 +838,17 @@ export default function SchedulePage({
         const full = bestPlaced >= requiredTotal;
         // Mukammal natija — darhol to'xtaymiz
         if (full && bestGaps === 0 && bestBal === 0) break;
-        // Hammasi joylashdi va oyna yo'q — bir necha urinish yaxshilanmasa yoki
-        // vaqtning yarmi ketgan bo'lsa, shu natija bilan tugatamiz
-        if (full && bestGaps === 0 && (stall >= 4 || elapsed > TIME_CAP_MS * 0.5)) break;
+        // Hammasi joylashdi va oyna yo'q, LEKIN kunlik yuk hali notekis
+        // (bir kun 3 soat, boshqa kun 6 soat). Teng taqsimot ham majburiy
+        // talab, shuning uchun bu yerda to'xtamaymiz — yaxshilanish uzoq
+        // to'xtaganda yoki vaqt tugay deganda chiqamiz.
+        if (full && bestGaps === 0 && (stall >= STALL_LIMIT + 4 || elapsed > TIME_CAP_MS * 0.85)) break;
         // Ma'lumotdagi ziddiyat tufayli to'liq natija bo'lmasa — ortiqcha kutmaymiz
         if (hardBlocked && !fast && stall >= 2) break;
         // Chuqur bosqichda yaxshilanish to'xtadi.
         // MUHIM: kun o'rtasida bo'sh soat (oyna) qolgan bo'lsa — to'xtamaymiz,
         // vaqt tugagunicha oynasiz variant qidiriladi.
-        if (!fast && stall >= (bestGaps === 0 ? STALL_LIMIT : STALL_LIMIT + 2)) break;
+        if (!fast && stall >= (bestGaps === 0 && bestBal === 0 ? STALL_LIMIT : STALL_LIMIT + 2)) break;
         if (elapsed > TIME_CAP_MS) break;
         // Tezkor bosqich tugadi, lekin chuqur urinishga vaqt qolmadi
         if (r + 1 === FAST_ROUNDS && elapsed > TIME_CAP_MS * 0.6) break;
