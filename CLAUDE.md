@@ -218,6 +218,32 @@ MARTA sanaladi (ClassSubjects `computeTeacherHours`, TeacherAvailability).
 Hard cheklovlar (ikkala dvigatelda ham): ustoz/sinf dam kuni, obed guruhlari, smena
 (`timeslot.classIds`), ustoz/sinf/xona bandligi.
 
+**KUNLIK KVOTA — oynasizlik va teng taqsimotning kafolati.**
+Generator ishga tushishidan oldin har sinf uchun `dayQuota[sinf][kun]` hisoblanadi
+(`setDayQuotas()`): sinfning HAQIQIY talabi (barcha so'rov bloklari yig'indisi +
+qulflangan darslar) ish kunlariga butun son bo'lib beriladi ("suv to'ldirish" —
+sig'imi yetmagan qisqa kun to'ladi, ortgani qolgan kunlarga qayta bo'linadi).
+Shundan keyin `fitsAt()` da IKKITA qattiq cheklov ishlaydi:
+
+1. `balanceOk()` — kundagi dars soni kvotadan oshmaydi;
+2. `quotaRankOk()` — dars faqat kunning DASTLABKI kvota ta soatiga tushadi
+   (`slotRank < dayQuota`).
+
+Ikkalasi birga turgani uchun: **barcha soat joylashsa, har kunda aynan kvota ta
+dars bo'ladi va ular kun boshidan ketma-ket turadi** — ya'ni kun o'rtasida "oyna"
+matematik jihatdan paydo bo'la olmaydi, yuk esa kunlarga teng tushadi. Bu cheklovni
+tuzatuvchi bosqichlar emas, joylashtirishning O'ZI ta'minlaydi.
+
+Yon berish faqat `balRelax` orqali (soat umuman joylashmayotgan bo'lsa) va
+`balEmergency` da (oyna yopilmayotgan bo'lsa) bo'ladi. Zichlash bosqichi
+boshlanishida yumshatish BEKOR QILINADI, kvota esa haqiqatda joylashgan soat
+bo'yicha qayta hisoblanadi; `quotaFixPass()` kvotadan oshgan kunni majburan
+bo'shatadi (oyna ochadigan ko'chirishni qabul qilmaydi).
+
+Ustuvorlik tartibi qat'iy: **joylangan soat → oyna → kunlik yuk tengligi**.
+Shuning uchun oxirgi bosqichda (oyna baribir qolsa) kunlik yuk chegarasi 1 taga
+yon beradi — kun o'rtasida nazoratsiz qolgan sinf notekis yukdan yomonroq.
+
 **Ustoz va xona bandligi VAQT bo'yicha, slot id bo'yicha emas.** Ikki smena bir xil
 soatda o'tishi mumkin (id boshqa, `startTime` bir xil) — shuning uchun bandlik
 `slotsOverlap()` bilan aniqlanadigan «vaqt bandi»ga bog'langan (`buildTimeBuckets()`,

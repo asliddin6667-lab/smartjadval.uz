@@ -722,11 +722,74 @@ function attemptSchedule(
     let cap = Math.max(1, blockSize || 1);
     if (sIdx < 0) return cap;
     for (const ci of cIdxs) {
-      const ud = Math.max(1, usableDayCount[ci] || 1);
+      // Kvota hisoblangach, dars TUSHADIGAN kunlar soni olinadi: sinf
+      // haftada 5 kun o'qisa, 6 soatlik fan kuniga 2 tadan bo'lishi kerak.
+      const ud = Math.max(1, quotaDayCount[ci] || usableDayCount[ci] || 1);
       const h = keyHours.get(ci * S + sIdx) || 0;
       if (h > 0) cap = Math.max(cap, Math.ceil(h / ud));
     }
     return cap;
+  }
+
+  // ——— KUNLIK KVOTA (oynasiz va teng taqsimot kafolati) ———
+  // Har sinf uchun haftalik soat ish kunlariga BUTUN son bo'lib beriladi.
+  // dayQuota[ci][d] — o'sha kunda sinfda BO'LISHI KERAK bo'lgan dars soni.
+  const dayQuota = new Int16Array(C * D);
+  const quotaDayCount = new Int16Array(C);
+  const lockedDayCount = new Int16Array(C * D);
+  // "Suv to'ldirish", lekin butun sonlarda: har safar eng kam yuklangan
+  // (va sig'imi yetadigan) kunga bitta soat qo'shiladi.
+  //   totalsOf(ci) — sinfning JAMI soati (qulflangan darslar ham ichida)
+  //   prefOf(ci,d) — teng holatda qaysi kun afzal (katta qiymat = afzal)
+  function setDayQuotas(totalsOf, prefOf) {
+    for (let ci = 0; ci < C; ci++) {
+      const days = [];
+      for (let d = 0; d < D; d++) {
+        // Qulflangan darslar — kvotaning eng past chegarasi
+        dayQuota[ci * D + d] = dayUsable[ci * D + d] ? lockedDayCount[ci * D + d] : 0;
+        if (dayUsable[ci * D + d]) days.push(d);
+      }
+      if (!days.length) { quotaDayCount[ci] = 0; continue; }
+      let rest = totalsOf(ci);
+      for (const d of days) rest -= dayQuota[ci * D + d];
+      // Kunlar tartibi har urinishda almashadi — "qoldiq" soat har safar
+      // boshqa kunga tushadi, bu esa urinishlarga xilma-xillik beradi.
+      const order = shuffle(days.slice(), rng);
+      let guard = 0;
+      while (rest > 0 && guard < 20000) {
+        guard += 1;
+        let pick = -1;
+        let bestQ = 0;
+        let bestPref = -Infinity;
+        for (const d of order) {
+          const q = dayQuota[ci * D + d];
+          if (q >= dayCapacity[ci * D + d]) continue;
+          const pr = prefOf ? prefOf(ci, d) : 0;
+          if (pick < 0 || q < bestQ || (q === bestQ && pr > bestPref)) {
+            pick = d; bestQ = q; bestPref = pr;
+          }
+        }
+        if (pick < 0) break; // sig'im yetmadi — bu soat baribir joylashmaydi
+        dayQuota[ci * D + pick] += 1;
+        rest -= 1;
+      }
+      let qd = 0;
+      for (const d of days) if (dayQuota[ci * D + d] > 0) qd += 1;
+      quotaDayCount[ci] = qd;
+    }
+  }
+
+  function computeDayCap(req) {
+    req.dayCap = Math.max(
+      dayCapFor(req.cIdxs, req.sIdx, req.blockSize),
+      req.swapSIdx >= 0 ? dayCapFor(req.cIdxs, req.swapSIdx, req.blockSize) : 0
+    );
+    if (req.perClassSIdx) {
+      req.perClassSIdx.forEach((si, k) => {
+        if (si >= 0) req.dayCap = Math.max(req.dayCap, dayCapFor([req.cIdxs[k]], si, req.blockSize));
+      });
+    }
+    return req.dayCap;
   }
 
   const placements = [];
@@ -1076,16 +1139,8 @@ function attemptSchedule(
         .map((cid) => sIdxOf.get(sidByClass.get(cid)) ?? -1);
     }
     req.roomArrs = req.rids.map((rid) => roomGrid(rid));
-    // ——— Kunlik fan limiti (qattiq) ———
-    req.dayCap = Math.max(
-      dayCapFor(req.cIdxs, req.sIdx, req.blockSize),
-      req.swapSIdx >= 0 ? dayCapFor(req.cIdxs, req.swapSIdx, req.blockSize) : 0
-    );
-    if (req.perClassSIdx) {
-      req.perClassSIdx.forEach((si, k) => {
-        if (si >= 0) req.dayCap = Math.max(req.dayCap, dayCapFor([req.cIdxs[k]], si, req.blockSize));
-      });
-    }
+    // ——— Kunlik fan limiti (qattiq) — kvotadan keyin qayta hisoblanadi ———
+    computeDayCap(req);
     req.capRelax = 0;
     req.spacedRelax = 0;
     // ——— Kunlik yuk me'yori (qattiq): 5/7 emas, 6/6 bo'lsin ———
@@ -1119,6 +1174,35 @@ function attemptSchedule(
     }
     pending.push(req);
   }
+
+  // ═════════ KUNLIK KVOTA: OYNASIZ VA TENG TAQSIMOT KAFOLATI ═════════
+  // Bu yerda sinfning HAQIQIY talabi (barcha so'rovlar bloklari yig'indisi)
+  // hisoblanadi va kunlarga butun son bo'lib beriladi. Keyingi ikki qattiq
+  // cheklov shu kvotaga tayanadi:
+  //   1) balanceOk  — kunlik dars soni kvotadan oshmaydi;
+  //   2) quotaRankOk — dars faqat kunning DASTLABKI kvota ta soatiga tushadi.
+  // Ikkalasi birga: agar barcha soat joylashsa, har kunda AYNAN kvota ta
+  // dars bo'ladi va ular kun boshidan ketma-ket turadi — ya'ni "oyna"
+  // (kun o'rtasidagi bo'sh soat) matematik jihatdan paydo bo'la olmaydi,
+  // yuk esa kunlarga teng tushadi ("3 soat / 6 soat" holati yo'qoladi).
+  const classDemand = new Int32Array(C);
+  for (const req of pending) for (const ci of req.cIdxs) classDemand[ci] += req.blockSize;
+  for (let ci = 0; ci < C; ci++) {
+    for (let d = 0; d < D; d++) lockedDayCount[ci * D + d] = classDayCount[ci * D + d];
+  }
+  const classTotalNeed = new Int32Array(C);
+  for (let ci = 0; ci < C; ci++) {
+    let t = classDemand[ci];
+    for (let d = 0; d < D; d++) t += lockedDayCount[ci * D + d];
+    classTotalNeed[ci] = t;
+  }
+  setDayQuotas((ci) => classTotalNeed[ci]);
+  // Yumshoq me'yor (o'lchov uchun) ham haqiqiy talabga moslanadi
+  setBalanceTargets((ci) => classTotalNeed[ci]);
+  // Kvota bo'yicha kun soni aniq bo'lgach, "bir kunda bir fan" limiti
+  // qayta hisoblanadi (kvotasi 0 bo'lgan kun endi hisobga olinmaydi).
+  for (const req of pending) computeDayCap(req);
+
   // Kun ichida qayta tartiblash paytida kun darajasidagi cheklovlar
   // o'zgarmaydi (fan soni, yuk, ora kunda) — faqat soat o'rni almashadi.
   let dayRearrange = false;
@@ -1159,11 +1243,31 @@ function attemptSchedule(
     if (d === exD) return true;
     const bs = req.blockSize;
     for (const ci of req.cIdxs) {
-      const hi = balHi[ci * D + d] + relax;
-      if (hi <= 0) continue;
+      // Chegara — KVOTA (aniq son). Ilgari bu "floor/ceil" oralig'i edi va
+      // shuning uchun bir kun 6, boshqasi 4 bo'lib qolishi mumkin edi.
+      const hi = dayQuota[ci * D + d] + relax;
+      if (hi <= 0) return false;
       let n = classDayCount[ci * D + d];
       if (d === exD) n -= bs;
       if (n + bs > hi) return false;
+    }
+    return true;
+  }
+  // ——— QATTIQ CHEKLOV: dars kunning DASTLABKI kvota ta soatida ———
+  // Bu cheklov oynani "tuzatmaydi" — uning PAYDO BO'LISHIGA yo'l qo'ymaydi.
+  // Sinfning o'sha kundagi soatlari 0,1,2,... deb raqamlanadi (slotRank);
+  // dars raqami kvotadan kichik bo'lishi shart. Barcha soat joylashganda
+  // kvota ta soat kvota ta o'rinni to'la egallaydi — orada bo'shliq qolmaydi.
+  function quotaRankOk(req, d, i) {
+    if (dayRearrange) return true;
+    const relax = Math.max(req.balRelax || 0, balEmergency ? 1 : 0);
+    if (relax >= 3) return true;
+    const last = i + req.blockSize - 1;
+    for (const ci of req.cIdxs) {
+      const lim = dayQuota[ci * D + d] + relax;
+      if (lim <= 0) return false;
+      const r = slotRank[ci * DT + d * T + last];
+      if (r < 0 || r >= lim) return false;
     }
     return true;
   }
@@ -1257,6 +1361,7 @@ function attemptSchedule(
     if (!subjDayOk(req, d)) return false;
     if (!spacedDayOk(req, d)) return false;
     if (!balanceOk(req, d)) return false;
+    if (!quotaRankOk(req, d, i)) return false;
     const base = d * T + i;
     for (let o = 0; o < req.blockSize; o++) {
       const off = base + o;
@@ -2785,6 +2890,79 @@ function attemptSchedule(
     return dev;
   }
 
+  // ——— KVOTADAN OSHGAN KUNNI MAJBURAN BO'SHATISH ———
+  // balancePass "yumshoq" me'yor (floor/ceil) bilan ishlaydi va ba'zan
+  // to'xtab qoladi. Bu bosqich esa aniq kvotaga qaraydi: kunda kvotadan
+  // ortiq dars bo'lsa, bittasi BOSHQA kunga ko'chiriladi — kerak bo'lsa
+  // zanjir bilan (yo'lni to'sgan dars ham suriladi). Kvota jami joylashgan
+  // soatga teng bo'lgani uchun, oshgan kun bo'shasa kam yuklangan kun to'ladi.
+  // MUHIM: oyna soni ortadigan ko'chirish QABUL QILINMAYDI — kun o'rtasidagi
+  // bo'sh soat yuk tengligidan ham muhimroq (sinf nazoratsiz qolmasligi kerak).
+  function quotaFixPass(budgetMs) {
+    const stop = Date.now() + Math.max(120, budgetMs);
+    let fixed = 0;
+    for (let ci = 0; ci < C; ci++) {
+      for (let guard = 0; guard < 12; guard++) {
+        if (Date.now() > stop) return fixed;
+        let overD = -1;
+        let worst = 0;
+        for (let d = 0; d < D; d++) {
+          if (!dayUsable[ci * D + d]) continue;
+          const ex = classDayCount[ci * D + d] - dayQuota[ci * D + d];
+          if (ex > worst) { worst = ex; overD = d; }
+        }
+        if (overD < 0) break;
+        const movers = [];
+        for (const p of placements) {
+          if (!p.active || p.locked || p.d !== overD) continue;
+          if (p.req.placedRef !== p) continue;
+          if (!p.req.cIdxs.includes(ci)) continue;
+          movers.push(p);
+        }
+        if (!movers.length) break;
+        // Kun oxiridan boshlaymiz: oxirgi dars ketsa oyna paydo bo'lmaydi
+        const ordered = shuffle(movers, rng)
+          .sort((a, b) => (b.startIdx + b.req.blockSize) - (a.startIdx + a.req.blockSize));
+        let done = false;
+        for (const p of ordered) {
+          if (Date.now() > stop) return fixed;
+          const req = p.req;
+          const oldD = p.d;
+          const oldI = p.startIdx;
+          const gapBefore = headGapsOf(req.cIdxs);
+          unplace(p);
+          // Nomzod tanlashda BIRINCHI mezon — oyna: ko'chirish natijasida
+          // (na eski, na yangi kunda) bo'sh soat paydo bo'lmasligi kerak.
+          let cand = null;
+          let bestKey = Infinity;
+          for (const c of req.domain) {
+            if (c.d === oldD) continue;
+            if (!fitsAt(req, c.d, c.i)) continue;
+            markBits(req, c.d, c.i, 1);
+            const g = headGapsOf(req.cIdxs);
+            markBits(req, c.d, c.i, 0);
+            const key = g * 1e6 + Math.max(0, Math.min(999999, scoreCandidate(req, c.d, c.i)));
+            if (key < bestKey) { bestKey = key; cand = c; }
+          }
+          // Oyna ochadigan (yoki umuman topilmagan) nomzod rad etiladi —
+          // dars o'z joyida qoladi, keyingi nomzod sinaladi.
+          const candGap = cand ? Math.floor(bestKey / 1e6) : Infinity;
+          if (!cand || candGap > gapBefore) { place(req, oldD, oldI); continue; }
+          place(req, cand.d, cand.i);
+          // Ikkala kun ham prefiks bo'yicha qayta yig'iladi — oyna qolmasin
+          const touched = req.placedRef ? unionIdx(req.cIdxs, [ci]) : [ci];
+          for (const cx of touched) {
+            prefixRebuildDay(cx, oldD);
+            if (req.placedRef && req.placedRef.d !== oldD) prefixRebuildDay(cx, req.placedRef.d);
+          }
+          done = true; fixed += 1; break;
+        }
+        if (!done) break;
+      }
+    }
+    return fixed;
+  }
+
   function unionIdx(a, b) {
     const seen = new Set(a);
     const out = [...a];
@@ -2969,7 +3147,22 @@ function attemptSchedule(
   if (compactBudgetMs > 0) {
     // Zichlash bosqichida ham ejection-chain kerak — muddatni uzaytiramiz
     deadline = Math.max(deadline, Date.now() + compactBudgetMs + 600);
-    setBalanceTargets((ci) => { let t = 0; for (let d = 0; d < D; d++) t += classDayCount[ci * D + d]; return t; });
+    // ——— CHEKLOVLARNI QAYTA QATTIQLASHTIRISH ———
+    // Qidiruv paytida joylashmay qolgan darslar uchun kunlik me'yor vaqtincha
+    // yumshatilgan edi (balRelax). Endi ular joyiga tushdi — yumshatish bekor
+    // qilinadi, aks holda zichlash va tenglash bosqichlari o'sha keng chegara
+    // bilan ishlab, "bir kun 8 soat, boshqa kun 5 soat" holatini saqlab
+    // qolardi. Joylashmagan darslarga tegilmaydi — ularga yumshatish kerak.
+    for (const req of pending) {
+      if (req.placedRef && req.placedRef.active && !req.placedRef.locked) req.balRelax = 0;
+    }
+    // Kvota va me'yor endi HAQIQATDA joylashgan soat bo'yicha qayta
+    // hisoblanadi: agar bir necha soat tushmagan bo'lsa ham, qolgani
+    // kunlarga teng tarqalsin va oyna qolmasin. Teng holatda hozir ko'proq
+    // dars turgan kun afzal ko'riladi — bekorga ko'chirish bo'lmaydi.
+    const placedTotalOf = (ci) => { let t = 0; for (let d = 0; d < D; d++) t += classDayCount[ci * D + d]; return t; };
+    setDayQuotas(placedTotalOf, (ci, d) => classDayCount[ci * D + d]);
+    setBalanceTargets(placedTotalOf);
     const compactStop = Date.now() + compactBudgetMs;
     const left = () => compactStop - Date.now();
     const step = Math.max(150, Math.round(compactBudgetMs * 0.12));
@@ -2980,13 +3173,32 @@ function attemptSchedule(
     prefixPass(Math.min(step, Math.max(150, left())));
     pullUpPass(Math.min(step, Math.max(150, left())));
     balancePass(Math.min(step, Math.max(150, left())));
+    // ——— KUNLIK YUKNI KVOTAGA TENGLASH ———
+    // Kunlar aro ko'chirish aynan shu yerda tugaydi: bundan keyin har kun
+    // kvotasi bilan to'lgani uchun boshqa bosqichlar darsni boshqa kunga
+    // umuman surolmaydi (fitsAt rad etadi) — ya'ni tenglik buzilmaydi,
+    // oyna yopish esa kun ICHIDA qayta yig'ish bilan davom etadi.
+    for (let k = 0; k < 6 && left() > 200; k++) {
+      const q = quotaFixPass(Math.min(step, left()));
+      prefixPass(Math.min(step, left()));
+      pullUpPass(Math.min(step, left()));
+      // Ko'chirish natijasida ochilgan oynani DARHOL yopamiz: kun ichida
+      // qayta yig'ish yetmasa, boshqa sinf bilan soat almashtiriladi.
+      if (headGapsOf(ALL_C) > 0) {
+        gapChainPass(Math.min(step, left()));
+        swapPass(Math.min(step, left()));
+        prefixPass(Math.min(step, left()));
+      }
+      if (!q) break;
+    }
     prefixPass(Math.min(step, Math.max(150, left())));
     for (let k = 0; k < 5 && left() > 400; k++) {
       const a = swapPass(Math.min(step, left()));
       const b = balancePass(Math.min(step, left()));
+      const q = quotaFixPass(Math.min(step, left()));
       const c = prefixPass(Math.min(step, left()));
       const e = pullUpPass(Math.min(step, left()));
-      if (!a && !b && !c && !e) break;
+      if (!a && !b && !c && !e && !q) break;
       compactPass(Math.min(step, left()));
     }
     // ——— Asosiy fanlar kun boshiga tartiblanadi ———
@@ -3019,27 +3231,59 @@ function attemptSchedule(
     }
     // Hamon oyna bo'lsa — "ora kunda" va balans cheklovlari vaqtincha yumshatiladi
     if (headGapsOf(ALL_C) > 0) {
+      // 1-chora: "ora kunda" va bir kundagi fan limitini yumshatamiz.
+      // KUNLIK YUK TENGLIGIGA TEGILMAYDI — u oxirgi navbatda yon beradi.
       gapEmergency = true;
-      balEmergency = true;
       capEmergency = true;
-      for (let k = 0; k < 4; k++) {
+      for (let k = 0; k < 3; k++) {
         if (headGapsOf(ALL_C) === 0) break;
         deadline = Math.max(deadline, Date.now() + 800);
-        prefixPass(500);
-        pullUpPass(400);
+        prefixPass(400);
+        pullUpPass(300);
         gapChainPass(500);
-        spillPass(400);
+        swapPass(300);
         compactPass(300);
       }
+      // 2-chora: oyna baribir qolsa — kunlik yuk chegarasi ham 1 taga
+      // yumshatiladi (oyna tenglikdan muhimroq: sinf nazoratsiz qolmasin).
+      if (headGapsOf(ALL_C) > 0) {
+        balEmergency = true;
+        for (let k = 0; k < 3; k++) {
+          if (headGapsOf(ALL_C) === 0) break;
+          deadline = Math.max(deadline, Date.now() + 800);
+          prefixPass(400);
+          pullUpPass(300);
+          gapChainPass(400);
+          spillPass(400);
+          compactPass(300);
+        }
+        balEmergency = false;
+      }
       gapEmergency = false;
-      balEmergency = false;
       capEmergency = false;
+      // Yumshatish paytida kunlik yuk buzilgan bo'lishi mumkin — oynani
+      // ochib yubormasdan (qat'iy rejim) kvotaga qaytaramiz.
+      for (let k = 0; k < 3 && left() > 150; k++) {
+        if (!quotaFixPass(Math.max(150, Math.min(400, left())))) break;
+        prefixPass(Math.max(120, Math.min(300, left())));
+      }
     }
     // ——— YAKUNIY TENGLASH: kunlik yuk teng bo'lishi MAJBURIY ———
     // Oyna qaytib paydo bo'lmasligi shart, shuning uchun har qadamdan keyin
     // prefiks/zichlash qayta yuritiladi. Bosqich FAQAT chetlanish qolganda
     // ishga tushadi va o'zining qisqa byudjetidan oshmaydi.
-    let devLeft = 0;
+    const quotaExcess = () => {
+      let e = 0;
+      for (let ci = 0; ci < C; ci++) {
+        for (let d = 0; d < D; d++) {
+          if (!dayUsable[ci * D + d]) continue;
+          const x = classDayCount[ci * D + d] - dayQuota[ci * D + d];
+          if (x > 0) e += x;
+        }
+      }
+      return e;
+    };
+    let devLeft = quotaExcess();
     for (let ci = 0; ci < C; ci++) devLeft += classDeviation(ci);
     if (devLeft > 0) {
       const extra = Math.max(250, Math.min(1200, Math.round(compactBudgetMs * 0.3)));
@@ -3047,12 +3291,12 @@ function attemptSchedule(
       const balLeft = () => balStop - Date.now();
       const slice = (lo, hi) => Math.max(lo, Math.min(hi, balLeft()));
       for (let k = 0; k < 8; k++) {
-        let dev = 0;
+        let dev = quotaExcess();
         for (let ci = 0; ci < C; ci++) dev += classDeviation(ci);
         if (dev === 0 || balLeft() <= 0) break;
         deadline = Math.max(deadline, Date.now() + 400);
         const gapsNow = headGapsOf(ALL_C);
-        const moved = balancePass(slice(150, 450));
+        const moved = balancePass(slice(150, 450)) + quotaFixPass(slice(150, 450));
         if (headGapsOf(ALL_C) > gapsNow) {
           prefixPass(slice(150, 300));
           pullUpPass(slice(120, 250));
@@ -3071,6 +3315,39 @@ function attemptSchedule(
         gapChainPass(300);
         compactPass(200);
         prefixPass(200);
+      }
+    }
+
+    // ——— OXIRGI KAFOLAT: KUN O'RTASIDA BO'SH SOAT QOLMASIN ———
+    // Eng oxirgi bosqich: undan oldingi tenglash/tartiblash bosqichlari
+    // oyna ochib qo'ygan bo'lsa, shu yerda yopiladi. Cheklovlar bosqichma-
+    // bosqich yon beradi — oxirida hatto kunlik yuk chegarasi ham, chunki
+    // kun o'rtasida nazoratsiz qolgan sinf kattaroq muammo.
+    if (headGapsOf(ALL_C) > 0) {
+      const gapStop = Date.now() + Math.max(600, Math.min(2200, Math.round(compactBudgetMs * 0.5)));
+      const gl = () => gapStop - Date.now();
+      const sl = (lo, hi) => Math.max(lo, Math.min(hi, gl()));
+      for (let k = 0; k < 6 && gl() > 0; k++) {
+        if (headGapsOf(ALL_C) === 0) break;
+        deadline = Math.max(deadline, Date.now() + 500);
+        if (k >= 2) { gapEmergency = true; capEmergency = true; }
+        if (k >= 3) balEmergency = true;
+        prefixPass(sl(150, 400));
+        pullUpPass(sl(120, 300));
+        gapChainPass(sl(150, 400));
+        swapPass(sl(120, 300));
+        spillPass(sl(150, 400));
+        compactPass(sl(120, 300));
+      }
+      gapEmergency = false;
+      capEmergency = false;
+      balEmergency = false;
+      prefixPass(200);
+      pullUpPass(150);
+      // Yon berish natijasida yuk buzilgan bo'lsa — oynani ochmasdan tuzatamiz
+      for (let k = 0; k < 3; k++) {
+        if (!quotaFixPass(250)) break;
+        prefixPass(150);
       }
     }
   }
