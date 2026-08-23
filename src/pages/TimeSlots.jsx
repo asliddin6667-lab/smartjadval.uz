@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import ConfirmModal from "../components/ConfirmModal";
 import { genId } from "../utils/helpers";
 
@@ -12,6 +12,26 @@ const NO_SHIFT = "__none__";
 
 function slotTypeInfo(type) {
   return SLOT_TYPES.find(t => t.value === type) || SLOT_TYPES[0];
+}
+
+// Global `lessonNumber` uzluksiz 1, 2, 3 … bo'lishi SHART: generator ham,
+// setka ham shu bo'yicha tartiblaydi. Smenalar `shifts` ro'yxati tartibida,
+// har smena ichida esa `shiftLessonNumber` bo'yicha ketma-ket raqamlanadi;
+// smenasiz vaqtlar oxirida qoladi. ID larga TEGILMAYDI.
+function renumberSlots(list, shiftOrder = []) {
+  const rank = new Map(shiftOrder.map((s, i) => [s.id, i]));
+  const rankOf = (t) => (t.shiftId ? (rank.has(t.shiftId) ? rank.get(t.shiftId) : 9998) : 9999);
+  return list
+    .map((t, i) => ({ t, i }))
+    .sort((a, b) => {
+      const ra = rankOf(a.t), rb = rankOf(b.t);
+      if (ra !== rb) return ra - rb;
+      const na = Number(a.t.shiftLessonNumber || a.t.lessonNumber) || 0;
+      const nb = Number(b.t.shiftLessonNumber || b.t.lessonNumber) || 0;
+      if (na !== nb) return na - nb;
+      return a.i - b.i;
+    })
+    .map(({ t }, i) => ({ ...t, lessonNumber: i + 1 }));
 }
 
 export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], shifts = [], setShifts, toast }) {
@@ -40,6 +60,47 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
   )), [classes]);
 
   const classNameById = useMemo(() => new Map(classes.map(c => [c.id, c.name])), [classes]);
+
+  // Smena sinflari IKKI joyda yotadi: `shift.classIds` (karta va oyna shuni
+  // ko'rsatadi) va `timeslot.classIds` (generator FAQAT shuni o'qiydi).
+  // Vaqtlar tahrirlanganda smena kartasi yolg'on gapirmasligi uchun
+  // ro'yxatni vaqtlardan qayta yig'amiz.
+  function syncShiftClasses(nextTimeslots) {
+    if (typeof setShifts !== "function" || !(shifts || []).length) return;
+    const bySh = new Map();
+    nextTimeslots.forEach(t => {
+      if (!t.shiftId) return;
+      const set = bySh.get(t.shiftId) || new Set();
+      (Array.isArray(t.classIds) ? t.classIds : []).forEach(id => set.add(id));
+      bySh.set(t.shiftId, set);
+    });
+    setShifts((shifts || []).map(sh => (
+      bySh.has(sh.id) ? { ...sh, classIds: [...bySh.get(sh.id)] } : sh
+    )));
+  }
+
+  // ——— Eski ma'lumotni bir martalik tuzatish ———
+  // Smena vaqtlari `classIds` siz qolgan holat: kartada sinflar ko'rinadi,
+  // vaqtlar jadvalida esa "🌐 Barcha sinflar". Bunda smena cheklovi umuman
+  // ishlamaydi — generator istalgan sinfni istalgan smena soatiga qo'yadi.
+  // Faqat smenaning BARCHA vaqtlari bo'sh bo'lsagina tuzatamiz (ataylab
+  // aralash sozlangan smenaga tegmaymiz).
+  const repairedRef = useRef(false);
+  useEffect(() => {
+    if (repairedRef.current || !timeslots.length || !(shifts || []).length) return;
+    const broken = (shifts || []).filter(sh => {
+      const own = timeslots.filter(t => t.shiftId === sh.id);
+      return (sh.classIds || []).length && own.length
+        && own.every(t => !(Array.isArray(t.classIds) ? t.classIds : []).length);
+    });
+    if (!broken.length) return;
+    repairedRef.current = true;
+    const fix = new Map(broken.map(sh => [sh.id, [...sh.classIds]]));
+    setTimeslots(timeslots.map(t => (
+      fix.has(t.shiftId) ? { ...t, classIds: [...fix.get(t.shiftId)] } : t
+    )));
+    toast(`${broken.map(sh => sh.name).join(", ")}: sinflar vaqtlarga qaytarildi ✓`, "success");
+  }, [timeslots, shifts]);
 
   const sorted = useMemo(() => (
     [...timeslots].sort((a, b) => Number(a.lessonNumber) - Number(b.lessonNumber))
@@ -133,7 +194,9 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
       classIds: Array.isArray(form.classIds) ? form.classIds : []
     };
     if (editItem) {
-      setTimeslots(timeslots.map(t => t.id === editItem.id ? { ...t, ...payload } : t));
+      const next = timeslots.map(t => t.id === editItem.id ? { ...t, ...payload } : t);
+      setTimeslots(next);
+      syncShiftClasses(next);
       toast("Vaqt yangilandi ✓", "success");
     } else {
       setTimeslots([...timeslots, { id: genId(), ...payload }]);
@@ -221,14 +284,19 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
       : [...(shifts || []), shiftObj];
     if (typeof setShifts === "function") setShifts(nextShifts);
 
-    // Bu smenaning eski vaqtlarini olib tashlab, yangilarini qo'shamiz.
-    // Global lessonNumber uzluksiz bo'ladi (generator to'g'ri tartiblashi uchun),
-    // ekranda esa smena ichki raqami ko'rsatiladi: 1-dars, 2-dars …
+    // Bu smenaning vaqtlarini yangilaymiz.
+    // ID lar QAYTA YARATILMAYDI — o'rni bo'yicha eski id qaytariladi. Sabab:
+    // schedule[kun][timeslotId], lunchGroups.timeslotIds va teacher.blockedSlots
+    // AYNAN shu id larga bog'langan. Yangi id bersak, tayyor jadval uziladi:
+    // setkada bo'sh kataklar ko'rinadi, darslar esa ma'lumotda "yetim" bo'lib
+    // qolaveradi — shuning uchun smenani o'zgartirgach soatlar mos kelmay qoladi.
+    const oldSlots = timeslots
+      .filter(t => t.shiftId === shiftId)
+      .sort((a, b) => Number(a.shiftLessonNumber || a.lessonNumber) - Number(b.shiftLessonNumber || b.lessonNumber));
     const withoutThisShift = timeslots.filter(t => t.shiftId !== shiftId);
-    const maxLesson = withoutThisShift.reduce((mx, t) => Math.max(mx, Number(t.lessonNumber) || 0), 0);
     const newSlots = shiftForm.slots.map((s, i) => ({
-      id: genId(),
-      lessonNumber: maxLesson + i + 1,       // GLOBAL — generator uchun
+      ...(oldSlots[i] || {}),
+      id: oldSlots[i]?.id || genId(),
       shiftLessonNumber: i + 1,              // smena ichki raqami (ko'rsatish uchun)
       startTime: s.startTime,
       endTime: s.endTime,
@@ -238,7 +306,10 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
       shiftId,
       shiftName: shiftForm.name.trim(),
     }));
-    setTimeslots([...withoutThisShift, ...newSlots]);
+    // Global lessonNumber barcha vaqtlar bo'yicha qayta hisoblanadi.
+    setTimeslots(renumberSlots([...withoutThisShift, ...newSlots], nextShifts));
+    const dropped = oldSlots.length - newSlots.length;
+    if (dropped > 0) toast(`${dropped} ta vaqt o'chirildi — o'sha soatlardagi darslar jadvaldan tushadi`, "warning");
     toast(editShift ? "Smena yangilandi ✓" : `Smena yaratildi: ${newSlots.length} vaqt, ${shiftForm.classIds.length} sinf ✓`, "success");
     setShiftModalOpen(false);
     setShiftFilter(shiftId);
@@ -277,21 +348,26 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
   function applyBulk() {
     if (!bulkSlotIds.length) { toast("Kamida bitta vaqt tanlang", "warning"); return; }
     if (!bulkClassIds.length) { toast("Kamida bitta sinf tanlang", "warning"); return; }
-    setTimeslots(timeslots.map(t => {
+    const next = timeslots.map(t => {
       if (!bulkSlotIds.includes(t.id)) return t;
       const prev = Array.isArray(t.classIds) ? t.classIds : [];
       const nextIds = bulkMode === "add"
         ? [...new Set([...prev, ...bulkClassIds])]
         : [...bulkClassIds];
       return { ...t, classIds: nextIds };
-    }));
+    });
+    setTimeslots(next);
+    syncShiftClasses(next);
     toast(`${bulkSlotIds.length} ta vaqtga ${bulkClassIds.length} ta sinf biriktirildi ✓`, "success");
     setBulkOpen(false);
   }
 
   function clearBulkAssignment() {
     if (!bulkSlotIds.length) { toast("Kamida bitta vaqt tanlang", "warning"); return; }
-    setTimeslots(timeslots.map(t => bulkSlotIds.includes(t.id) ? { ...t, classIds: [] } : t));
+    const next = timeslots.map(t => bulkSlotIds.includes(t.id) ? { ...t, classIds: [] } : t);
+    repairedRef.current = true;   // ataylab tozalandi — tuzatuvchi effekt qaytarib qo'ymasin
+    setTimeslots(next);
+    syncShiftClasses(next);
     toast("Biriktiruv olib tashlandi — bu vaqtlar endi barcha sinflarga tegishli ✓", "success");
     setBulkOpen(false);
   }
