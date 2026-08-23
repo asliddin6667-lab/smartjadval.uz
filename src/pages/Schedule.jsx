@@ -1230,6 +1230,64 @@ export default function SchedulePage({
         warns.push(`${cls.name}: jami ${total} soat kerak, lekin bo'sh joy ${avail} ta (${DAYS.length - offDays.length} kun × ${perDay} dars). ${total - avail} soat sig'maydi — dars/kun sonini oshiring yoki soatni kamaytiring.`);
       }
     });
+    // ——— «Kelajak soati» faqat DUSHANBA bo'ladi ———
+    // Agar ustoz (yoki sinf) aynan dushanbada dam olsa, bu soat hech qanday
+    // jadvalga tushmaydi. Sabab ko'rinmasa, foydalanuvchi generatsiyani
+    // qayta-qayta bosib, vaqtini behuda sarflaydi.
+    classes.forEach((cls) => {
+      const clsOff = Array.isArray(cls.offDays) ? cls.offDays : [];
+      (classSubjects?.[cls.id] || []).forEach((a) => {
+        const subj = subjectMap.get(a.subjectId);
+        if (!subj || !isFixedMondaySubject(subj)) return;
+        if (Number(a.weeklyHours || 0) <= 0) return;
+        if (clsOff.includes("Dushanba")) {
+          warns.push(`⛔ ${cls.name} · ${subj.name}: bu fan faqat DUSHANBA, 1-darsda bo'ladi, lekin sinfning dam kuni — dushanba. Bu soat hech qachon tushmaydi.`);
+          return;
+        }
+        const tIds = a.levelGroupEnabled && a.levelGroups?.length
+          ? a.levelGroups.map((g) => g.teacherId)
+          : [a.teacherId, a.splitEnabled ? a.teacherId2 : null];
+        tIds.filter(Boolean).forEach((tid) => {
+          const t = teacherMap.get(tid);
+          if (!t || !Array.isArray(t.offDays) || !t.offDays.includes("Dushanba")) return;
+          warns.push(`⛔ ${cls.name} · ${subj.name}: bu fan faqat DUSHANBA bo'ladi, lekin ${t.name} dushanbada dam oladi. Boshqa ustoz tanlang yoki ustozning dam kunini o'zgartiring.`);
+        });
+      });
+    });
+    // ——— GURUHLI DARSLARDAGI TAKRORLANISH ———
+    // Guruhlar AYNI VAQTDA o'qiydi: bitta ustoz ham, bitta xona ham ikki
+    // guruhga yeta olmaydi. Generator bunday darsni endi yo'qotmaydi
+    // (takroriy xona olib tashlanadi, takroriy ustoz e'tiborsiz qoladi),
+    // lekin ma'lumotni to'g'rilash baribir kerak.
+    classes.forEach((cls) => {
+      (classSubjects?.[cls.id] || []).forEach((a) => {
+        const sName = subjectMap.get(a.subjectId)?.name || "Fan";
+        if (a.levelGroupEnabled && Array.isArray(a.levelGroups)) {
+          const tSeen = new Set();
+          const rSeen = new Set();
+          a.levelGroups.forEach((g) => {
+            if (g?.teacherId && tSeen.has(g.teacherId)) {
+              warns.push(`⚠️ ${cls.name} · ${sName}: «${g.name || "daraja"}» guruhiga oldingi daraja bilan BIR XIL ustoz (${getName(teacherMap, g.teacherId)}) qo'yilgan — bu daraja hisobga olinmaydi.`);
+            } else if (g?.teacherId) tSeen.add(g.teacherId);
+            if (g?.roomId && rSeen.has(g.roomId)) {
+              warns.push(`⚠️ ${cls.name} · ${sName}: «${g.name || "daraja"}» guruhiga oldingi daraja bilan BIR XIL xona (${getName(roomMap, g.roomId)}) qo'yilgan — bu guruh xonasiz joylanadi.`);
+            } else if (g?.roomId) rSeen.add(g.roomId);
+          });
+        }
+        if (a.splitEnabled && a.teacherId2 && a.teacherId2 === a.teacherId) {
+          warns.push(`⚠️ ${cls.name} · ${sName}: 1- va 2-guruhga bir xil ustoz (${getName(teacherMap, a.teacherId)}) qo'yilgan — dars bo'linmagan (butun sinf) deb joylanadi.`);
+        }
+        if (a.splitEnabled && a.roomId && a.roomId2 && a.roomId === a.roomId2) {
+          warns.push(`⚠️ ${cls.name} · ${sName}: ikkala guruhga bir xil xona (${getName(roomMap, a.roomId)}) qo'yilgan — 2-guruh xonasiz joylanadi.`);
+        }
+        if (a.pairEnabled && a.pairRoomId && a.roomId && a.pairRoomId === a.roomId) {
+          warns.push(`⚠️ ${cls.name} · ${sName}: «bir vaqtda 2 fan»ning ikkala guruhi bir xil xonaga (${getName(roomMap, a.roomId)}) qo'yilgan — 2-guruh xonasiz joylanadi.`);
+        }
+        if (a.pairEnabled && a.pairTeacherId && a.pairTeacherId === a.teacherId) {
+          warns.push(`⛔ ${cls.name} · ${sName}: «bir vaqtda 2 fan»da ikkala guruhga bir xil ustoz qo'yilgan — bunday dars joylashmaydi.`);
+        }
+      });
+    });
     return warns;
   }
 

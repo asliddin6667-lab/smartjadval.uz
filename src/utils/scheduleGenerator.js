@@ -45,13 +45,22 @@ function shuffle(array, rng = Math.random) {
 }
 
 function cleanLevelGroups(groups = []) {
+  // Bir xil ustoz ikki darajaga qo'yilgan bo'lsa — takroriysi tashlanadi.
+  // Daraja guruhlari AYNI VAQTDA o'qiydi, ustoz esa bir vaqtda faqat bitta
+  // guruhda bo'la oladi. Ilgari bunday dars butunlay yaroqsiz deb hisoblanib,
+  // soatlari jimgina yo'qolardi.
+  const seen = new Set();
   return (Array.isArray(groups) ? groups : [])
     .map((g, i) => ({
       name: g?.name || `${i + 1}-guruh`,
       teacherId: g?.teacherId || "",
       roomId: g?.roomId || "",
     }))
-    .filter((g) => g.teacherId);
+    .filter((g) => {
+      if (!g.teacherId || seen.has(g.teacherId)) return false;
+      seen.add(g.teacherId);
+      return true;
+    });
 }
 
 export function normalizeAssignment(item, subject) {
@@ -988,7 +997,11 @@ function attemptSchedule(
         }
         return;
       }
-      if (a.splitEnabled && a.teacherId2) {
+      // Guruhli dars: ikkala guruhga BIR XIL ustoz qo'yilgan bo'lsa, bu
+      // amalda bo'linish emas — bitta ustoz ikki guruhga bir vaqtda dars
+      // bera olmaydi. Ilgari bunday dars butunlay tashlab yuborilardi
+      // (soatlar jimgina yo'qolardi); endi u oddiy dars sifatida joylanadi.
+      if (a.splitEnabled && a.teacherId2 && a.teacherId2 !== a.teacherId) {
         blocks.forEach((blockSize) => {
           simpleRequests.push({
             type: "split", classIds: [cls.id], subjectId: a.subjectId, teacherId: a.teacherId,
@@ -1117,11 +1130,59 @@ function attemptSchedule(
     if (new Set(reqTeacherIds).size !== reqTeacherIds.length) return false;
     return true;
   }
+  // ——— BIR XIL XONA IKKI GURUHGA BERILGAN BO'LSA ———
+  // Masalan daraja guruhlarida 2- va 3-daraja bitta xonaga qo'yilgan bo'lishi
+  // mumkin. Ular AYNI VAQTDA o'qiydi, ya'ni bitta xonaga sig'maydi — ilgari
+  // bunday dars butunlay tashlab yuborilardi va soatlar jimgina yo'qolardi.
+  // Endi TAKRORIY xona olib tashlanadi: dars xonasiz bo'lsa ham joylashadi,
+  // sabab esa hisobotga yoziladi (UI foydalanuvchini ogohlantiradi).
+  const roomDupFixes = [];
+  function dedupeRooms(req) {
+    const seen = new Set();
+    // takroriy bo'lsa null qaytaradi
+    const take = (rid) => {
+      if (!rid) return "";
+      if (seen.has(rid)) return null;
+      seen.add(rid);
+      return rid;
+    };
+    const note = (part) => roomDupFixes.push({
+      className: classes.find((c) => c.id === req.classIds[0])?.name || "",
+      subjectName: subjectById.get(req.subjectId)?.name || "",
+      part,
+    });
+    if (req.type === "levelGroup" && Array.isArray(req.levelGroups)) {
+      req.levelGroups = req.levelGroups.map((g) => {
+        if (take(g.roomId) === null) { note(g.name || "daraja guruhi"); return { ...g, roomId: "" }; }
+        return g;
+      });
+      req.roomIds = req.levelGroups.map((g) => g.roomId || "");
+    } else if (req.type === "split" && Array.isArray(req.splitGroups)) {
+      req.splitGroups = req.splitGroups.map((g) => {
+        if (take(g.roomId) === null) { note(g.groupPart || "guruh"); return { ...g, roomId: "" }; }
+        return g;
+      });
+      req.roomIds = req.splitGroups.map((g) => g.roomId || "");
+    } else if (req.type === "pair") {
+      if (take(req.roomId) === null) { note(req.groupName1 || "1-guruh"); req.roomId = ""; }
+      req.pairGroups = (req.pairGroups || []).map((g) => {
+        if (take(g.roomId) === null) { note(req.groupName2 || "2-guruh"); return { ...g, roomId: "" }; }
+        return g;
+      });
+      req.roomIds = [req.roomId, ...req.pairGroups.map((g) => g.roomId || "")];
+    } else if (Array.isArray(req.roomIds)) {
+      req.roomIds = req.roomIds.map((rid) => (take(rid) === null ? "" : rid));
+    }
+  }
+
   const pending = [];
   for (const req of allRequests) {
     if (!isValidRequest(req)) continue;
     req.tids = (req.teacherIds || [req.teacherId]).filter(Boolean);
+    dedupeRooms(req);
     req.rids = (req.roomIds || [req.roomId]).filter(Boolean);
+    // Bu yerga yetib kelmasligi kerak (dedupeRooms tozalab bo'ldi), lekin
+    // kutilmagan ma'lumot shaklidan himoya sifatida qoldirilgan.
     if (new Set(req.rids).size !== req.rids.length) req.roomDup = true;
     req.diff = difficulty(req);
     req.placedRef = null;
@@ -1234,9 +1295,15 @@ function attemptSchedule(
   // har kun 5 yoki 6 soat. "Bir kun 5, boshqa kun 7" holati taqiqlanadi.
   // balRelax faqat oxirgi chorada (soat yo'qolmasligi uchun) oshiriladi.
   let balEmergency = false;
+  // ——— UMUMIY YON BERISH DARAJASI ———
+  // Qidiruv qat'iy kvota bilan boshlanadi (oynasiz, teng). Agar soat
+  // joylashmay qolsa, chegara BUTUN taxta bo'yicha bosqichma-bosqich
+  // kengayadi — aks holda zanjirli ko'chirish ham ishlamay qoladi
+  // (yo'lni to'sgan dars o'z prefiksidan chiqa olmaydi).
+  let solveSlack = 0;
   function balanceOk(req, d) {
     if (dayRearrange) return true;
-    const relax = Math.max(req.balRelax || 0, balEmergency ? 1 : 0);
+    const relax = Math.max(req.balRelax || 0, solveSlack, balEmergency ? 1 : 0);
     if (relax >= 3) return true;
     const exD = req.placedRef && req.placedRef.active ? req.placedRef.d : -1;
     // O'sha kunning ichida ko'chirilyapti — kunlik yuk o'zgarmaydi
@@ -1260,7 +1327,7 @@ function attemptSchedule(
   // kvota ta soat kvota ta o'rinni to'la egallaydi — orada bo'shliq qolmaydi.
   function quotaRankOk(req, d, i) {
     if (dayRearrange) return true;
-    const relax = Math.max(req.balRelax || 0, balEmergency ? 1 : 0);
+    const relax = Math.max(req.balRelax || 0, solveSlack, balEmergency ? 1 : 0);
     if (relax >= 3) return true;
     const last = i + req.blockSize - 1;
     for (const ci of req.cIdxs) {
@@ -1371,6 +1438,36 @@ function attemptSchedule(
       for (const rg of req.roomArrs) if (rg[toff]) return false;
     }
     return true;
+  }
+  // ——— KATAK JISMONAN BO'SHMI? ———
+  // fitsAt dan farqi: yumshoq qoidalar (kunlik me'yor, fan limiti, ora kunda)
+  // tekshirilmaydi — faqat sinf/ustoz/xona bandligi va qulflangan soat.
+  function rawFree(req, d, i) {
+    if (i < 0 || i + req.blockSize > T) return false;
+    for (let o = 0; o < req.blockSize; o++) {
+      if (o > 0 && !nextConsecutive[i + o - 1]) return false;
+      const off = d * T + i + o;
+      const toff = tbOff(d, i + o);
+      for (const ci of req.cIdxs) {
+        if (lunchGrid[ci * DT + off] || slotClassBlock[ci * DT + off] || classGrid[ci * DT + off]) return false;
+      }
+      for (const ti of req.tIdxs) if (teacherGrid[ti * DTB + toff] || teacherBlockGrid[ti * DT + off]) return false;
+      for (const rg of req.roomArrs) if (rg[toff]) return false;
+    }
+    return true;
+  }
+  // ——— BEKOR QILINGAN KO'CHIRISHNI XAVFSIZ QAYTARISH ———
+  // Dars eski katagiga qaytariladi. Agar u katak band bo'lib qolgan bo'lsa
+  // (oraliqda kun qayta yig'ilgan bo'lishi mumkin), BOSHQA bo'sh katak
+  // qidiriladi. Band katakka qo'yish QAT'IYAN mumkin emas — aks holda ustoz
+  // yoki xona bir vaqtda ikki joyda bo'lib qoladi (jadval yaroqsiz bo'ladi).
+  function restorePlace(req, oldD, oldI) {
+    if (rawFree(req, oldD, oldI)) { place(req, oldD, oldI); return true; }
+    for (const x of req.domain) if (x.d === oldD && fitsAt(req, x.d, x.i)) { place(req, x.d, x.i); return true; }
+    for (const x of req.domain) if (x.d === oldD && rawFree(req, x.d, x.i)) { place(req, x.d, x.i); return true; }
+    for (const x of req.domain) if (fitsAt(req, x.d, x.i)) { place(req, x.d, x.i); return true; }
+    for (const x of req.domain) if (rawFree(req, x.d, x.i)) { place(req, x.d, x.i); return true; }
+    return false;
   }
   function loadAllows(req) {
     for (const ti of req.tIdxs) { if (teacherLoadArr[ti] + req.blockSize > teacherMaxArr[ti]) return false; }
@@ -1837,6 +1934,11 @@ function attemptSchedule(
     if (wave === 4 || wave === 7 || wave === 10) {
       for (const r of deferred) r.balRelax = Math.min(3, (r.balRelax || 0) + 1);
     }
+    // Qat'iy kvota bilan joylashmagan soat qolsa — chegarani BUTUN taxtada
+    // kengaytiramiz. Shundagina bloklovchi darslar ham surila oladi.
+    if (wave === 3) solveSlack = Math.max(solveSlack, 1);
+    if (wave === 6) solveSlack = Math.max(solveSlack, 2);
+    if (wave === 9) solveSlack = 3;
     if (wave === 5 || wave === 9) {
       for (const r of deferred) {
         r.capRelax = Math.min(2, (r.capRelax || 0) + 1);
@@ -1862,6 +1964,9 @@ function attemptSchedule(
     deferred.push(...still);
     wave += 1;
   }
+  // LNS bosqichiga yetgan bo'lsak, qat'iy kvota bilan yechim topilmadi —
+  // soat yo'qolmasligi uchun chegara to'liq ochiladi.
+  if (deferred.length) solveSlack = 3;
   let lnsRound = 0;
   while (deferred.length && Date.now() < deadline && lnsRound < 40) {
     lnsRound += 1;
@@ -1947,6 +2052,35 @@ function attemptSchedule(
     });
     return false;
   }
+  // ——— 2 SOATLIK BLOKNI IKKIGA BO'LISH ———
+  // 2 soatlik blokka KETMA-KET ikki bo'sh soat kerak: sinf, ustoz va xona
+  // uchalasi ham bir vaqtda bo'sh bo'lishi shart. Tor jadvalda (ikki smena,
+  // qisqartirilgan shanba, hovuz darslari) bunday joy topilmasligi mumkin.
+  // Shunda blok ikkita 1 soatlik darsga bo'linadi: "2 soat blok" sozlamasi
+  // shu dars uchun buziladi, lekin SOAT YO'QOLMAYDI — bu muhimroq.
+  function splitBlockAndPlace(req) {
+    if ((req.blockSize || 1) < 2) return false;
+    // Guruhlar almashinuvi aynan 2 soatga bog'liq — uni bo'lish mumkin emas
+    if (req.type === "swap") return false;
+    let placedNow = 0;
+    for (let k = 0; k < 2; k++) {
+      const h = {
+        ...req, blockSize: 1, placedRef: null, failed: false, done: true,
+        balRelax: 3, capRelax: 2, spacedRelax: 2, splitFromBlock: true,
+      };
+      computeDayCap(h);
+      h.domain = buildDomain(h);
+      if (!h.domain.length) break;
+      refreshFeas(h);
+      const cand = h.feasCount > 0 ? bestCandidate(h, false) : null;
+      if (cand) place(h, cand.d, cand.i);
+      else if (!ejectAndPlace(h, EJECT_INTENSE)) break;
+      pending.push(h);
+      placedNow += 1;
+    }
+    return placedNow > 0;
+  }
+
   if (deferred.length) {
     const still = [];
     for (const req of deferred) {
@@ -1960,7 +2094,9 @@ function attemptSchedule(
       const cand = req.feasCount > 0 ? bestCandidate(req, false) : null;
       if (cand) { place(req, cand.d, cand.i); markAffected(req); continue; }
       if (ejectAndPlace(req, EJECT_INTENSE)) continue;
-      // 2-chora: shu fanning boshqa ustoziga o'tkazish
+      // 2-chora: 2 soatlik blokni ikkita 1 soatlik darsga bo'lish
+      if (splitBlockAndPlace(req)) continue;
+      // 3-chora: shu fanning boshqa ustoziga o'tkazish
       if (!tryTeacherSwap(req)) still.push(req);
     }
     deferred.length = 0;
@@ -2232,7 +2368,7 @@ function attemptSchedule(
     const done = solve(0);
     if (done && headGapsOf(uni) < gapBefore) { dayRearrange = false; return true; }
     for (const s of saved) { const cur = s.req.placedRef; if (cur && cur.active) unplace(cur); }
-    for (const s of saved) place(s.req, s.d, s.i);
+    for (const s of saved) restorePlace(s.req, s.d, s.i);
     dayRearrange = false;
     return false;
   }
@@ -2284,7 +2420,7 @@ function attemptSchedule(
         if (g < bg || (g === bg && c < bc)) { bg = g; bc = c; bd = cand.d; bi = cand.i; }
       }
       if (bd >= 0 && bg < gapBefore) { place(req, bd, bi); return true; }
-      place(req, oldD, oldI);
+      restorePlace(req, oldD, oldI);
     }
     return false;
   }
@@ -2898,10 +3034,16 @@ function attemptSchedule(
   // soatga teng bo'lgani uchun, oshgan kun bo'shasa kam yuklangan kun to'ladi.
   // MUHIM: oyna soni ortadigan ko'chirish QABUL QILINMAYDI — kun o'rtasidagi
   // bo'sh soat yuk tengligidan ham muhimroq (sinf nazoratsiz qolmasligi kerak).
-  function quotaFixPass(budgetMs) {
+  // deepFix = true bo'lsa, KUCHLI chetlangan sinf uchun zanjirli ko'chirishga
+  // ham ruxsat beriladi: yo'lni to'sgan begona dars suriladi. Bu "dushanba 2
+  // soat, qolgan kunlar 7 soat" kabi og'ir notekislikni tuzatishning yagona
+  // yo'li — to'g'ridan-to'g'ri bo'sh katak topilmaydi, chunki ustoz o'sha kuni
+  // boshqa sinfda band bo'ladi.
+  function quotaFixPass(budgetMs, deepFix) {
     const stop = Date.now() + Math.max(120, budgetMs);
     let fixed = 0;
     for (let ci = 0; ci < C; ci++) {
+      const deep = deepFix && classDeviation(ci) >= 3;
       for (let guard = 0; guard < 12; guard++) {
         if (Date.now() > stop) return fixed;
         let overD = -1;
@@ -2947,8 +3089,11 @@ function attemptSchedule(
           // Oyna ochadigan (yoki umuman topilmagan) nomzod rad etiladi —
           // dars o'z joyida qoladi, keyingi nomzod sinaladi.
           const candGap = cand ? Math.floor(bestKey / 1e6) : Infinity;
-          if (!cand || candGap > gapBefore) { place(req, oldD, oldI); continue; }
-          place(req, cand.d, cand.i);
+          if (!cand || candGap > gapBefore) {
+            // Bo'sh katak yo'q: og'ir chetlanishda zanjir bilan joy ochamiz.
+            // Eski kunga qaytib tusha olmaydi — u kun hamon kvotadan oshiq.
+            if (!deep || !ejectAndPlace(req, EJECT_INTENSE)) { restorePlace(req, oldD, oldI); continue; }
+          } else place(req, cand.d, cand.i);
           // Ikkala kun ham prefiks bo'yicha qayta yig'iladi — oyna qolmasin
           const touched = req.placedRef ? unionIdx(req.cIdxs, [ci]) : [ci];
           for (const cx of touched) {
@@ -3073,11 +3218,7 @@ function attemptSchedule(
             // o'sha kundagi boshqa bo'sh katak olinadi (boshqa kunga ko'chirsak
             // balans buzilardi), so'ng ikkala kun zichlab qo'yiladi.
             unplace(req.placedRef);
-            if (fitsAt(req, oldD, oldI)) place(req, oldD, oldI);
-            else {
-              const back = req.domain.find((x) => x.d === oldD && fitsAt(req, x.d, x.i));
-              place(req, back ? back.d : oldD, back ? back.i : oldI);
-            }
+            restorePlace(req, oldD, oldI);
             if (rebuilt) {
               for (const ci2 of req.cIdxs) { prefixRebuildDay(ci2, oldD); prefixRebuildDay(ci2, c.d); }
             }
@@ -3125,8 +3266,8 @@ function attemptSchedule(
               if (!ok) unplace(req.placedRef);
             }
             if (!ok) {
-              if (!req.placedRef) place(req, oldD, oldI);
-              if (!rq.placedRef) place(rq, qd, qi);
+              if (!req.placedRef) restorePlace(req, oldD, oldI);
+              if (!rq.placedRef) restorePlace(rq, qd, qi);
             } else {
               fixed += 1;
               done = true;
@@ -3153,6 +3294,7 @@ function attemptSchedule(
     // qilinadi, aks holda zichlash va tenglash bosqichlari o'sha keng chegara
     // bilan ishlab, "bir kun 8 soat, boshqa kun 5 soat" holatini saqlab
     // qolardi. Joylashmagan darslarga tegilmaydi — ularga yumshatish kerak.
+    solveSlack = 0;
     for (const req of pending) {
       if (req.placedRef && req.placedRef.active && !req.placedRef.locked) req.balRelax = 0;
     }
@@ -3179,7 +3321,7 @@ function attemptSchedule(
     // umuman surolmaydi (fitsAt rad etadi) — ya'ni tenglik buzilmaydi,
     // oyna yopish esa kun ICHIDA qayta yig'ish bilan davom etadi.
     for (let k = 0; k < 6 && left() > 200; k++) {
-      const q = quotaFixPass(Math.min(step, left()));
+      const q = quotaFixPass(Math.min(step, left()), true);
       prefixPass(Math.min(step, left()));
       pullUpPass(Math.min(step, left()));
       // Ko'chirish natijasida ochilgan oynani DARHOL yopamiz: kun ichida
@@ -3412,6 +3554,7 @@ function attemptSchedule(
   report.imbalance = imbalance;
   report.teacherSwaps = teacherSwaps;
   report.teacherHints = teacherHints;
+  report.roomDupFixes = roomDupFixes;
   return { schedule, placed: placedHours, attempted: attemptedHours, soft, gaps, imbalance, report };
 }
 

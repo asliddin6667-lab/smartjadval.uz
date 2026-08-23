@@ -234,15 +234,52 @@ dars bo'ladi va ular kun boshidan ketma-ket turadi** — ya'ni kun o'rtasida "oy
 matematik jihatdan paydo bo'la olmaydi, yuk esa kunlarga teng tushadi. Bu cheklovni
 tuzatuvchi bosqichlar emas, joylashtirishning O'ZI ta'minlaydi.
 
-Yon berish faqat `balRelax` orqali (soat umuman joylashmayotgan bo'lsa) va
-`balEmergency` da (oyna yopilmayotgan bo'lsa) bo'ladi. Zichlash bosqichi
-boshlanishida yumshatish BEKOR QILINADI, kvota esa haqiqatda joylashgan soat
-bo'yicha qayta hisoblanadi; `quotaFixPass()` kvotadan oshgan kunni majburan
-bo'shatadi (oyna ochadigan ko'chirishni qabul qilmaydi).
+Yon berish **bosqichma-bosqich** bo'ladi. Qidiruv qat'iy kvota bilan boshlanadi;
+soat joylashmay qolsa `solveSlack` BUTUN taxta bo'yicha kengayadi (to'lqin 3 →
++1, 6 → +2, 9 → cheklovsiz). Faqat joylashmagan darsni yumshatish yetmaydi:
+yo'lni to'sgan dars ham o'z prefiksidan chiqa olmasa, zanjirli ko'chirish
+ishlamaydi. Zichlash boshlanishida `solveSlack` va `balRelax` NOLGA qaytariladi,
+kvota esa haqiqatda joylashgan soat bo'yicha qayta hisoblanadi;
+`quotaFixPass()` kvotadan oshgan kunni majburan bo'shatadi (oyna ochadigan
+ko'chirishni qabul qilmaydi; chetlanish ≥3 bo'lgan sinfda zanjirga ruxsat).
 
 Ustuvorlik tartibi qat'iy: **joylangan soat → oyna → kunlik yuk tengligi**.
 Shuning uchun oxirgi bosqichda (oyna baribir qolsa) kunlik yuk chegarasi 1 taga
 yon beradi — kun o'rtasida nazoratsiz qolgan sinf notekis yukdan yomonroq.
+
+**Soat yo'qolmasligi uchun ikkita oxirgi chora** (`splitBlockAndPlace`,
+`restorePlace`):
+
+- **2 soatlik blokni bo'lish.** 2 soatlik blokka KETMA-KET ikki bo'sh soat
+  kerak (sinf + ustoz + xona bir vaqtda). Tor jadvalda bunday joy topilmasa,
+  blok ikkita 1 soatlik darsga bo'linadi — "2 soat blok" sozlamasi shu darsda
+  buziladi, lekin soat yo'qolmaydi. `swapEnabled` darsga tegilmaydi (guruh
+  almashinuvi aynan 2 soatga bog'liq).
+- **Bekor qilishda BAND katakka qo'yish taqiqlangan.** `balancePass` ko'chirishni
+  bekor qilganda darsni eski katagiga qaytaradi. U katak oraliqda band bo'lib
+  qolgan bo'lishi mumkin (kun qayta yig'ilgan) — ilgari dars baribir o'sha
+  yerga qo'yilar va **ustoz/xona bir vaqtda ikki joyda** bo'lib qolardi.
+  Endi `restorePlace()` avval `rawFree()` bilan katakni tekshiradi, band bo'lsa
+  boshqa bo'sh katak qidiradi. Har qanday yangi "bekor qilish" yo'li shu
+  funksiyadan foydalanishi SHART.
+
+### Ma'lumot xatolaridan tiklanish
+
+Guruhlar AYNI VAQTDA o'qiydi, shuning uchun bitta ustoz yoki bitta xona ikki
+guruhga yeta olmaydi. Ilgari bunday yozuv butun darsni yaroqsiz qilardi va
+soatlar **jimgina yo'qolardi**. Endi generator tiklanadi:
+
+| Xato | Nima bo'ladi |
+|---|---|
+| Daraja guruhlarida bir xil ustoz | takroriy daraja tashlanadi (`cleanLevelGroups`) |
+| Daraja/guruh/juftlikda bir xil xona | takroriy xona olib tashlanadi, dars xonasiz joylanadi (`dedupeRooms`) |
+| `splitEnabled`, lekin 1- va 2-guruhga bir xil ustoz | oddiy (bo'linmagan) dars sifatida joylanadi |
+
+Ma'lumotni baribir to'g'rilash kerak, shuning uchun
+[Schedule.jsx](src/pages/Schedule.jsx) `capacityWarnings()` bu holatlarni
+ro'yxatga chiqaradi. U yerda «Kelajak soati faqat dushanba, lekin ustoz
+dushanbada dam oladi» kabi **mumkin bo'lmagan** talablar ham ko'rsatiladi —
+aks holda foydalanuvchi 100% chiqmaganda sababini bilmay qoladi.
 
 **Ustoz va xona bandligi VAQT bo'yicha, slot id bo'yicha emas.** Ikki smena bir xil
 soatda o'tishi mumkin (id boshqa, `startTime` bir xil) — shuning uchun bandlik
