@@ -22,11 +22,17 @@ export default function MoveResolveModal({
   function describeAction(a) {
     const from = tsById.get(a.fromSlotId);
     const to = tsById.get(a.toSlotId);
-    const first = a.entries?.[0] || {};
-    const subj = nameOf(subjects, first.subjectId, "Dars");
-    const clsIds = Array.isArray(first.classIds) ? first.classIds : [first.classId].filter(Boolean);
-    const clsName = clsIds.map((id) => nameOf(classes, id, "")).filter(Boolean).join(", ");
-    const tch = first.teacherId ? nameOf(teachers, first.teacherId, "") : "";
+    // Karta bir nechta yozuvdan iborat bo'lishi mumkin (guruhlar, parallel
+    // sinflar, "bir vaqtda 2 fan"). Faqat birinchisi ko'rsatilsa, ekranda
+    // tasodifiy bitta sinf/ustoz turadi — nima ko'chayotgani noaniq bo'ladi.
+    const entries = Array.isArray(a.entries) && a.entries.length ? a.entries : [{}];
+    const uniq = (arr) => [...new Set(arr.filter(Boolean))];
+    const subj = uniq(entries.map((e) => nameOf(subjects, e.subjectId, ""))).join(" / ") || "Dars";
+    const clsName = uniq(entries.flatMap((e) =>
+      (Array.isArray(e.classIds) ? e.classIds : [e.classId].filter(Boolean))
+        .map((id) => nameOf(classes, id, ""))
+    )).join(", ");
+    const tch = uniq(entries.map((e) => (e.teacherId ? nameOf(teachers, e.teacherId, "") : ""))).join(", ");
     return {
       subj,
       clsName,

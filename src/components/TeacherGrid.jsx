@@ -13,12 +13,10 @@ import { Fragment, useMemo, useState } from "react";
 import { DAYS } from "../utils/constants";
 import { isTeachingSlot } from "../utils/scheduleGenerator";
 import {
-  classIdsOf, teacherIdsOf, collectCardEntries, unitOf, resolveMove, applyActions,
+  classIdsOf, teacherIdsOf, collectCardEntries, unitOf, resolveMove, applyActions, sameCard,
   softWarnings, checkPlace, findAutoPartner, onlyBusyReasons, unitLabel, slotLabel,
 } from "../utils/moveResolver";
 import { groupSlotsByShift, shiftSlotNumbers } from "../utils/shiftSlots";
-
-const cardKeyOf = (l) => [l.subjectId, l.groupKey || "", l.blockIndex ?? ""].join("__");
 
 const SWAP_CHIP = {
   marginTop: 4,
@@ -167,13 +165,15 @@ export default function TeacherGrid({
     const cell = schedule?.[day]?.[slotId];
     if (!Array.isArray(cell)) return [];
     const mine = cell.filter((l) => teacherIdsOf(l).includes(teacherId));
-    const map = new Map();
+    // Guruhlash `sameCard` bo'yicha — kalit qo'lda yasalganda sinf ham,
+    // `pairKey` ham hisobga olinmasdi va karta `collectCardEntries` bilan
+    // mos tushmay qolardi.
+    const groups = [];
     mine.forEach((l) => {
-      const k = cardKeyOf(l);
-      if (!map.has(k)) map.set(k, []);
-      map.get(k).push(l);
+      const g = groups.find((entries) => sameCard(entries[0], l));
+      if (g) g.push(l); else groups.push([l]);
     });
-    return [...map.values()].map((entries) => ({ entries, head: entries[0] }));
+    return groups.map((entries) => ({ entries, head: entries[0] }));
   }
 
   // Katak holati: 'off' | 'nonteaching' | 'free' | 'busy'

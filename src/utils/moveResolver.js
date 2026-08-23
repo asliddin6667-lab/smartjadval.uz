@@ -19,6 +19,17 @@ export function classIdsOf(lesson) {
   return Array.isArray(lesson?.classIds) ? lesson.classIds : [lesson?.classId].filter(Boolean);
 }
 
+// Ikki dars kamida bitta umumiy sinfga tegishlimi?
+// Katakda BARCHA sinflarning darslari yotadi, fan id si esa global — shuning
+// uchun "bir karta" deb faqat sinfi kesishadigan darslar qo'shilishi mumkin.
+// Sinfsiz eski yozuv bo'lsa — tekshirilmaydi (eski xatti-harakat saqlanadi).
+function shareClass(a, b) {
+  const ac = classIdsOf(a);
+  const bc = classIdsOf(b);
+  if (!ac.length || !bc.length) return true;
+  return ac.some((c) => bc.includes(c));
+}
+
 // Darsda band bo'ladigan barcha ustozlar (juft/toq almashinuvida ikkalasi ham)
 export function teacherIdsOf(lesson) {
   const ids = [];
@@ -65,12 +76,18 @@ export function slotAllowsClass(slot, classId) {
 
 // Bitta "karta" — Schedule.jsx dagi groupLessons kaliti bilan bir xil
 export function sameCard(a, b) {
+  if (!a || !b) return false;
   // "Bir vaqtda 2 fan": ikki guruh HAR XIL fan o'qiydi, lekin bitta katakda
   // yashaydi va birga ko'chishi shart — ularni `pairKey` bog'laydi.
-  const pk = a?.pairKey || "";
-  if (pk && pk === (b?.pairKey || "")) {
+  // Parallel sinflarda 2-guruh yozuvi HAR SINFDA alohida turadi, shuning
+  // uchun bu shoxda sinf SOLISHTIRILMAYDI — aks holda juft dars bo'linadi.
+  const pk = a.pairKey || "";
+  if (pk && pk === (b.pairKey || "")) {
     return String(a.blockIndex ?? "") === String(b.blockIndex ?? "");
   }
+  // Boshqa sinfning AYNI fani "shu karta" bo'lib qo'shilib ketmasin —
+  // busiz 1-A ning Matematikasi sudralganda 1-B niki ham birga ko'char edi.
+  if (!shareClass(a, b)) return false;
   return (
     a.subjectId === b.subjectId &&
     (a.groupKey || "") === (b.groupKey || "") &&
@@ -250,7 +267,7 @@ export function onlyBusyReasons(errs = []) {
 // Maqsad katakdagi unit bilan to'qnashadigan kartalar (birliklar) ro'yxati
 export function conflictingCards(ctx, unit, day, slot, ignore = new Set()) {
   const cell = cellsAt(ctx, day, slot);
-  const cards = new Map();
+  const cards = [];
   cell.forEach((l) => {
     if (ignore.has(l) || unit.entries.includes(l)) return;
     const conflicts =
@@ -258,11 +275,16 @@ export function conflictingCards(ctx, unit, day, slot, ignore = new Set()) {
       teacherIdsOf(l).some((t) => unit.teacherIds.includes(t)) ||
       (l.roomId && unit.roomIds.includes(l.roomId));
     if (!conflicts) return;
-    const k = [l.subjectId, l.groupKey || "", l.blockIndex ?? ""].join("__");
-    if (!cards.has(k)) cards.set(k, []);
-    cards.get(k).push(l);
+    if (cards.some((entries) => entries.includes(l))) return;
+    // Guruhlash `sameCard` bo'yicha — kalit qo'lda yasalganda sinf ham,
+    // `pairKey` ham hisobga olinmay qolardi. To'siq bo'lmagan bo'laklar
+    // ham qo'shiladi: karta baribir yaxlit ko'chadi.
+    const entries = collectCardEntries(cell, l).filter(
+      (x) => !ignore.has(x) && !unit.entries.includes(x)
+    );
+    cards.push(entries.length ? entries : [l]);
   });
-  return [...cards.values()].map(unitOf);
+  return cards.map(unitOf);
 }
 
 // ═══ AVTOMATIK SHERIK ═══
