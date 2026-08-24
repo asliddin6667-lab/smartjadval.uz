@@ -372,6 +372,28 @@ Eksport modullari: `coloredScheduleExport` (rangli dars jadvali), `hourGridExpor
 `main` ga push → [deploy.yml](.github/workflows/deploy.yml) → `npm run build` → GitHub
 Pages. `CNAME` = `smartjadval.uz`, Vite `base: '/'`. `dist/` git'da kuzatilmaydi.
 
+### Brauzer xotirasi (localStorage kvotasi)
+
+localStorage ~5 MB. Bitta maktabning jadvali + 20 tagacha saqlangan nusxa allaqachon
+bir necha MB — shu brauzerda IKKINCHI profil ochilsa kvota to'ladi.
+
+- `saveData()` ([storageService.js](src/services/storageService.js)) **hech qachon xato
+  chiqarmaydi** — `true`/`false` qaytaradi. Sabab: u App.jsx dagi `useEffect` ichidan
+  chaqiriladi, xato chiqarsa React BUTUN DARAXTNI yechib tashlaydi va ekran **oppoq**
+  bo'lib qoladi. Yangi saqlash yo'li qo'shsangiz — shu funksiyadan foydalaning,
+  `localStorage.setItem` ni to'g'ridan-to'g'ri chaqirmang.
+- Kvota to'lganda joy bosqichma-bosqich bo'shatiladi: eski `edujadval_` kalitlari →
+  boshqa profillarning konflikt zaxiralari → boshqa profillarning butun keshi →
+  (oxirgi chora) majburiy tozalash. Har bosqichdan keyin yozish qayta sinaladi.
+- **Kirishda boshqa profillarning keshi tozalanadi** (`purgeOtherUsers`, App.jsx).
+  Bulut yagona haqiqat manbai, shuning uchun xavfsiz. Bulutga yuborilmagan
+  o'zgarishi bor profil (`sync_meta_<id>.dirty`) yoki meta'si umuman yo'q profil
+  tozalanmaydi.
+- Yozib bo'lmasa `onStorageError` ishga tushadi — App.jsx ogohlantirish ko'rsatadi.
+- [ErrorBoundary.jsx](src/components/ErrorBoundary.jsx) butun ilovani o'raydi
+  ([main.jsx](src/main.jsx)) — endi har qanday xato oq ekran emas, tushunarli
+  xabar va "keshni tozalab qayta yuklash" tugmasi beradi.
+
 ## Bilib qo'yish kerak bo'lgan tuzoqlar
 
 - **Uslublar aralash:** `src/styles/*.css` global fayllar bor, lekin JSX ichida ham ko'p

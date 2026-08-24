@@ -661,7 +661,33 @@ function firePush() {
   const uid = pendingUserId;
   pendingUserId = null;
   if (!uid) return;
-  inFlight = pushWithRetry(uid).finally(() => { inFlight = null; });
+
+  // ——— YUBORISHLAR NAVBAT BILAN KETADI ———
+  // Ilgari yangi yuborish oldingisi tugashini kutmasdan boshlanardi.
+  // Ikkalasi bir xil `baseRev` bilan yozardi: biri o'tadi, ikkinchisi
+  // `stale` oladi -> `reconcile` -> bulutni qayta tortish -> ekranni
+  // yangilash -> yana `schedulePush`... Natijada nishon "Saqlanmoqda..."
+  // holatida qotib qolar va tarmoq bo'sh turmasdi. Endi navbat:
+  // oldingisi tugamaguncha keyingisi boshlanmaydi.
+  const prev = inFlight || Promise.resolve();
+  const run = prev
+    .catch(() => { /* oldingisining xatosi navbatni to'xtatmasin */ })
+    .then(() => pushWithRetry(uid))
+    .then((res) => {
+      // Kutayotgan yangi o'zgarish yo'q, lekin nishon hali "saqlanmoqda"
+      // deb tursa — uni bo'shatamiz. Aks holda foydalanuvchi ishi
+      // saqlanganini bilmay qoladi.
+      if (
+        !pushTimer && !pendingUserId && res?.ok &&
+        (syncState.state === "pending" || syncState.state === "saving")
+      ) {
+        emitState("saved");
+      }
+      return res;
+    })
+    .finally(() => { if (inFlight === run) inFlight = null; });
+
+  inFlight = run;
 }
 
 export function schedulePush(userId, delay = PUSH_DELAY) {
@@ -690,10 +716,11 @@ export async function flushPush() {
   const uid = pendingUserId;
   pendingUserId = null;
 
-  if (!uid) {
-    if (inFlight) { try { await inFlight; } catch { /* ignore */ } }
-    return { ok: true, reason: "nothing-pending" };
-  }
+  // Ketayotgan yuborish bo'lsa — avval u tugasin. Ikkita yozuv bir
+  // vaqtda ketsa CAS versiyalari to'qnashadi (yuqoridagi `firePush` ga qarang).
+  if (inFlight) { try { await inFlight; } catch { /* ignore */ } }
+
+  if (!uid) return { ok: true, reason: "nothing-pending" };
 
   try {
     return await pushToCloud(uid);
@@ -716,6 +743,27 @@ export function hasPendingPush() {
 //       bulut biz bilgan holatda   -> YUBORAMIZ (CAS)
 //       bulut oldinda              -> MOSLASHTIRAMIZ (kalitma-kalit)
 // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+//  SEANS HOLATINI TOZALASH — profil almashganda
+//
+//  Bu modulning holati (kutayotgan yuborish, "bulut javob bermadi"
+//  hisoblagichi) sahifa yangilanmasa saqlanib qoladi. Boshqa profilga
+//  kirilganda u eski holat yangi foydalanuvchiga o'tib ketardi:
+//    • oldingi profilning kutayotgan yuborishi yangi profil nomidan
+//      jo'natilishi mumkin edi;
+//    • `headFailures` 2 da qolgan bo'lsa, yangi profil BIRINCHI
+//      muvaffaqiyatsiz tekshiruvdayoq "faqat o'qish"ga tushardi.
+// ---------------------------------------------------------------------
+function resetSessionState(userId) {
+  if (pendingUserId && pendingUserId !== userId) {
+    if (pushTimer) { clearTimeout(pushTimer); pushTimer = null; }
+    pendingUserId = null;
+    pendingSince = 0;
+  }
+  headFailures = 0;
+  lastRemoteCheck = 0;
+}
+
 export async function syncOnLogin(user) {
   if (!user?.id) return { action: "skip", reason: "no-user" };
   if (isLocalOnly()) return { action: "skip", reason: "local-only" };
@@ -723,6 +771,7 @@ export async function syncOnLogin(user) {
 
   const userId = user.id;
   bindOnlineRetry(userId);
+  resetSessionState(userId);
 
   const localBlob = collectLocal(userId);
   const localHasData = !isEmptyBlob(localBlob);

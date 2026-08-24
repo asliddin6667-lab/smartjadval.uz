@@ -27,7 +27,10 @@ import UsersPage from "./pages/Users";
 import SettingsPage from "./pages/Settings";
 import DistrictApp from "./pages/DistrictApp";
 import { useToast } from "./hooks/useToast";
-import { loadData, saveData, loadUserData, saveUserData } from "./services/storageService";
+import {
+  loadData, saveData, loadUserData, saveUserData,
+  setActiveUser, purgeOtherUsers, onStorageError,
+} from "./services/storageService";
 import {
   getCurrentUser, logout, checkSubscription, refreshCurrentUser,
   isPasswordRecoveryUrl, completeForcedPasswordChange,
@@ -280,6 +283,26 @@ export default function App() {
   // ——— Bulut holatini kuzatish (nishon + "faqat o'qish" qulfi) ———
   useEffect(() => onSyncState(setSyncState), []);
 
+  // ——— Brauzer xotirasiga yozib bo'lmadi ———
+  // storageService endi xato CHIQARMAYDI (aks holda React butun
+  // daraxtni yechib tashlar va ekran oq bo'lib qolardi), lekin
+  // foydalanuvchi buni bilishi kerak: bulut ishlayveradi, mahalliy
+  // kesh esa eskirgan bo'lib qoladi.
+  useEffect(() => {
+    let lastWarn = 0;
+    return onStorageError((info) => {
+      if (Date.now() - lastWarn < 30000) return;   // toast yomg'iri bo'lmasin
+      lastWarn = Date.now();
+      addToast(
+        info?.reason === "quota"
+          ? "Brauzer xotirasi to'ldi — ma'lumot faqat bulutga saqlanmoqda. Keraksiz saqlangan jadvallarni o'chiring"
+          : "Brauzer xotirasiga yozib bo'lmadi — ma'lumot bulutga saqlanmoqda",
+        "warning"
+      );
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ——— Yuborilmagan o'zgarish bilan sahifani yopishga urinish ———
   // Brauzer o'zining standart ogohlantirishini ko'rsatadi.
   useEffect(() => {
@@ -343,6 +366,27 @@ export default function App() {
     let cancelled = false;
     // Yangi seans — sinxronizatsiya tugamaguncha push qulflanadi
     setSyncDone(false);
+
+    // ——— BOSHQA PROFILLARNING MAHALLIY KESHINI TOZALASH ———
+    // Bitta brauzerda ikkinchi maktab hisobi ochilsa, birinchisining
+    // jadvali localStorage'da qolib ketardi. Ikkitasi birgalikda
+    // brauzer kvotasini (~5 MB) to'ldirar va keyingi har bir yozuv
+    // xato berardi — ekran oq bo'lib qolar, "Saqlanmoqda..." nishoni
+    // esa abadiy qotib turardi.
+    //
+    // Bulut yagona haqiqat manbai, shuning uchun boshqa profilning
+    // keshini o'chirish xavfsiz: u qayta kirganda hammasi bulutdan
+    // yuklanadi. Bulutga yuborilmagan o'zgarishi bor profilga
+    // TEGILMAYDI (purgeOtherUsers ichida tekshiriladi).
+    setActiveUser(currentUser.id);
+    try {
+      const cleaned = purgeOtherUsers(currentUser.id);
+      if (cleaned.users) {
+        console.log(
+          `🧹 ${cleaned.users} ta boshqa profil keshi tozalandi (${cleaned.freedKb} KB bo'shadi)`
+        );
+      }
+    } catch { /* tozalash ixtiyoriy — ilova baribir ochiladi */ }
 
     const applyData = applySchoolData;
 
@@ -534,6 +578,7 @@ export default function App() {
     // Chiqishdan oldin yuborilmagan o'zgarishlarni bulutga jo'natamiz
     try { await flushPush(); } catch { /* internet yo'q — mahalliy qoladi */ }
     stopAutoSync();
+    setActiveUser(null);
     logout();
     setCurrentUser(null);
     setDataReady(false);

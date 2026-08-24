@@ -143,8 +143,13 @@ export default function AuthPage({ onAuth, initialMode = "login", onBack }) {
     setError("");
     try {
       const user = await login(form.email, form.password, tokenRef.current);
-      if (remember) localStorage.setItem("edu_remember_email", form.email);
-      else localStorage.removeItem("edu_remember_email");
+      // Brauzer xotirasi to'lgan bo'lsa setItem xato beradi. Bu KIRISHNI
+      // to'xtatmasligi kerak — email eslab qolinmasa ham foydalanuvchi
+      // platformaga kiraverishi shart.
+      try {
+        if (remember) localStorage.setItem("edu_remember_email", form.email);
+        else localStorage.removeItem("edu_remember_email");
+      } catch { /* xotira to'lgan — eslab qolinmaydi, xolos */ }
       onAuth(user);
     } catch (err) {
       setError(err.message);
