@@ -997,7 +997,12 @@ function attemptSchedule(
           pairSideGroups(a).forEach((g) => {
             // Ustozi tanlanmagan guruh hali sozlanmagan — tashlanadi
             if (!g.subjectId || !g.teacherId) return;
-            const partKey = g.shared && pgKey ? `S__${g.gid}` : `C__${cls.id}__${g.gid}`;
+            // Parallel guruhda AYNI USTOZ + AYNI GURUH = AYNI DARS: ustoz bir
+            // vaqtda ikki sinfda tura olmaydi. Shuning uchun birlashtirish
+            // `shared` bayrog'iga emas, USTOZGA tayanadi — bayroq sinflar
+            // orasida nomutanosib qolsa ham dars ikkiga bo'linib ketmaydi
+            // (ilgari bunda ustoz takrorlanib, butun karta tashlanardi).
+            const partKey = pgKey ? `T__${g.gid}__${g.teacherId}` : `C__${cls.id}__${g.gid}`;
             let part = pg.partMap.get(partKey);
             if (!part) {
               part = {

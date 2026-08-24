@@ -11,6 +11,7 @@ import { LANG_BOTH, classLangOf, subjectLangOf, subjectFitsLang, langIcon, langL
 import {
   PAIR_MAX_EXTRA, PAIR_MAX_GROUPS, PAIR_MAX_EXTRA_GROUPS,
   makePairGroup, normalizePairExtra, pairSideGroups, pairSideSlots,
+  pairCardKey, pairTeacherIds, pairAlignSlots,
 } from "../utils/pairGroups";
 import "../styles/cs-mobile.css";
 
@@ -209,7 +210,7 @@ function computeTeacherHours(classSubjects) {
   const poolDone = new Set();
   const parallelDone = new Set();
 
-  Object.values(classSubjects || {}).forEach((list) => {
+  Object.entries(classSubjects || {}).forEach(([classId, list]) => {
     (list || []).forEach((a) => {
       if (!a) return;
       const h = Number(a.weeklyHours || 0);
@@ -242,22 +243,16 @@ function computeTeacherHours(classSubjects) {
       }
 
       // 3) Bir vaqtda bir nechta fan (+ parallel sinflar).
-      //    1-guruh ustozi hamma sinfga BIR VAQTDA kiradi — guruh bo'yicha
-      //    1 marta. Qolgan guruhlardan UMUMIY bo'lgani ham 1 marta,
-      //    umumiy bo'lmagani esa har sinfda alohida hisoblanadi.
+      //    Kartadagi guruhlar AYNI SOATDA o'qiydi va parallel sinflar bitta
+      //    kartani baham ko'radi — shuning uchun HAR BIR USTOZ kartada
+      //    BIR MARTA sanaladi (nechta guruhda va nechta sinfda tursa ham).
       if (a.pairEnabled) {
-        const pairKey = String(a.pairGroupKey || "").trim();
-        const once = (sig, tid) => {
-          if (!tid) return;
-          if (sig) {
-            if (parallelDone.has(sig)) return;
-            parallelDone.add(sig);
-          }
+        const card = pairCardKey(a, classId);
+        pairTeacherIds(a).forEach((tid) => {
+          const sig = `${card}|${tid}`;
+          if (parallelDone.has(sig)) return;
+          parallelDone.add(sig);
           add(tid, h);
-        };
-        once(pairKey ? `PP|${a.subjectId}|${pairKey}|${a.teacherId}` : "", a.teacherId);
-        pairSideGroups(a).forEach((g) => {
-          once(g.shared && pairKey ? `PS|${a.subjectId}|${pairKey}|${g.gid}` : "", g.teacherId);
         });
         return;
       }
@@ -1632,7 +1627,9 @@ Fan bilan birga ular ham o'chsinmi?`;
                               // uchun ustoz ham, xona ham butun karta bo'ylab
                               // takrorlanmasligi kerak. Umumiy guruh — bitta "slot".
                               const slotKey = (gid, shared, classId) => (shared ? `S|${gid}` : `C|${classId}|${gid}`);
-                              const rowSlots = (classId, row) => pairSideSlots(row).map(g => ({
+                              // A'zo sinf guruhlari asosiy sinf tuzilishi bo'yicha o'qiladi
+                              const slotsOf = (row) => (row === a ? slots : pairAlignSlots(a, row));
+                              const rowSlots = (classId, row) => slotsOf(row).map(g => ({
                                 key: slotKey(g.gid, g.shared, classId),
                                 teacherId: g.teacherId, roomId: g.roomId,
                               }));
@@ -1868,7 +1865,7 @@ Fan bilan birga ular ham o'chsinmi?`;
                                   const chipsFor = (row) => (
                                     <div className="cs-pp-pairline">
                                       <span className="cs-pp-chip cs-pp-chip-1">1 · {s.name}</span>
-                                      {pairSideSlots(row).map((g, i) => (
+                                      {slotsOf(row).map((g, i) => (
                                         <span className="cs-pp-chipwrap" key={g.gid}>
                                           <span className="cs-pp-plus">+</span>
                                           <span className={`cs-pp-chip ${i === 0 ? "cs-pp-chip-2" : "cs-pp-chip-x"}${g.shared ? " is-shared" : ""}`}>
@@ -1915,7 +1912,7 @@ Fan bilan birga ular ham o'chsinmi?`;
                                         </div>
 
                                         {members.map(({ cls, a: m }) => {
-                                          const mSlots = pairSideSlots(m);
+                                          const mSlots = slotsOf(m);
                                           const own = mSlots.filter(g => !g.shared);
                                           return (
                                             <div className="cs-pp-card" key={cls.id}>
@@ -2036,7 +2033,7 @@ Fan bilan birga ular ham o'chsinmi?`;
                                   if (a.roomId) rSeen.set(a.roomId, `${here} 1-guruhi`);
 
                                   const checkRow = (clsName, classId, row) => {
-                                    pairSideSlots(row).forEach((g, i) => {
+                                    slotsOf(row).forEach((g, i) => {
                                       const num = i + 2;
                                       const key = slotKey(g.gid, g.shared, classId);
                                       if (seenSlot.has(key)) return;

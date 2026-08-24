@@ -1,7 +1,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { DAYS } from "../utils/constants";
 import { groupSlotsByShift, shiftSlotNumbers } from "../utils/shiftSlots";
-import { pairSideGroups } from "../utils/pairGroups";
+import { pairSideGroups, pairCardKey } from "../utils/pairGroups";
 import "./vacancy.css";
 
 // =====================================================================
@@ -216,7 +216,12 @@ export function computeVacancy(d) {
         poolClassNames.get(sig).add(c.name || "?");
       }
 
-      entries.push({ clsId: c.id, clsName: c.name || "?", h, sid, slots, sig });
+      // Karta kaliti: kartadagi hamma guruh AYNI SOATDA o'qiydi (parallel
+      // sinflar esa bitta kartani baham ko'radi), shuning uchun bitta ustoz
+      // kartada BIR MARTA sanaladi — pastdagi `seenCardTeach`.
+      const card = a.pairEnabled ? pairCardKey(a, c.id) : null;
+
+      entries.push({ clsId: c.id, clsName: c.name || "?", h, sid, slots, sig, card });
 
       // ——— "Bir vaqtda 2 fan": 2-GURUH ———
       // Sinf ikkiga bo'linadi va 2-guruh AYNI SOATDA boshqa fanni boshqa
@@ -235,6 +240,7 @@ export function computeVacancy(d) {
           sid: g.subjectId,
           slots: [g.teacherId || ""],
           sig: g.shared && pk ? `id:${pk}|${g.gid}` : null,
+          card,
           pairPart: true,
         });
       });
@@ -249,6 +255,10 @@ export function computeVacancy(d) {
   // ---- 2-bosqich: hisoblash (hovuz — bir marta)
   const seenSlot = new Set();    // hovuz o'rni (fan + guruh) — kerakli/vakant uchun
   const seenTeach = new Set();   // hovuz o'rni + ustoz — yuklama uchun
+  // "Bir vaqtda bir nechta fan" kartasi + ustoz. Kartadagi guruhlar AYNI
+  // SOATDA o'tadi, shuning uchun ustoz nechta guruhda tursa ham soati
+  // BIR MARTA yoziladi (aks holda 4 soat 8 bo'lib ko'rinardi).
+  const seenCardTeach = new Set();
   let poolMergedTotal = 0;       // hovuz tufayli qo'shilmagan (takroriy) soatlar
   let entryNo = 0;
 
@@ -290,8 +300,14 @@ export function computeVacancy(d) {
         }
       }
 
+      // Ayni ustoz shu kartada allaqachon hisoblanganmi? (1-guruh va
+      // 2-guruhda bir ustoz — bu bitta dars, ikkita emas)
+      const cardTeachKey = e.card && tid ? `${e.card}|${tid}` : null;
+      const dupCardTeach = cardTeachKey ? seenCardTeach.has(cardTeachKey) : false;
+      if (cardTeachKey) seenCardTeach.add(cardTeachKey);
+
       // --- Sinf kesimi: o'rinlar
-      if (agg) {
+      if (agg && !dupCardTeach) {
         agg.staffHours += e.h;
         if (tid) {
           agg.assigned += e.h;
@@ -304,23 +320,26 @@ export function computeVacancy(d) {
         }
       }
 
-      // --- O'qituvchi yuklamasi (hovuzda ayni ustoz 1 marta)
+      // --- O'qituvchi yuklamasi (hovuzda va kartada ayni ustoz 1 marta)
       if (tid) {
         if (!tClasses.has(tid)) tClasses.set(tid, new Set());
         tClasses.get(tid).add(e.clsId);
         if (!tDetail.has(tid)) tDetail.set(tid, new Map());
 
-        const dKey = e.sig ? `p|${e.sig}|${e.sid}|${idx}` : `s|${entryNo}|${idx}`;
+        const dKey = cardTeachKey
+          ? `c|${cardTeachKey}`
+          : (e.sig ? `p|${e.sig}|${e.sid}|${idx}` : `s|${entryNo}|${idx}`);
         const dMap = tDetail.get(tid);
 
-        if (!dupTeach) {
+        if (!dupTeach && !dupCardTeach) {
           bump(declared, tid, e.h);
           if (!declaredSubj.has(tid)) declaredSubj.set(tid, new Map());
           bump(declaredSubj.get(tid), e.sid, e.h);
         }
 
         if (dMap.has(dKey)) {
-          // hovuzning ikkinchi sinfi — soat qo'shilmaydi, sinf nomi qo'shiladi
+          // hovuzning ikkinchi sinfi yoki kartaning boshqa guruhi —
+          // soat qo'shilmaydi, faqat sinf nomi qo'shiladi
           dMap.get(dKey).classNames.add(e.clsName);
         } else {
           dMap.set(dKey, {

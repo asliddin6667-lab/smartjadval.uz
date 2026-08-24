@@ -112,13 +112,42 @@ export function pairAllGroups(a) {
   ];
 }
 
-// Guruh qaysi "dars oqimi"ga tegishli. Umumiy guruh parallel sinflarda
-// BITTA dars — shuning uchun ustoz soati bir marta sanalsin.
-export function pairGroupSignature(a, g, classId) {
+// ——— KARTA = BITTA SOAT ———
+// Kartadagi barcha guruh AYNI SOATDA o'qiydi, parallel sinflar esa bitta
+// kartani baham ko'radi. Demak ustoz kartada nechta guruhda tursa ham
+// (va nechta sinf bo'lsa ham) KO'PI BILAN `weeklyHours` soat band bo'ladi —
+// u bir vaqtda ikki joyda tura olmaydi.
+//
+// Shu kalit yordamida ustoz soati kartada BIR MARTA sanaladi. Qoida
+// `shared` bayrog'iga bog'liq emas: bir xil ustoz + bir xil karta = bir xil
+// dars, sozlama qanday bo'lishidan qat'i nazar.
+export function pairCardKey(a, classId) {
   const pk = String(a?.pairGroupKey || "").trim();
-  return g.shared && pk
-    ? `PS|${pk}|${a.subjectId}|${g.gid}`
-    : `PC|${classId}|${a.subjectId}|${g.gid}`;
+  return pk ? `PK|${pk}|${a?.subjectId || ""}` : `PC|${classId}|${a?.subjectId || ""}`;
+}
+
+// Kartadagi BARCHA ustozlar (takrorsiz) — 1-guruh va qolganlari
+export function pairTeacherIds(a) {
+  return [...new Set(pairAllGroups(a).map((g) => g.teacherId).filter(Boolean))];
+}
+
+// A'ZO SINF guruhlari — tuzilishi ASOSIY sinfdan olinadi.
+// Guruh nomi va "umumiy" bayrog'i kartaga tegishli, shuning uchun ular
+// har doim asosiy sinfnikidan o'qiladi; qiymatlar esa umumiy guruhda
+// asosiy sinfdan, aks holda a'zoning o'zidan. Shu tufayli bayroq
+// sinflar orasida nomutanosib bo'lib qolsa ham ekran to'g'ri ko'rsatadi.
+export function pairAlignSlots(owner, member) {
+  const mine = pairSideSlots(member);
+  return pairSideSlots(owner).map((og) => {
+    if (og.shared) return { ...og };
+    const mg = mine.find((x) => x.gid === og.gid);
+    return {
+      ...og,
+      subjectId: mg?.subjectId || "",
+      teacherId: mg?.teacherId || "",
+      roomId: mg?.roomId || "",
+    };
+  });
 }
 
 // Shu qatordagi BARCHA fanlar (1-guruh + qolganlari)

@@ -238,6 +238,19 @@ butun karta bo'ylab takrorlanmasligi shart** — UI tanlash ro'yxatlarini filtrl
 va ogohlantiradi, generator esa takroriy xonani olib tashlaydi (`dedupeRooms`),
 takroriy ustozli so'rovni esa qabul qilmaydi.
 
+**USTOZ SOATI — KARTADA BIR MARTA.** Kartadagi guruhlar ayni soatda o'qiydi va
+parallel sinflar bitta kartani baham ko'radi, shuning uchun ustoz nechta guruhda
+va nechta sinfda tursa ham ko'pi bilan `weeklyHours` soat band bo'ladi. Sanoq
+`shared` bayrog'iga EMAS, `pairCardKey(a, classId)` + ustoz id'siga tayanadi —
+bayroq sinflar orasida nomutanosib qolsa ham soat ikkilanmaydi. Shu qoida
+ClassSubjects `computeTeacherHours`, Schedule `computeTeacherLoadRows`,
+TeacherAvailability, VacancyAnalysis (`seenCardTeach`) va districtExcel da
+takrorlangan. Generatorda ham xuddi shunday: guruh bo'laklari
+`T__<gid>__<teacherId>` bo'yicha birlashadi — aks holda ayni ustoz ikki bo'lakka
+tushib, `isValidRequest` butun kartani jimgina tashlab yuborardi. UI tomonda esa
+a'zo sinf guruhlari `pairAlignSlots(owner, member)` orqali ASOSIY sinf tuzilishi
+bo'yicha ko'rsatiladi.
+
 **FAN esa TAKRORLANISHI MUMKIN** — masalan 1-guruh Fizika (Asilbek), 3-guruh ham
 Fizika (Bekzod). Shu sababli soat sanashda ehtiyot bo'ling: guruhlar AYNI SOATDA
 o'qiganidan, sinf setkasida har bir **TURLI** fan `weeklyHours` ta soat egallaydi

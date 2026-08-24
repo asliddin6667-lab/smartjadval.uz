@@ -10,7 +10,7 @@ import {
   findAutoPartner, onlyBusyReasons, unitLabel, slotLabel,
 } from "../utils/moveResolver";
 import { slotDisplayNumber } from "../utils/shiftSlots";
-import { pairSideGroups, pairAllGroups } from "../utils/pairGroups";
+import { pairSideGroups, pairAllGroups, pairCardKey } from "../utils/pairGroups";
 import MoveResolveModal from "../components/MoveResolveModal";
 import SaveScheduleModal from "../components/SaveScheduleModal";
 import TeacherGrid from "../components/TeacherGrid";
@@ -1144,22 +1144,20 @@ export default function SchedulePage({
       (classSubjects?.[cls.id] || []).forEach((a, idx) => {
         const h = Number(a.weeklyHours || 0);
         const lg = String(a.levelGroupKey || "").trim();
-        const pg = String(a.pairGroupKey || "").trim();
         if (a.levelGroupEnabled && a.levelGroups?.length) {
           // Daraja guruhlari: bir xil kalitli sinflar birga o'qiydi
           a.levelGroups.forEach((g, gi) => add(g.teacherId, `LG|${lg}|${a.subjectId}|${gi}`, h, cls.id, a.subjectId));
+        } else if (a.pairEnabled) {
+          // Bir vaqtda bir nechta fan: kartadagi guruhlar AYNI SOATDA o'tadi va
+          // parallel sinflar bitta kartani baham ko'radi — har ustoz kartada
+          // BIR MARTA sanaladi (`add()` bir xil kalitda max oladi).
+          const card = pairCardKey(a, cls.id);
+          pairAllGroups(a).forEach((g) => add(g.teacherId, `${card}|${g.teacherId}`, h, cls.id, g.subjectId));
         } else {
-          add(a.teacherId, pg ? `PG|${pg}|${a.subjectId}` : `C|${cls.id}|${idx}`, h, cls.id, a.subjectId);
+          add(a.teacherId, `C|${cls.id}|${idx}`, h, cls.id, a.subjectId);
           if (a.splitEnabled && a.teacherId2) add(a.teacherId2, `C2|${cls.id}|${idx}`, h, cls.id, a.subjectId);
         }
         if (a.swapEnabled && a.swapTeacherId) add(a.swapTeacherId, `SW|${cls.id}|${idx}`, h, cls.id, a.swapSubjectId);
-        // Bir vaqtda bir nechta fan: UMUMIY guruh parallel sinflarda BITTA
-        // dars — ustoz soati guruh bo'yicha bir marta sanaladi.
-        pairSideGroups(a).forEach((g) => add(
-          g.teacherId,
-          g.shared && pg ? `PS|${pg}|${a.subjectId}|${g.gid}` : `PR|${cls.id}|${idx}|${g.gid}`,
-          h, cls.id, g.subjectId
-        ));
         if (a.weekAltEnabled && a.weekAltTeacherId) add(a.weekAltTeacherId, `WA|${cls.id}|${idx}`, Number(a.weekAltHours || 1), cls.id, a.weekAltSubjectId);
       });
     });

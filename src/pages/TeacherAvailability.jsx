@@ -2,7 +2,7 @@ import { Fragment, useMemo, useState } from "react";
 import { DAYS } from "../utils/constants";
 import { isTeachingSlot } from "../utils/scheduleGenerator";
 import { groupSlotsByShift, shiftSlotNumbers } from "../utils/shiftSlots";
-import { pairSideGroups } from "../utils/pairGroups";
+import { pairCardKey, pairTeacherIds } from "../utils/pairGroups";
 import "../styles/teacherAvailability.css";
 
 // ————————————————————————————————————————————————————————————
@@ -171,17 +171,11 @@ export default function TeacherAvailabilityPage({
         // Parallel sinflarda (pairGroupKey) 1-guruh ustozi hamma sinfga
         // BIR VAQTDA kiradi — guruh bo'yicha bir marta hisoblanadi.
         if (a.pairEnabled) {
-          const pk = String(a.pairGroupKey || '').trim();
-          const once = (key) => {
-            if (!key) { total += wh; return; }
-            if (seen.has(key)) return;
-            seen.add(key);
-            total += wh;
-          };
-          if (a.teacherId === tid) { once(pk ? `PP|${a.subjectId}|${pk}|${tid}` : ''); return; }
-          // UMUMIY guruh parallel sinflarda BITTA dars — bir marta sanaladi
-          const own = pairSideGroups(a).find((g) => g.teacherId === tid);
-          if (own) once(own.shared && pk ? `PS|${a.subjectId}|${pk}|${own.gid}` : '');
+          // Kartadagi guruhlar AYNI SOATDA o'tadi va parallel sinflar bitta
+          // kartani baham ko'radi — ustoz kartada BIR MARTA sanaladi.
+          if (!pairTeacherIds(a).includes(tid)) return;
+          const key = `${pairCardKey(a, cls.id)}|${tid}`;
+          if (!seen.has(key)) { seen.add(key); total += wh; }
           return;
         }
         // Almashinuv (2 fan bitta vaqtda) — ikkala ustoz ham band

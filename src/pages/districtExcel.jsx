@@ -5,7 +5,7 @@ import {
   fetchExcelStore, upsertExcelData, deleteExcelData,
 } from "../services/districtExcelService";
 import "./districtExcel.css";
-import { pairSideGroups, pairAllGroups } from "../utils/pairGroups";
+import { pairAllGroups, pairCardKey, pairTeacherIds } from "../utils/pairGroups";
 
 // =====================================================================
 //  TUMAN ADMIN — EXCEL MA'LUMOTLAR va HISOBOTLAR
@@ -949,6 +949,7 @@ export function buildAutoExcelData(d) {
   // Biriktirilgan soat = Sinf fanlari bo'limida shu ustozga berilgan
   // haftalik soatlar yig'indisi (oddiy + bo'lingan guruh + daraja guruhi).
   const declared = new Map(); // teacherId -> soat
+  const declSeen = new Set(); // karta + ustoz (bir vaqtda bir nechta fan)
   const addDecl = (tid, h) => {
     if (!tid || !h) return;
     declared.set(tid, (declared.get(tid) || 0) + h);
@@ -959,11 +960,18 @@ export function buildAutoExcelData(d) {
       const h = Number(a.weeklyHours || 0);
       if (a.levelGroupEnabled && Array.isArray(a.levelGroups) && a.levelGroups.length) {
         for (const g of a.levelGroups) addDecl(g.teacherId, h);
+      } else if (a.pairEnabled) {
+        // Kartadagi guruhlar AYNI SOATDA — har ustoz kartada BIR MARTA
+        const card = pairCardKey(a, c.id);
+        pairTeacherIds(a).forEach((tid) => {
+          const key = `${card}|${tid}`;
+          if (declSeen.has(key)) return;
+          declSeen.add(key);
+          addDecl(tid, h);
+        });
       } else {
         addDecl(a.teacherId, h);
         addDecl(a.teacherId2, h);
-        // Bir vaqtda bir nechta fan — 2-, 3-guruh ustozlari ham shu soatlarda band
-        pairSideGroups(a).forEach((g) => addDecl(g.teacherId, h));
       }
     }
   }
