@@ -9,7 +9,7 @@
 import { DAYS } from './constants';
 import { loadStyledXLSX } from './excelUtils';
 import { isTeachingSlot } from './scheduleGenerator';
-import { pairSideGroups } from './pairGroups';
+import { pairSideGroups, pairAllGroups } from './pairGroups';
 
 function lessonClassIds(lesson) {
   return Array.isArray(lesson.classIds) ? lesson.classIds : [lesson.classId].filter(Boolean);
@@ -111,9 +111,13 @@ export async function exportAnalysisExcel({
     const requiredHours = (classId, subjectId) => {
       let req = 0;
       (classSubjects?.[classId] || []).forEach((a) => {
+        if (a.pairEnabled) {
+          // Guruhlar bitta soatda — takroriy fan BIR MARTA sanaladi
+          if (pairAllGroups(a).some((g) => g.subjectId === subjectId)) req += Number(a.weeklyHours || 0);
+          return;
+        }
         if (a.subjectId === subjectId) req += Number(a.weeklyHours || 0);
         if (a.swapEnabled && a.swapSubjectId === subjectId) req += Number(a.weeklyHours || 0);
-        if (pairSideGroups(a).some((g) => g.subjectId === subjectId)) req += Number(a.weeklyHours || 0);
       });
       return req;
     };

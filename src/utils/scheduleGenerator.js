@@ -1,5 +1,5 @@
 import { DAYS } from "./constants";
-import { normalizePairExtra, pairSideGroups } from "./pairGroups";
+import { normalizePairExtra, pairSideGroups, pairAllGroups } from "./pairGroups";
 
 export function isTeachingSlot(timeslot) {
   const type = timeslot?.type || "lesson";
@@ -1156,7 +1156,9 @@ function attemptSchedule(
         const tB = teacherById.get(g.teacherId);
         if (!tB || !g.subjectId) return false;
         if (!subjectById.has(g.subjectId)) return false;
-        if (g.subjectId === req.subjectId) return false;
+        // Fan guruhlar bo'ylab TAKRORLANISHI mumkin — masalan 1-guruh Fizika
+        // (bir ustoz), 3-guruh ham Fizika (boshqa ustoz). Ustozlar esa
+        // takrorlanmaydi (pastdagi umumiy tekshiruv buni ushlaydi).
         if (!teacherSubjSet.get(tB.id).has(g.subjectId)) return false;
       }
     } else if (req.type === "weekAlt") {
@@ -1244,11 +1246,14 @@ function attemptSchedule(
           byClass.get(cid).push(g.subjectId);
         });
       });
+      // Bir xil fan bir nechta guruhda bo'lishi mumkin, lekin sinf uchun u
+      // AYNI SOATDA turadi — kunlik fan limitiga BIR MARTA sanaladi.
+      // 1-guruh fani (`req.sIdx`) ham shu ro'yxatdan chiqariladi.
       req.perClassSIdx = req.classIds
         .filter((cid) => cIdxOf.get(cid) !== undefined)
-        .map((cid) => (byClass.get(cid) || [])
+        .map((cid) => [...new Set((byClass.get(cid) || [])
           .map((sid) => sIdxOf.get(sid) ?? -1)
-          .filter((si) => si >= 0));
+          .filter((si) => si >= 0 && si !== req.sIdx))]);
     }
     req.roomArrs = req.rids.map((rid) => roomGrid(rid));
     // ——— Kunlik fan limiti (qattiq) — kvotadan keyin qayta hisoblanadi ———
@@ -4694,9 +4699,15 @@ function totalWeeklyHours(classSubjects = {}) {
   let total = 0;
   Object.values(classSubjects).forEach((list) => {
     (Array.isArray(list) ? list : []).forEach((a) => {
+      if (a?.pairEnabled) {
+        // Kartadagi guruhlar BITTA soatda o'qiydi: sinf setkasida har bir
+        // TURLI fan `weeklyHours` ta soat egallaydi (takroriy fan — 1 marta).
+        const uniq = new Set(pairAllGroups(a).map((g) => g.subjectId).filter(Boolean));
+        total += Math.max(1, uniq.size) * Number(a?.weeklyHours || 0);
+        return;
+      }
       total += Number(a?.weeklyHours || 0);
       if (a?.swapEnabled && a?.swapSubjectId) total += Number(a?.weeklyHours || 0);
-      if (a?.pairEnabled && a?.pairSubjectId) total += Number(a?.weeklyHours || 0);
       if (a?.weekAltEnabled && a?.weekAltSubjectId) total += Number(a?.weekAltHours || 1);
     });
   });

@@ -1643,11 +1643,11 @@ Fan bilan birga ular ham o'chsinmi?`;
                               ];
                               const busyT = (key) => new Set(allSlots.filter(x => x.key !== key).map(x => x.teacherId).filter(Boolean));
                               const busyR = (key) => new Set(allSlots.filter(x => x.key !== key).map(x => x.roomId).filter(Boolean));
-                              // Bitta sinfda bitta fan ikki guruhga tushmasin
-                              const usedSubjects = (row, gid) => new Set([
-                                s.id,
-                                ...pairSideSlots(row).filter(g => g.gid !== gid).map(g => g.subjectId),
-                              ].filter(Boolean));
+                              // BIR XIL FAN bir nechta guruhda turishi MUMKIN —
+                              // masalan 1-guruh Fizika (Asilbek), 3-guruh Fizika
+                              // (boshqa ustoz). Shuning uchun fan ro'yxati
+                              // filtrlanmaydi; faqat USTOZ va XONA takrorlanmaydi
+                              // (ular bir vaqtda ikki joyda tura olmaydi).
 
                               // ——— GURUH SOZLAMASINI YOZISH ———
                               // 2-guruh eski maydonlarda (pairSubjectId…), 3-guruhdan
@@ -1682,7 +1682,6 @@ Fan bilan birga ular ham o'chsinmi?`;
                                 const key = slotKey(g.gid, g.shared, selectedClassId);
                                 const bt = busyT(key);
                                 const br = busyR(key);
-                                const used = usedSubjects(a, g.gid);
                                 return (
                                   <div className={`cs-split-card ${g.isSecond ? "cs-split-card-2" : "cs-split-card-x"}`} key={g.gid}>
                                     <div className="cs-split-head">
@@ -1715,8 +1714,7 @@ Fan bilan birga ular ham o'chsinmi?`;
                                         onChange={e => setGroup(g, { subjectId: e.target.value })}
                                       >
                                         <option value="">— fanni tanlang —</option>
-                                        {langSubjects.filter(x => x.id === g.subjectId || !used.has(x.id))
-                                          .map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
+                                        {langSubjects.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
                                       </select>
                                     </div>
                                     <div className="cs-split-field">
@@ -1941,7 +1939,6 @@ Fan bilan birga ular ham o'chsinmi?`;
                                                 const key = slotKey(g.gid, false, cls.id);
                                                 const bt = busyT(key);
                                                 const br = busyR(key);
-                                                const usedS = usedSubjects(m, g.gid);
                                                 return (
                                                   <div className="cs-pp-groupbox" key={g.gid}>
                                                     <div className="cs-pp-groupname">
@@ -1956,8 +1953,7 @@ Fan bilan birga ular ham o'chsinmi?`;
                                                           onChange={e => setGroup(g, { subjectId: e.target.value }, cls.id)}
                                                         >
                                                           <option value="">— fanni tanlang —</option>
-                                                          {sortByName(subjects.filter(x => subjectFitsLang(x, classLangOf(cls))
-                                                            && (x.id === g.subjectId || !usedS.has(x.id))))
+                                                          {sortByName(subjects.filter(x => subjectFitsLang(x, classLangOf(cls))))
                                                             .map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
                                                         </select>
                                                       </label>
@@ -2052,8 +2048,12 @@ Fan bilan birga ular ham o'chsinmi?`;
                                         return;
                                       }
                                       if (!g.teacherId) warns.push(`${where}: ustoz tanlanmagan`);
-                                      if (g.subjectId === s.id) warns.push(`${where}: 1-guruh fani bilan bir xil fan tanlangan`);
-                                      if ((classSubjects[classId] || []).some(x => x.subjectId === g.subjectId)) {
+                                      // Bir xil fan bir nechta guruhda turishi MUMKIN
+                                      // (boshqa ustoz kiradi) — bu xato emas.
+                                      // Faqat kartadan TASHQARIDA alohida belgilangan
+                                      // bo'lsa ogohlantiramiz: soat ikki marta sanaladi.
+                                      if (g.subjectId !== s.id
+                                        && (classSubjects[classId] || []).some(x => x.subjectId === g.subjectId)) {
                                         warns.push(`${clsName}: «${nameOfSubject(g.subjectId)}» ro'yxatda alohida ham belgilangan — belgini olib tashlang`);
                                       }
                                       if (g.teacherId) {

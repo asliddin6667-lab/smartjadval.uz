@@ -5,7 +5,7 @@ import {
   fetchExcelStore, upsertExcelData, deleteExcelData,
 } from "../services/districtExcelService";
 import "./districtExcel.css";
-import { pairSideGroups } from "../utils/pairGroups";
+import { pairSideGroups, pairAllGroups } from "../utils/pairGroups";
 
 // =====================================================================
 //  TUMAN ADMIN — EXCEL MA'LUMOTLAR va HISOBOTLAR
@@ -933,9 +933,13 @@ export function buildAutoExcelData(d) {
         row.hours[c.name] = (row.hours[c.name] || 0) + h;
       };
       const h = Number(a.weeklyHours || 0);
-      add(a.subjectId, h);
-      if (a.swapEnabled && a.swapSubjectId) add(a.swapSubjectId, h);
-      pairSideGroups(a).forEach((g) => add(g.subjectId, h));
+      if (a.pairEnabled) {
+        // Guruhlar bitta soatda: har TURLI fan haftalik soatini oladi
+        new Set(pairAllGroups(a).map((g) => g.subjectId).filter(Boolean)).forEach((sid) => add(sid, h));
+      } else {
+        add(a.subjectId, h);
+        if (a.swapEnabled && a.swapSubjectId) add(a.swapSubjectId, h);
+      }
     }
   }
   const setkaRows = [...bySubject.values()]

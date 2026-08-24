@@ -16,7 +16,7 @@
 // =====================================================================
 
 import { loadStyledXLSX } from './excelUtils';
-import { pairSideGroups } from './pairGroups';
+import { pairAllGroups } from './pairGroups';
 
 // ---------------------------------------------------------------------
 //  Umumiy stil sozlamalari (districtExcel.jsx bilan bir xil)
@@ -284,9 +284,13 @@ export function buildHourGrid({ classes = [], subjects = [], classSubjects = {} 
         const row = bySubject.get(nm);
         row.hours[c.name] = (row.hours[c.name] || 0) + h;
       };
-      add(a.subjectId);
-      if (a.swapEnabled && a.swapSubjectId) add(a.swapSubjectId);
-      pairSideGroups(a).forEach((g) => add(g.subjectId));
+      if (a.pairEnabled) {
+        // Guruhlar bitta soatda: har TURLI fan haftalik soatini oladi
+        new Set(pairAllGroups(a).map((g) => g.subjectId).filter(Boolean)).forEach(add);
+      } else {
+        add(a.subjectId);
+        if (a.swapEnabled && a.swapSubjectId) add(a.swapSubjectId);
+      }
     }
   }
 

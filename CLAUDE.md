@@ -238,6 +238,17 @@ butun karta bo'ylab takrorlanmasligi shart** — UI tanlash ro'yxatlarini filtrl
 va ogohlantiradi, generator esa takroriy xonani olib tashlaydi (`dedupeRooms`),
 takroriy ustozli so'rovni esa qabul qilmaydi.
 
+**FAN esa TAKRORLANISHI MUMKIN** — masalan 1-guruh Fizika (Asilbek), 3-guruh ham
+Fizika (Bekzod). Shu sababli soat sanashda ehtiyot bo'ling: guruhlar AYNI SOATDA
+o'qiganidan, sinf setkasida har bir **TURLI** fan `weeklyHours` ta soat egallaydi
+(takroriy fan bir marta). Bu qoida `requiredHours`/`requiredTotal`
+([Schedule.jsx](src/pages/Schedule.jsx)), `totalWeeklyHours`
+([scheduleGenerator.js](src/utils/scheduleGenerator.js)), `analysisExport`,
+`hourGridExport` va `districtExcel` da takrorlangan — bittasi unutilsa, jadval
+100% chiqsa ham "soat tushmadi" deb ko'rsatadi. Generatorda `req.perClassSIdx`
+ham shu sababli takroriy fan indeksini (va `req.sIdx` ni) tashlaydi.
+Ustoz yuklamasi esa aksincha — har guruh ustozi ALOHIDA sanaladi.
+
 ### Jadval dvigatellari
 
 - [scheduleGenerator.js](src/utils/scheduleGenerator.js) (~3700 qator) — avtomatik

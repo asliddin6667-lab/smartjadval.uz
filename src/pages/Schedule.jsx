@@ -10,7 +10,7 @@ import {
   findAutoPartner, onlyBusyReasons, unitLabel, slotLabel,
 } from "../utils/moveResolver";
 import { slotDisplayNumber } from "../utils/shiftSlots";
-import { pairSideGroups } from "../utils/pairGroups";
+import { pairSideGroups, pairAllGroups } from "../utils/pairGroups";
 import MoveResolveModal from "../components/MoveResolveModal";
 import SaveScheduleModal from "../components/SaveScheduleModal";
 import TeacherGrid from "../components/TeacherGrid";
@@ -196,8 +196,9 @@ export default function SchedulePage({
 
     // ——— BIR VAQTDA 2 FAN ———
     // Kartada ikkala fan nomi ko'rinadi: «Ona tili / Rus tili»
-    const isPair = Boolean(lesson.pairKey) &&
-      new Set(parts.map((p) => p.subjectId)).size > 1;
+    // Bir xil fan bir nechta guruhda bo'lishi mumkin (boshqa-boshqa ustoz),
+    // shuning uchun mezon — fanlar soni emas, kartadagi guruhlar soni.
+    const isPair = Boolean(lesson.pairKey) && parts.length > 1;
     const subjectName = isPair
       ? uniqBy(parts.map((p) => subjectMap.get(p.subjectId)?.name || "Fan"), (n) => n).join(" / ")
       : baseName;
@@ -288,7 +289,7 @@ export default function SchedulePage({
 
         {detail.isPair && (
           <div className="pretty-pair-chip">
-            🧩 Bir vaqtda 2 fan — sinf ikkiga bo'linadi
+            🧩 Bir vaqtda {detail.parts.length} dars — sinf {detail.parts.length} guruhga bo'linadi
           </div>
         )}
 
@@ -726,9 +727,14 @@ export default function SchedulePage({
 
     let requiredTotal = 0;
     classes.forEach((c) => (classSubjects?.[c.id] || []).forEach((a) => {
+      if (a.pairEnabled) {
+        // `countPlacedUnits` sinf+fan bo'yicha sanaydi: takroriy fan 1 marta
+        const uniq = new Set(pairAllGroups(a).map((g) => g.subjectId).filter(Boolean));
+        requiredTotal += Math.max(1, uniq.size) * Number(a.weeklyHours || 0);
+        return;
+      }
       requiredTotal += Number(a.weeklyHours || 0);
       if (a.swapEnabled && a.swapSubjectId) requiredTotal += Number(a.weeklyHours || 0);
-      requiredTotal += pairSideGroups(a).length * Number(a.weeklyHours || 0);
     }));
 
     const seed = lockedSeed();
@@ -919,9 +925,15 @@ export default function SchedulePage({
     const list = classSubjects?.[classId] || [];
     let req = 0;
     list.forEach((a) => {
+      if (a.pairEnabled) {
+        // Kartadagi guruhlar AYNI SOATDA o'qiydi. Bir xil fan bir nechta
+        // guruhda bo'lsa ham, sinf setkasida u `weeklyHours` ta soat
+        // egallaydi — shuning uchun BIR MARTA sanaladi.
+        if (pairAllGroups(a).some((g) => g.subjectId === subjectId)) req += Number(a.weeklyHours || 0);
+        return;
+      }
       if (a.subjectId === subjectId) req += Number(a.weeklyHours || 0);
       if (a.swapEnabled && a.swapSubjectId === subjectId) req += Number(a.weeklyHours || 0);
-      if (pairSideGroups(a).some((g) => g.subjectId === subjectId)) req += Number(a.weeklyHours || 0);
     });
     return req;
   }
