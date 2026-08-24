@@ -3,6 +3,7 @@ import ConfirmModal from "../components/ConfirmModal";
 import { genId } from "../utils/helpers";
 import { SUBJECT_COLORS, STANDARD_SUBJECTS, STANDARD_SUBJECTS_RU, EDU_LANGS } from "../utils/constants";
 import { removeSubjectEverywhere } from "../utils/scheduleCleanup";
+import { LANG_BOTH, subjectLangOf, subjectFitsLang, langsOverlap, langLabel } from "../utils/eduLang";
 
 // ——— Standart fan nomlari to'plami (uz + ru) — eski ma'lumotni aniqlash uchun ———
 const STANDARD_NAME_SET = new Set(
@@ -43,7 +44,9 @@ export default function SubjectsPage({ subjects, setSubjects, classSubjects = {}
   const [showModal, setShowModal] = useState(false);
   const [editItem, setEditItem] = useState(null);
   const [deleteId, setDeleteId] = useState(null);
-  const [form, setForm] = useState({ name: "", weeklyHours: 2, color: SUBJECT_COLORS[0], type: "Oddiy", allowDouble: false, lang: "uz" });
+  // Qo'lda qo'shilgan fan standart holda UMUMIY ("both") — uz va ru sinflarida
+  // BITTA fan bo'lib ko'rinadi, ustozi ham ikkalasida bir xil bo'ladi.
+  const [form, setForm] = useState({ name: "", weeklyHours: 2, color: SUBJECT_COLORS[0], type: "Oddiy", allowDouble: false, lang: LANG_BOTH });
 
   // ——— Migratsiya: eski fanlarga source yozib qo'yamiz (faqat kerak bo'lsa) ———
   useEffect(() => {
@@ -63,19 +66,21 @@ export default function SubjectsPage({ subjects, setSubjects, classSubjects = {}
 
   const filtered = visible
     .filter(s => s.name.toLowerCase().includes(search.toLowerCase()))
-    .filter(s => langFilter === "all" || (s.lang || "uz") === langFilter)
+    // Umumiy fan uz va ru filtrida ham chiqadi (u ikkala sinfga tegishli)
+    .filter(s => langFilter === "all"
+      || (langFilter === LANG_BOTH ? subjectLangOf(s) === LANG_BOTH : subjectFitsLang(s, langFilter)))
     .filter(s => sourceFilter === "all" || (s.source === "custom" ? "custom" : "standard") === sourceFilter)
     .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "uz", { numeric: true, sensitivity: "base" }));
 
   function openAdd() {
     setEditItem(null);
-    setForm({ name: "", weeklyHours: 2, color: SUBJECT_COLORS[0], type: "Oddiy", allowDouble: false, lang: "uz" });
+    setForm({ name: "", weeklyHours: 2, color: SUBJECT_COLORS[0], type: "Oddiy", allowDouble: false, lang: LANG_BOTH });
     setShowModal(true);
   }
 
   function openEdit(item) {
     setEditItem(item);
-    setForm({ name: item.name, weeklyHours: item.weeklyHours, color: item.color, type: item.type || "Oddiy", allowDouble: Boolean(item.allowDouble), lang: item.lang || "uz" });
+    setForm({ name: item.name, weeklyHours: item.weeklyHours, color: item.color, type: item.type || "Oddiy", allowDouble: Boolean(item.allowDouble), lang: subjectLangOf(item) });
     setShowModal(true);
   }
 
@@ -86,7 +91,7 @@ export default function SubjectsPage({ subjects, setSubjects, classSubjects = {}
     const dup = visible.some(s =>
       s.id !== editItem?.id &&
       s.name.trim().toLowerCase() === form.name.trim().toLowerCase() &&
-      (s.lang || "uz") === form.lang
+      langsOverlap(subjectLangOf(s), form.lang)
     );
     if (dup) {
       toast("Bu nomdagi fan allaqachon mavjud", "warning");
@@ -235,6 +240,7 @@ export default function SubjectsPage({ subjects, setSubjects, classSubjects = {}
                   <option value="all">Barcha tillar</option>
                   <option value="uz">🇺🇿 O'zbek tili</option>
                   <option value="ru">🇷🇺 Rus tili</option>
+                  <option value="both">🌐 Umumiy (ikkala til)</option>
                 </select>
                 <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{filtered.length} ta fan</span>
               </div>
@@ -281,8 +287,11 @@ export default function SubjectsPage({ subjects, setSubjects, classSubjects = {}
                         </span>
                       </td>
                       <td>
-                        <span className="badge badge-default">
-                          {(s.lang || "uz") === "ru" ? "🇷🇺 Rus" : "🇺🇿 O'zbek"}
+                        <span
+                          className={`badge ${subjectLangOf(s) === LANG_BOTH ? "badge-success" : "badge-default"}`}
+                          title={subjectLangOf(s) === LANG_BOTH ? "Umumiy fan — o'zbek va rus sinflarida bir xil ko'rinadi" : undefined}
+                        >
+                          {langLabel(subjectLangOf(s))}
                         </span>
                       </td>
                       <td>
@@ -360,9 +369,15 @@ export default function SubjectsPage({ subjects, setSubjects, classSubjects = {}
                 <label className="form-label">Ta'lim tili</label>
                 <select className="form-control" value={form.lang}
                   onChange={e => setForm({ ...form, lang: e.target.value })}>
-                  <option value="uz">🇺🇿 O'zbek tili</option>
-                  <option value="ru">🇷🇺 Rus tili</option>
+                  <option value="both">🌐 Umumiy — o'zbek va rus sinflarida</option>
+                  <option value="uz">🇺🇿 Faqat o'zbek sinflarida</option>
+                  <option value="ru">🇷🇺 Faqat rus sinflarida</option>
                 </select>
+                <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 6 }}>
+                  {form.lang === "both"
+                    ? "Fan bitta bo'lib qoladi: o'zbek sinfida ham, rus sinfida ham shu fan va shu ustoz ko'rinadi."
+                    : "Fan faqat shu tildagi sinflarda ko'rinadi."}
+                </div>
               </div>
               <div className="form-group">
                 <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>

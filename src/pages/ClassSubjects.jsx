@@ -7,6 +7,7 @@ import { sortByName, cmpName } from "../utils/sortHelpers";
 import { normName, buildCurriculumIndex, hoursFromRow, namesForGrade as curriculumNamesForGrade } from "../utils/curriculum";
 import { getCachedCurriculum, fetchStandardHours } from "../services/standardHoursService";
 import { removeSubjectLessons, removeClassesLessons } from "../utils/scheduleCleanup";
+import { LANG_BOTH, classLangOf, subjectLangOf, subjectFitsLang, langIcon, langLabel } from "../utils/eduLang";
 import "../styles/cs-mobile.css";
 
 function teacherSubjectIds(teacher) {
@@ -18,9 +19,8 @@ function getGradeFromClassName(name = "") {
   return match ? Number(match[1]) : 0;
 }
 
-// Sinf va fanning ta'lim tili (eski ma'lumotlar uchun standart — o'zbekcha)
-function classLangOf(c) { return c?.eduLang || "uz"; }
-function subjectLangOf(s) { return s?.lang || "uz"; }
+// Sinf va fanning ta'lim tili — yordamchilar utils/eduLang.js da.
+// Fan tili "both" bo'lsa u UMUMIY: uz va ru sinfida BITTA fan bo'lib ko'rinadi.
 
 // ——— Hovuz (daraja guruhi) a'zolari uchun UMUMIY maydonlar ———
 // Bir joyda o'zgarsa — guruhdagi barcha sinflarda bir xil bo'ladi.
@@ -267,9 +267,18 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
 
   // ——— Ta'lim tili: tanlangan sinf tiliga mos fanlar (alifbo bo'yicha) ———
   const classLang = classLangOf(selectedClass);
-  const langSubjects = sortByName(subjects.filter(s => subjectLangOf(s) === classLang));
+  // Umumiy ("both") fan ikkala tildagi sinfda ham chiqadi — qo'lda qo'shilgan
+  // bitta fan uz sinfida ham, ru sinfida ham aynan shu ID bilan ko'rinadi,
+  // shuning uchun unga biriktirilgan ustoz ham ikkalasida bir xil bo'ladi.
+  const langSubjects = sortByName(subjects.filter(s => subjectFitsLang(s, classLang)));
   // Tanlangan sinf bilan bir tildagi sinflar (parallel/hovuz/nusxalash faqat shular orasida)
   const sameLangClasses = sortByName(classes.filter(c => classLangOf(c) === classLang));
+
+  // Fan qaysi sinflar bilan bog'lana oladi (parallel dars / hovuz / parallel sinflar).
+  // Umumiy fan uchun til cheklovi yo'q.
+  function classesForSubject(s) {
+    return subjectLangOf(s) === LANG_BOTH ? sortedClasses : sameLangClasses;
+  }
 
   function subjectById(id) { return subjects.find(s => s.id === id); }
 
@@ -695,7 +704,7 @@ Fan bilan birga ular ham o'chsinmi?`;
     if (grade >= 1 && grade <= 11 && (curriculum[lang] || []).length) {
       const rows = [];
       const usedRows = new Set();
-      sortByName(subjects.filter(s => subjectLangOf(s) === lang)).forEach(s => {
+      sortByName(subjects.filter(s => subjectFitsLang(s, lang))).forEach(s => {
         const hours = curriculumHours(s.name, grade, lang);
         if (hours == null) return;
         const row = curriculumRowFor(s.name, lang);
@@ -711,7 +720,7 @@ Fan bilan birga ular ham o'chsinmi?`;
 
     // Zaxira usul — eski standart ro'yxatlar
     const names = fallbackNamesForGrade(grade, lang);
-    const rows = sortByName(subjects.filter(s => names.includes(s.name) && subjectLangOf(s) === lang))
+    const rows = sortByName(subjects.filter(s => names.includes(s.name) && subjectFitsLang(s, lang)))
       .map(s => ({ subject: s, hours: Math.max(1, Number(s.weeklyHours || 1)) }));
     return { rows, missing: [], source: "standart" };
   }
@@ -893,7 +902,7 @@ Fan bilan birga ular ham o'chsinmi?`;
     const owner = getAssignment(subjectId);
     const grade = getGradeFromClassName(selectedClass.name);
     const key = `${grade}-sinf ${subject?.name || "fan"} daraja guruhlari`;
-    const sameGradeClasses = sameLangClasses.filter(c => getGradeFromClassName(c.name) === grade);
+    const sameGradeClasses = classesForSubject(subject).filter(c => getGradeFromClassName(c.name) === grade);
     const firstTeachers = teachersForSubject(subjectId).slice(0, 12);
     const defaultGroups = makeLevelGroups(Math.max(2, firstTeachers.length || 3)).map((g, i) => ({
       ...g,
@@ -935,7 +944,7 @@ Fan bilan birga ular ham o'chsinmi?`;
     const subject = subjectById(subjectId);
     const grade = getGradeFromClassName(selectedClass.name);
     const key = `${grade}-sinf ${subject?.name || "fan"} parallel dars`;
-    const sameGradeClasses = sameLangClasses.filter(c => getGradeFromClassName(c.name) === grade);
+    const sameGradeClasses = classesForSubject(subject).filter(c => getGradeFromClassName(c.name) === grade);
     // Parallel darsda bitta ustoz — asosiy sinfda tanlangan ustoz olinadi
     const ownerTeacherId = getAssignment(subjectId).teacherId || "";
 
@@ -1258,7 +1267,7 @@ Fan bilan birga ular ham o'chsinmi?`;
                                   Tanlangan sinflar <b>{teachers.find(t => t.id === a.teacherId)?.name || "ustoz tanlanmagan"}</b> bilan, bir vaqtda <b>{s.name}</b> o'qiydi. Ustoz/xona/soatni tepadagi asosiy qatordan tanlang.
                                 </div>
                                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 150, overflowY: "auto" }}>
-                                  {sameLangClasses.map(c => {
+                                  {classesForSubject(s).map(c => {
                                     const inGroup = classInParallel(c.id, s.id, a.groupKey);
                                     const isOwner = c.id === selectedClassId;
                                     return (
@@ -1467,7 +1476,7 @@ Fan bilan birga ular ham o'chsinmi?`;
                                 {(() => {
                                   const members = pairMemberRows(s.id, a.pairGroupKey);
                                   const used = new Set([selectedClassId, ...members.map(m => m.cls.id)]);
-                                  const addable = sameLangClasses.filter(c => !used.has(c.id));
+                                  const addable = classesForSubject(s).filter(c => !used.has(c.id));
                                   const full = members.length >= PAIR_MAX_EXTRA;
                                   const g1Teacher = teachers.find(t => t.id === a.teacherId)?.name || "ustoz tanlanmagan";
                                   return (
@@ -1529,7 +1538,7 @@ Fan bilan birga ular ham o'chsinmi?`;
                                                   onChange={e => updatePairMember(s.id, cls.id, { pairSubjectId: e.target.value, pairTeacherId: "" })}
                                                 >
                                                   <option value="">— fanni tanlang —</option>
-                                                  {sortByName(subjects.filter(x => subjectLangOf(x) === classLangOf(cls) && x.id !== s.id))
+                                                  {sortByName(subjects.filter(x => subjectFitsLang(x, classLangOf(cls)) && x.id !== s.id))
                                                     .map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
                                                 </select>
                                               </label>
@@ -1676,7 +1685,7 @@ Fan bilan birga ular ham o'chsinmi?`;
                                 <div style={{ marginBottom: 12, background: "var(--card-bg)", border: "1px solid var(--card-border)", borderRadius: 10, padding: 10 }}>
                                   <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Qaysi sinflar shu guruhda? (tanlang)</div>
                                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 150, overflowY: "auto" }}>
-                                    {sameLangClasses.map(c => {
+                                    {classesForSubject(s).map(c => {
                                       const inGroup = classInLevelGroup(c.id, s.id, a.levelGroupKey);
                                       const isOwner = c.id === selectedClassId;
                                       return (
@@ -1794,8 +1803,9 @@ Fan bilan birga ular ham o'chsinmi?`;
       {poolOpen && (() => {
         const poolSubject = subjectById(poolForm.subjectId);
         const poolLang = poolSubject ? subjectLangOf(poolSubject) : classLang;
-        // Hovuzga faqat fan tiliga mos sinflar qo'shiladi (alifbo bo'yicha)
-        const sortedC = sortByName(classes.filter(c => classLangOf(c) === poolLang));
+        // Hovuzga faqat fan tiliga mos sinflar qo'shiladi (alifbo bo'yicha).
+        // Umumiy fan uchun barcha sinflar ochiq.
+        const sortedC = poolLang === LANG_BOTH ? sortedClasses : sortByName(classes.filter(c => classLangOf(c) === poolLang));
         const subjTeachers = poolForm.subjectId
           ? sortByName(teachers.filter((t) => (Array.isArray(t.subjectIds) ? t.subjectIds : [t.subjectId]).includes(poolForm.subjectId)))
           : sortByName(teachers);
@@ -1809,7 +1819,7 @@ Fan bilan birga ular ham o'chsinmi?`;
 
               <label className="form-label">Fan</label>
               <select className="form-control" value={poolForm.subjectId} onChange={(e) => setPoolForm({ ...poolForm, subjectId: e.target.value, classIds: [], teacherIds: [] })}>
-                {sortedAllSubjects.map((s) => <option key={s.id} value={s.id}>{subjectLangOf(s) === "ru" ? "🇷🇺 " : "🇺🇿 "}{s.name}</option>)}
+                {sortedAllSubjects.map((s) => <option key={s.id} value={s.id}>{langIcon(subjectLangOf(s))} {s.name}</option>)}
               </select>
 
               <label className="form-label" style={{ marginTop: 12, display: "block" }}>Haftalik soat</label>
@@ -1825,7 +1835,7 @@ Fan bilan birga ular ham o'chsinmi?`;
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 130, overflowY: "auto", padding: 6, border: "1px solid var(--card-border,#e5e7eb)", borderRadius: 10 }}>
                 {sortedC.length === 0 ? (
                   <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                    Bu fan tiliga ({poolLang === "ru" ? "🇷🇺 Rus" : "🇺🇿 O'zbek"}) mos sinf topilmadi
+                    Bu fan tiliga ({langLabel(poolLang)}) mos sinf topilmadi
                   </span>
                 ) : sortedC.map((c) => {
                   const on = poolForm.classIds.includes(c.id);

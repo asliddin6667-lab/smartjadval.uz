@@ -3,6 +3,7 @@ import ConfirmModal from "../components/ConfirmModal";
 import { genId } from "../utils/helpers";
 import { DAYS } from "../utils/constants";
 import { sortByName, cmpName } from "../utils/sortHelpers";
+import { LANG_BOTH, subjectLangOf, langIcon } from "../utils/eduLang";
 
 export default function TeachersPage({ teachers, setTeachers, subjects, toast }) {
   const [search, setSearch] = useState("");
@@ -15,10 +16,13 @@ export default function TeachersPage({ teachers, setTeachers, subjects, toast })
     return Array.isArray(t.subjectIds) ? t.subjectIds : (t.subjectId ? [t.subjectId] : []);
   }
 
-  // Fanlar ta'lim tili bo'yicha (eski fanlar lang'siz — o'zbekcha hisoblanadi)
-  // Har ikkala ro'yxat alifbo tartibida ko'rsatiladi.
-  const uzSubjects = sortByName(subjects.filter(s => (s.lang || "uz") === "uz"));
-  const ruSubjects = sortByName(subjects.filter(s => (s.lang || "uz") === "ru"));
+  // Fanlar ta'lim tili bo'yicha (eski fanlar lang'siz — o'zbekcha hisoblanadi).
+  // "Umumiy" fanlar alohida ro'yxat: ular uz va ru sinflarida bir xil ishlatiladi,
+  // shuning uchun bunday fan belgilangan ustoz ikkala sinfda ham chiqadi.
+  // Har uchala ro'yxat alifbo tartibida ko'rsatiladi.
+  const bothSubjects = sortByName(subjects.filter(s => subjectLangOf(s) === LANG_BOTH));
+  const uzSubjects = sortByName(subjects.filter(s => subjectLangOf(s) === "uz"));
+  const ruSubjects = sortByName(subjects.filter(s => subjectLangOf(s) === "ru"));
 
   // O'qituvchilar ro'yxati — F.I.Sh bo'yicha alifbo tartibida
   const filtered = teachers.filter(t => {
@@ -152,7 +156,7 @@ export default function TeachersPage({ teachers, setTeachers, subjects, toast })
                         <td>
                           <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
                             {teacherSubs.length ? teacherSubs.map(s => (
-                              <span key={s.id} className="badge badge-info">{(s.lang || "uz") === "ru" ? "🇷🇺 " : ""}{s.name}</span>
+                              <span key={s.id} className="badge badge-info">{subjectLangOf(s) === "uz" ? "" : `${langIcon(subjectLangOf(s))} `}{s.name}</span>
                             )) : <span style={{ color: "var(--text-muted)" }}>—</span>}
                           </div>
                         </td>
@@ -195,14 +199,28 @@ export default function TeachersPage({ teachers, setTeachers, subjects, toast })
               </div>
               <div className="form-group">
                 <label className="form-label">Fanlar *</label>
-                {ruSubjects.length > 0 ? (
+                {bothSubjects.length + ruSubjects.length > 0 ? (
                   <>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-secondary)", margin: "4px 0 6px" }}>🇺🇿 O'zbekcha fanlar</div>
-                    {renderSubjectGrid(uzSubjects)}
-                    <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-secondary)", margin: "12px 0 6px" }}>🇷🇺 Ruscha fanlar</div>
-                    {renderSubjectGrid(ruSubjects)}
+                    {bothSubjects.length > 0 && (
+                      <>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-secondary)", margin: "4px 0 6px" }}>🌐 Umumiy fanlar (o'zbek va rus sinflarida)</div>
+                        {renderSubjectGrid(bothSubjects)}
+                      </>
+                    )}
+                    {uzSubjects.length > 0 && (
+                      <>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-secondary)", margin: "12px 0 6px" }}>🇺🇿 O'zbekcha fanlar</div>
+                        {renderSubjectGrid(uzSubjects)}
+                      </>
+                    )}
+                    {ruSubjects.length > 0 && (
+                      <>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-secondary)", margin: "12px 0 6px" }}>🇷🇺 Ruscha fanlar</div>
+                        {renderSubjectGrid(ruSubjects)}
+                      </>
+                    )}
                     <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>
-                      Ikkala tilda ham dars beradigan ustozga ikkala tildagi fanni belgilash mumkin.
+                      Umumiy fan belgilangan ustoz o'zbek sinfida ham, rus sinfida ham tanlash uchun chiqadi.
                     </div>
                   </>
                 ) : renderSubjectGrid(uzSubjects)}
