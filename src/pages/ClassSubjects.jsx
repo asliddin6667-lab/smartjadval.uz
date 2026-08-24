@@ -6,7 +6,7 @@ import {
 import { sortByName, cmpName } from "../utils/sortHelpers";
 import { normName, buildCurriculumIndex, hoursFromRow, namesForGrade as curriculumNamesForGrade } from "../utils/curriculum";
 import { getCachedCurriculum, fetchStandardHours } from "../services/standardHoursService";
-import { removeSubjectLessons, removeClassesLessons } from "../utils/scheduleCleanup";
+import { removeSubjectLessons, removeClassesLessons, removeAssignmentsLessons } from "../utils/scheduleCleanup";
 import { LANG_BOTH, classLangOf, subjectLangOf, subjectFitsLang, langIcon, langLabel } from "../utils/eduLang";
 import "../styles/cs-mobile.css";
 
@@ -271,6 +271,20 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
   // bitta fan uz sinfida ham, ru sinfida ham aynan shu ID bilan ko'rinadi,
   // shuning uchun unga biriktirilgan ustoz ham ikkalasida bir xil bo'ladi.
   const langSubjects = sortByName(subjects.filter(s => subjectFitsLang(s, classLang)));
+
+  // ——— «Boshqa tildagi» biriktirmalar ———
+  // Ro'yxat sinf tiliga MOS fanlar bo'yicha chiziladi. Agar biriktirma boshqa
+  // tildagi fanga tegishli bo'lsa (masalan rus sinfiga qo'lda o'zbekcha fan
+  // qo'shilgan), qator umuman ko'rinmasdi: fan dars jadvalida va tahlilda
+  // soati bilan turaverar, lekin bu sahifadan o'chirib bo'lmasdi.
+  // Shuning uchun shu sinfda biriktirmasi BOR fan tilidan qat'i nazar
+  // ro'yxatga qo'shiladi (tepada, ogohlantirish nishoni bilan).
+  const assignedSubjectIds = new Set(assignments.map(a => a?.subjectId).filter(Boolean));
+  const offLangSubjects = sortByName(
+    subjects.filter(s => assignedSubjectIds.has(s.id) && !subjectFitsLang(s, classLang))
+  );
+  const listSubjects = offLangSubjects.length ? [...offLangSubjects, ...langSubjects] : langSubjects;
+
   // Tanlangan sinf bilan bir tildagi sinflar (parallel/hovuz/nusxalash faqat shular orasida)
   const sameLangClasses = sortByName(classes.filter(c => classLangOf(c) === classLang));
 
@@ -306,12 +320,69 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, 
 
   function cleanOrphanAssignments() {
     const next = {};
+    const dropped = [];
     for (const [clsId, list] of Object.entries(classSubjects || {})) {
       if (!Array.isArray(list)) continue;
-      next[clsId] = list.filter(a => a && a.subjectId && knownSubjectIds.has(a.subjectId));
+      next[clsId] = list.filter((a) => {
+        const keep = Boolean(a && a.subjectId && knownSubjectIds.has(a.subjectId));
+        if (!keep && a?.subjectId) dropped.push({ classId: clsId, subjectId: a.subjectId });
+        return keep;
+      });
     }
+    // Biriktirma ketsa ham dars jadvalda qolib, soat sifatida hisoblanaverardi.
+    const cleaned = setSchedule ? removeAssignmentsLessons(schedule, dropped) : null;
+    if (cleaned?.removed) setSchedule(cleaned.schedule);
     setClassSubjects(next);
-    toast?.(`${orphanInfo.entries} ta yetim biriktirma tozalandi (${orphanInfo.hours} soat)`, "success");
+    const tail = cleaned?.removed ? ` · jadvaldan ${cleaned.removed} ta dars olib tashlandi` : "";
+    toast?.(`${orphanInfo.entries} ta yetim biriktirma tozalandi (${orphanInfo.hours} soat)${tail}`, "success");
+  }
+
+  // ——— Sinf tiliga mos kelmaydigan biriktirmalar (barcha sinflar bo'yicha) ———
+  // Fan mavjud, lekin tili sinf tilidan boshqa. Bunday yozuv shu sahifada
+  // faqat tanlangan sinfda ko'rinadi, shuning uchun umumiy ogohlantirish
+  // qaysi sinflarda qolib ketganini aytadi.
+  const langMismatch = (() => {
+    const pairs = [];
+    let hours = 0;
+    const classNames = [];
+    for (const c of classes) {
+      const list = Array.isArray(classSubjects[c.id]) ? classSubjects[c.id] : [];
+      let n = 0;
+      for (const a of list) {
+        if (!a?.subjectId) continue;
+        const s = subjects.find(x => x.id === a.subjectId);
+        if (!s || subjectFitsLang(s, classLangOf(c))) continue;
+        n += 1;
+        hours += Number(a.weeklyHours || 0);
+        pairs.push({ classId: c.id, subjectId: a.subjectId });
+      }
+      if (n) classNames.push(c.name || "?");
+    }
+    return { pairs, entries: pairs.length, hours, classNames };
+  })();
+
+  function cleanLangMismatch() {
+    if (!langMismatch.entries) return;
+    // Ba'zi maktabda bunday biriktirma ATAYLAB qo'yilgan bo'lishi mumkin
+    // (masalan rus sinfida "Ona tili va adabiyot"), shuning uchun tasdiq so'raladi.
+    const msg = `${langMismatch.entries} ta biriktirma va ularning dars jadvalidagi darslari o'chiriladi (${langMismatch.hours} soat).
+Sinflar: ${langMismatch.classNames.join(", ")}
+Davom etamizmi?`;
+    if (!confirm(msg)) return;
+    const drop = new Map(); // classId -> Set(subjectId)
+    langMismatch.pairs.forEach(({ classId, subjectId }) => {
+      if (!drop.has(classId)) drop.set(classId, new Set());
+      drop.get(classId).add(subjectId);
+    });
+    const next = { ...classSubjects };
+    drop.forEach((sids, clsId) => {
+      next[clsId] = (classSubjects[clsId] || []).filter(a => !sids.has(a?.subjectId));
+    });
+    const cleaned = setSchedule ? removeAssignmentsLessons(schedule, langMismatch.pairs) : null;
+    if (cleaned?.removed) setSchedule(cleaned.schedule);
+    setClassSubjects(next);
+    const tail = cleaned?.removed ? ` · jadvaldan ${cleaned.removed} ta dars olib tashlandi` : "";
+    toast?.(`${langMismatch.entries} ta mos kelmaydigan biriktirma o'chirildi (${langMismatch.hours} soat)${tail}`, "success");
   }
 
   // Hovuz (daraja guruhi) tez yaratish: tanlangan sinflarga bir xil guruh biriktiriladi
@@ -1098,6 +1169,23 @@ Fan bilan birga ular ham o'chsinmi?`;
                   </div>
                 )}
 
+                {langMismatch.entries > 0 && (
+                  <div className="alert alert-warning" style={{ marginBottom: 12 }}>
+                    <div style={{ marginBottom: 8 }}>
+                      ⚠️ <b>{langMismatch.entries} ta biriktirma sinf ta'lim tiliga mos kelmaydi</b> ({langMismatch.hours} soat).
+                      Bunday fan pastdagi ro'yxatda «boshqa til» nishoni bilan tepada turadi — belgini olib tashlab
+                      o'chirsangiz, dars jadvalidagi darslari ham ketadi.
+                      <div style={{ fontSize: 12, opacity: .85, marginTop: 4 }}>
+                        Sinflar: {langMismatch.classNames.join(", ")}
+                      </div>
+                      <div style={{ fontSize: 12, opacity: .85, marginTop: 4 }}>
+                        Fan haqiqatan kerak bo'lsa — «Fanlar» bo'limida uning tilini «🌐 Umumiy» qilib belgilang.
+                      </div>
+                    </div>
+                    <button className="btn btn-danger btn-sm" onClick={cleanLangMismatch}>🧹 Hammasini o'chirish</button>
+                  </div>
+                )}
+
                 {langSubjects.length === 0 && (
                   <div className="alert alert-warning" style={{ marginBottom: 12 }}>
                     ⚠️ {classLang === "ru"
@@ -1117,8 +1205,10 @@ Fan bilan birga ular ham o'chsinmi?`;
                 </div>
 
                 <div style={{ display: "flex", flexDirection: "column" }}>
-                  {langSubjects.map(s => {
+                  {listSubjects.map(s => {
                     const checked = isChecked(s.id);
+                    // Fan sinf tiliga mos kelmaydi — faqat biriktirmasi borligi uchun ko'rinadi
+                    const offLang = !subjectFitsLang(s, classLang);
                     const a = getAssignment(s.id);
                     const availableTeachers = teachersForSubject(s.id);
                     const sharedLevelConfig = getSharedLevelConfig(s.id, a);
@@ -1141,6 +1231,15 @@ Fan bilan birga ular ham o'chsinmi?`;
                             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                               <span className="color-dot" style={{ background: s.color }} />
                               <b>{s.name}</b>
+                              {offLang && (
+                                <span
+                                  className="cs-chip"
+                                  style={{ background: "#fee2e2", color: "#991b1b" }}
+                                  title={`Bu fan ${langLabel(subjectLangOf(s))} tili uchun, sinf esa ${langLabel(classLang)} tilida o'qiydi. Belgini olib tashlasangiz — biriktirma va dars jadvalidagi darslari o'chadi.`}
+                                >
+                                  ⚠️ boshqa til · {langIcon(subjectLangOf(s))}
+                                </span>
+                              )}
                               {chips.map((c, i) => (
                                 <span key={i} className="cs-chip" style={{ background: c.bg, color: c.fg }}>{c.text}</span>
                               ))}

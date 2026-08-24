@@ -82,10 +82,36 @@ function stripSchedule(schedule, classIds, hit) {
   return touched ? { schedule: next, removed } : { schedule, removed: 0 };
 }
 
+// Juft-hafta almashinuvining IKKINCHI yarmi o'chirilgan fan bo'lsa — dars
+// saqlanadi (birinchi fan hali ham haqiqiy), faqat almashinuv bekor qilinadi.
+// Aks holda o'chirilgan fan katakda "bir hafta …" yozuvi bo'lib qolaverardi.
+function clearAltHalves(schedule, hit) {
+  let touched = false;
+  const next = {};
+  Object.entries(schedule || {}).forEach(([day, slots]) => {
+    if (!slots || typeof slots !== "object") { next[day] = slots; return; }
+    const dayOut = {};
+    Object.entries(slots).forEach(([tsId, cell]) => {
+      dayOut[tsId] = (Array.isArray(cell) ? cell : []).map((l) => {
+        if (!l?.altSubjectId || !hit(l)) return l;
+        touched = true;
+        return { ...l, alternating: false, altSubjectId: "", altTeacherId: "", altRoomId: "" };
+      });
+    });
+    next[day] = dayOut;
+  });
+  return touched ? next : schedule;
+}
+
 // Bitta sinfdan bitta fanni olib tashlash
 export function removeSubjectLessons(schedule, classId, subjectId) {
   if (!classId || !subjectId) return { schedule, removed: 0 };
-  return stripSchedule(schedule, [classId], l => l.subjectId === subjectId);
+  const res = stripSchedule(schedule, [classId], l => l.subjectId === subjectId);
+  const cleared = clearAltHalves(
+    res.schedule,
+    l => l.altSubjectId === subjectId && lessonClassIds(l).includes(classId)
+  );
+  return { schedule: cleared, removed: res.removed };
 }
 
 // Bir nechta sinfning barcha darslarini olib tashlash
@@ -101,19 +127,29 @@ export function removeClassesLessons(schedule, classIds) {
 export function removeSubjectEverywhere(schedule, subjectId) {
   if (!subjectId) return { schedule, removed: 0 };
   const res = stripSchedule(schedule, null, l => l.subjectId === subjectId);
-  let touched = false;
-  const next = {};
-  Object.entries(res.schedule || {}).forEach(([day, slots]) => {
-    if (!slots || typeof slots !== "object") { next[day] = slots; return; }
-    const dayOut = {};
-    Object.entries(slots).forEach(([tsId, cell]) => {
-      dayOut[tsId] = (Array.isArray(cell) ? cell : []).map((l) => {
-        if (l.altSubjectId !== subjectId) return l;
-        touched = true;
-        return { ...l, alternating: false, altSubjectId: "", altTeacherId: "", altRoomId: "" };
-      });
-    });
-    next[day] = dayOut;
+  return {
+    schedule: clearAltHalves(res.schedule, l => l.altSubjectId === subjectId),
+    removed: res.removed,
+  };
+}
+
+// Bir nechta (sinf, fan) biriktirmasining darslarini birdaniga olib tashlash.
+// `pairs` — [{ classId, subjectId }]. "Yetim" (fanlar ro'yxatida yo'q) yoki
+// sinf tiliga mos kelmaydigan biriktirmalar guruh bilan o'chirilganda kerak:
+// yozuv classSubjects'dan ketsa ham, dars jadvalda qolib soat sifatida
+// hisoblanaverardi.
+export function removeAssignmentsLessons(schedule, pairs) {
+  const map = new Map(); // classId -> Set(subjectId)
+  (pairs || []).forEach((p) => {
+    if (!p?.classId || !p?.subjectId) return;
+    if (!map.has(p.classId)) map.set(p.classId, new Set());
+    map.get(p.classId).add(p.subjectId);
   });
-  return { schedule: touched ? next : res.schedule, removed: res.removed };
+  if (!map.size) return { schedule, removed: 0 };
+  const res = stripSchedule(schedule, [...map.keys()], (l, cid) => Boolean(map.get(cid)?.has(l.subjectId)));
+  const cleared = clearAltHalves(
+    res.schedule,
+    l => lessonClassIds(l).some(cid => map.get(cid)?.has(l.altSubjectId))
+  );
+  return { schedule: cleared, removed: res.removed };
 }
