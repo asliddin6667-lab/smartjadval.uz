@@ -5,6 +5,7 @@ import {
   fetchExcelStore, upsertExcelData, deleteExcelData,
 } from "../services/districtExcelService";
 import "./districtExcel.css";
+import { pairSideGroups } from "../utils/pairGroups";
 
 // =====================================================================
 //  TUMAN ADMIN — EXCEL MA'LUMOTLAR va HISOBOTLAR
@@ -934,7 +935,7 @@ export function buildAutoExcelData(d) {
       const h = Number(a.weeklyHours || 0);
       add(a.subjectId, h);
       if (a.swapEnabled && a.swapSubjectId) add(a.swapSubjectId, h);
-      if (a.pairEnabled && a.pairSubjectId) add(a.pairSubjectId, h);
+      pairSideGroups(a).forEach((g) => add(g.subjectId, h));
     }
   }
   const setkaRows = [...bySubject.values()]
@@ -957,6 +958,8 @@ export function buildAutoExcelData(d) {
       } else {
         addDecl(a.teacherId, h);
         addDecl(a.teacherId2, h);
+        // Bir vaqtda bir nechta fan — 2-, 3-guruh ustozlari ham shu soatlarda band
+        pairSideGroups(a).forEach((g) => addDecl(g.teacherId, h));
       }
     }
   }

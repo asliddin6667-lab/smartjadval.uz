@@ -10,6 +10,7 @@ import {
   findAutoPartner, onlyBusyReasons, unitLabel, slotLabel,
 } from "../utils/moveResolver";
 import { slotDisplayNumber } from "../utils/shiftSlots";
+import { pairSideGroups } from "../utils/pairGroups";
 import MoveResolveModal from "../components/MoveResolveModal";
 import SaveScheduleModal from "../components/SaveScheduleModal";
 import TeacherGrid from "../components/TeacherGrid";
@@ -659,7 +660,7 @@ export default function SchedulePage({
       (classSubjects?.[cls.id] || []).forEach((a) => {
         if (a.subjectId) subjectIds.add(a.subjectId);
         if (a.swapEnabled && a.swapSubjectId) subjectIds.add(a.swapSubjectId);
-        if (a.pairEnabled && a.pairSubjectId) subjectIds.add(a.pairSubjectId);
+        pairSideGroups(a).forEach((g) => subjectIds.add(g.subjectId));
       });
       subjectIds.forEach((sid) => {
         const cap = subjectDayCap(cls.id, sid);
@@ -727,7 +728,7 @@ export default function SchedulePage({
     classes.forEach((c) => (classSubjects?.[c.id] || []).forEach((a) => {
       requiredTotal += Number(a.weeklyHours || 0);
       if (a.swapEnabled && a.swapSubjectId) requiredTotal += Number(a.weeklyHours || 0);
-      if (a.pairEnabled && a.pairSubjectId) requiredTotal += Number(a.weeklyHours || 0);
+      requiredTotal += pairSideGroups(a).length * Number(a.weeklyHours || 0);
     }));
 
     const seed = lockedSeed();
@@ -920,7 +921,7 @@ export default function SchedulePage({
     list.forEach((a) => {
       if (a.subjectId === subjectId) req += Number(a.weeklyHours || 0);
       if (a.swapEnabled && a.swapSubjectId === subjectId) req += Number(a.weeklyHours || 0);
-      if (a.pairEnabled && a.pairSubjectId === subjectId) req += Number(a.weeklyHours || 0);
+      if (pairSideGroups(a).some((g) => g.subjectId === subjectId)) req += Number(a.weeklyHours || 0);
     });
     return req;
   }
@@ -939,7 +940,7 @@ export default function SchedulePage({
     const list = classSubjects?.[classId] || [];
     const a = list.find((x) => x.subjectId === subjectId)
       || list.find((x) => x.swapEnabled && x.swapSubjectId === subjectId)
-      || list.find((x) => x.pairEnabled && x.pairSubjectId === subjectId);
+      || list.find((x) => pairSideGroups(x).some((g) => g.subjectId === subjectId));
     const need = requiredHours(classId, subjectId);
     const base = a && (a.allowDouble || (a.swapEnabled && a.swapSubjectId === subjectId)) ? 2 : 1;
     return Math.max(base, Math.ceil(need / usableDaysOf(classId)) || 1);
@@ -951,7 +952,7 @@ export default function SchedulePage({
     list.forEach((a) => {
       if (a.subjectId) subjectIds.add(a.subjectId);
       if (a.swapEnabled && a.swapSubjectId) subjectIds.add(a.swapSubjectId);
-      if (a.pairEnabled && a.pairSubjectId) subjectIds.add(a.pairSubjectId);
+      pairSideGroups(a).forEach((g) => subjectIds.add(g.subjectId));
     });
     const result = [];
     subjectIds.forEach((sid) => {
@@ -1070,7 +1071,7 @@ export default function SchedulePage({
           (a.levelGroups || []).forEach((g) => add(g.teacherId, cls.name));
         }
         if (a.swapEnabled && a.swapSubjectId === subjectId) add(a.swapTeacherId, cls.name);
-        if (a.pairEnabled && a.pairSubjectId === subjectId) add(a.pairTeacherId, cls.name);
+        pairSideGroups(a).forEach((g) => { if (g.subjectId === subjectId) add(g.teacherId, cls.name); });
       });
     });
     return map;
@@ -1140,7 +1141,13 @@ export default function SchedulePage({
           if (a.splitEnabled && a.teacherId2) add(a.teacherId2, `C2|${cls.id}|${idx}`, h, cls.id, a.subjectId);
         }
         if (a.swapEnabled && a.swapTeacherId) add(a.swapTeacherId, `SW|${cls.id}|${idx}`, h, cls.id, a.swapSubjectId);
-        if (a.pairEnabled && a.pairTeacherId) add(a.pairTeacherId, `PR|${cls.id}|${idx}`, h, cls.id, a.pairSubjectId);
+        // Bir vaqtda bir nechta fan: UMUMIY guruh parallel sinflarda BITTA
+        // dars — ustoz soati guruh bo'yicha bir marta sanaladi.
+        pairSideGroups(a).forEach((g) => add(
+          g.teacherId,
+          g.shared && pg ? `PS|${pg}|${a.subjectId}|${g.gid}` : `PR|${cls.id}|${idx}|${g.gid}`,
+          h, cls.id, g.subjectId
+        ));
         if (a.weekAltEnabled && a.weekAltTeacherId) add(a.weekAltTeacherId, `WA|${cls.id}|${idx}`, Number(a.weekAltHours || 1), cls.id, a.weekAltSubjectId);
       });
     });
@@ -1280,11 +1287,27 @@ export default function SchedulePage({
         if (a.splitEnabled && a.roomId && a.roomId2 && a.roomId === a.roomId2) {
           warns.push(`⚠️ ${cls.name} · ${sName}: ikkala guruhga bir xil xona (${getName(roomMap, a.roomId)}) qo'yilgan — 2-guruh xonasiz joylanadi.`);
         }
-        if (a.pairEnabled && a.pairRoomId && a.roomId && a.pairRoomId === a.roomId) {
-          warns.push(`⚠️ ${cls.name} · ${sName}: «bir vaqtda 2 fan»ning ikkala guruhi bir xil xonaga (${getName(roomMap, a.roomId)}) qo'yilgan — 2-guruh xonasiz joylanadi.`);
-        }
-        if (a.pairEnabled && a.pairTeacherId && a.pairTeacherId === a.teacherId) {
-          warns.push(`⛔ ${cls.name} · ${sName}: «bir vaqtda 2 fan»da ikkala guruhga bir xil ustoz qo'yilgan — bunday dars joylashmaydi.`);
+        if (a.pairEnabled) {
+          // Guruhlar AYNI SOATDA o'qiydi: ustoz ham, xona ham takrorlanmasin
+          const tSeen = new Map();
+          const rSeen = new Map();
+          if (a.teacherId) tSeen.set(a.teacherId, a.groupName1 || "1-guruh");
+          if (a.roomId) rSeen.set(a.roomId, a.groupName1 || "1-guruh");
+          pairSideGroups(a).forEach((g) => {
+            if (g.teacherId) {
+              if (tSeen.has(g.teacherId)) {
+                warns.push(`⛔ ${cls.name} · ${sName}: «bir vaqtda bir nechta fan»da ${getName(teacherMap, g.teacherId)} ikki guruhga (${tSeen.get(g.teacherId)} va ${g.name}) qo'yilgan — bunday dars joylashmaydi.`);
+              } else tSeen.set(g.teacherId, g.name);
+            }
+            if (g.roomId) {
+              if (rSeen.has(g.roomId)) {
+                warns.push(`⚠️ ${cls.name} · ${sName}: ${getName(roomMap, g.roomId)} xonasi ikki guruhga (${rSeen.get(g.roomId)} va ${g.name}) qo'yilgan — ${g.name} xonasiz joylanadi.`);
+              } else rSeen.set(g.roomId, g.name);
+            }
+            if (!g.teacherId) {
+              warns.push(`⛔ ${cls.name} · ${sName}: «${g.name}» uchun ustoz tanlanmagan — bu guruh jadvalga tushmaydi.`);
+            }
+          });
         }
       });
     });

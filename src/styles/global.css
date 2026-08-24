@@ -2242,7 +2242,8 @@ body.dark-mode ::-webkit-scrollbar-thumb:hover { background: #3a4568; }
 /* ——— 2 guruhga bo'lish: guruh kartalari ——— */
 .cs-split-groups {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* Guruh 2 ta emas, 3-4-5 ta bo'lishi ham mumkin (bir vaqtda bir nechta fan) */
+  grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
   gap: 10px;
 }
 .cs-split-card {
@@ -2267,6 +2268,10 @@ body.dark-mode ::-webkit-scrollbar-thumb:hover { background: #3a4568; }
   background: var(--cs-split-accent);
 }
 .cs-split-card-2 { --cs-split-accent: #ec4899; }
+/* 3-guruh, 4-guruh… — qo'shimcha fanlar */
+.cs-split-card-x { --cs-split-accent: #0d9488; }
+.cs-split-groups .cs-split-card-x:nth-of-type(4) { --cs-split-accent: #f59e0b; }
+.cs-split-groups .cs-split-card-x:nth-of-type(5) { --cs-split-accent: #8b5cf6; }
 .cs-split-head {
   display: flex;
   align-items: center;
@@ -2274,6 +2279,81 @@ body.dark-mode ::-webkit-scrollbar-thumb:hover { background: #3a4568; }
   font-size: 13px;
   font-weight: 800;
   color: var(--cs-split-accent);
+}
+.cs-split-headname {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cs-split-sharetag {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(14, 165, 233, .15);
+  color: #0284c7;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .2px;
+}
+.cs-split-x {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  border: 1px solid var(--card-border);
+  background: var(--content-bg);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.cs-split-x:hover {
+  background: rgba(239, 68, 68, .12);
+  border-color: rgba(239, 68, 68, .4);
+  color: #dc2626;
+}
+/* «Parallel sinflarda umumiy» belgisi */
+.cs-split-share {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-top: 2px;
+  padding: 7px 8px;
+  border-radius: 9px;
+  background: var(--content-bg);
+  border: 1px solid var(--card-border);
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.cs-split-share input { margin-top: 2px; flex: 0 0 auto; }
+.cs-split-share em {
+  display: block;
+  font-style: normal;
+  font-weight: 600;
+  opacity: .85;
+}
+.cs-split-share.is-on {
+  background: rgba(14, 165, 233, .1);
+  border-color: rgba(14, 165, 233, .4);
+  color: #0284c7;
+}
+.cs-split-share.is-fixed { cursor: default; opacity: .8; }
+/* ➕ Yana fan (guruh) qo'shish */
+.cs-group-add {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.cs-group-add-note {
+  font-size: 11.5px;
+  color: var(--text-secondary);
 }
 .cs-split-num {
   width: 22px;
@@ -2390,6 +2470,16 @@ body.dark-mode ::-webkit-scrollbar-thumb:hover { background: #3a4568; }
 }
 
 .cs-pair-mini-2 { --cs-pair-accent: #ec4899; }
+.cs-pair-mini-x { --cs-pair-accent: #0d9488; }
+
+/* Guruhlar 2 tadan ko'p bo'lishi mumkin — sxema o'z ichida o'raladi */
+.cs-pair-minis {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 
 .cs-pair-mini span {
   font-size: 10.5px;
@@ -2590,10 +2680,48 @@ body.dark-mode ::-webkit-scrollbar-thumb:hover { background: #3a4568; }
   border-color: rgba(236, 72, 153, .3);
 }
 
+.cs-pp-chip-x {
+  background: rgba(13, 148, 136, .12);
+  color: #0f766e;
+  border-color: rgba(13, 148, 136, .3);
+}
+
+/* Umumiy guruh — parallel sinflarda BITTA dars */
+.cs-pp-chip.is-shared { box-shadow: 0 0 0 2px rgba(14, 165, 233, .28); }
+
+.cs-pp-chipwrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .cs-pp-plus {
   font-size: 13px;
   font-weight: 900;
   color: var(--text-muted);
+}
+
+/* A'zo sinfda alohida sozlanadigan guruh (umumiy emas) */
+.cs-pp-groupbox {
+  margin-top: 8px;
+  padding: 8px 9px;
+  border-radius: 10px;
+  background: var(--content-bg);
+  border: 1px solid var(--card-border);
+}
+
+.cs-pp-groupname {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--text-secondary);
+}
+
+.cs-pp-groupname .cs-split-num {
+  --cs-split-accent: #0d9488;
 }
 
 .cs-pp-fields {

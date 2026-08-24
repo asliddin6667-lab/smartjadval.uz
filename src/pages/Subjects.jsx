@@ -132,7 +132,11 @@ export default function SubjectsPage({ subjects, setSubjects, classSubjects = {}
           const patch = {};
           if (a.swapSubjectId === deleteId) { patch.swapEnabled = false; patch.swapSubjectId = ""; patch.swapTeacherId = ""; patch.swapRoomId = ""; }
           if (a.weekAltSubjectId === deleteId) { patch.weekAltEnabled = false; patch.weekAltSubjectId = ""; patch.weekAltTeacherId = ""; patch.weekAltRoomId = ""; }
-          if (a.pairSubjectId === deleteId) { patch.pairEnabled = false; patch.pairGroupKey = ""; patch.pairSubjectId = ""; patch.pairTeacherId = ""; patch.pairRoomId = ""; }
+          if (a.pairSubjectId === deleteId) { patch.pairEnabled = false; patch.pairGroupKey = ""; patch.pairSubjectId = ""; patch.pairTeacherId = ""; patch.pairRoomId = ""; patch.pairShare2 = false; patch.pairExtra = []; }
+          // 3-guruh, 4-guruh… — o'chirilgan fanga tegishli guruh olib tashlanadi
+          else if (Array.isArray(a.pairExtra) && a.pairExtra.some(g => g?.subjectId === deleteId)) {
+            patch.pairExtra = a.pairExtra.filter(g => g?.subjectId !== deleteId);
+          }
           kept.push(Object.keys(patch).length ? { ...a, ...patch } : a);
         }
         next[clsId] = kept;

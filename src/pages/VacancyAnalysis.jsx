@@ -1,6 +1,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { DAYS } from "../utils/constants";
 import { groupSlotsByShift, shiftSlotNumbers } from "../utils/shiftSlots";
+import { pairSideGroups } from "../utils/pairGroups";
 import "./vacancy.css";
 
 // =====================================================================
@@ -225,15 +226,18 @@ export function computeVacancy(d) {
       // demak sinflar bo'yicha birlashtirilmaydi.
       // `pairPart` — soat 1-guruh bilan bir xil soatda o'tadi, shuning uchun
       // sinfning setka soatiga (`lessonHours`) IKKINCHI marta qo'shilmaydi.
-      if (a.pairEnabled && a.pairSubjectId) {
+      // UMUMIY guruh (shared) parallel sinflarda BITTA dars — u `sig`
+      // orqali sinflar bo'yicha birlashtiriladi; qolgani har sinfda alohida.
+      pairSideGroups(a).forEach((g) => {
+        const pk = String(a.pairGroupKey || "").trim();
         entries.push({
           clsId: c.id, clsName: c.name || "?", h,
-          sid: a.pairSubjectId,
-          slots: [a.pairTeacherId || ""],
-          sig: null,
+          sid: g.subjectId,
+          slots: [g.teacherId || ""],
+          sig: g.shared && pk ? `id:${pk}|${g.gid}` : null,
           pairPart: true,
         });
-      }
+      });
     }
   }
 

@@ -114,6 +114,9 @@ export const CS_DEFAULTS = {
   pairSubjectId: "",
   pairTeacherId: "",
   pairRoomId: "",
+  // 2-guruh fani ham parallel sinflarda UMUMIY bo'lsinmi (bitta dars,
+  // bitta ustoz). O'chiq bo'lsa — har sinfda o'z fani.
+  pairShare2: false,
   // Bir vaqtda 2 fan + PARALLEL sinflar: 1-guruh fani bir nechta sinfda
   // UMUMIY (bitta dars), 2-guruh fani esa har sinfda boshqa bo'lishi mumkin.
   // Shu kalit bir guruhga kiruvchi sinflarni bog'laydi.
@@ -121,7 +124,8 @@ export const CS_DEFAULTS = {
 };
 
 // Bo'sh massiv sifatida tashlanadigan maydonlar
-const CS_EMPTY_ARRAYS = ["levelGroups"];
+// `pairExtra` — 3-guruh, 4-guruh... (bir vaqtda 3+ fan)
+const CS_EMPTY_ARRAYS = ["levelGroups", "pairExtra"];
 
 function encodeEntry(entry) {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry;

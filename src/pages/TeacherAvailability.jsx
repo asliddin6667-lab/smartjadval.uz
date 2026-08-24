@@ -2,6 +2,7 @@ import { Fragment, useMemo, useState } from "react";
 import { DAYS } from "../utils/constants";
 import { isTeachingSlot } from "../utils/scheduleGenerator";
 import { groupSlotsByShift, shiftSlotNumbers } from "../utils/shiftSlots";
+import { pairSideGroups } from "../utils/pairGroups";
 import "../styles/teacherAvailability.css";
 
 // ————————————————————————————————————————————————————————————
@@ -169,14 +170,18 @@ export default function TeacherAvailabilityPage({
         // Bir vaqtda 2 fan — ikkala ustoz ham shu soatlarda band.
         // Parallel sinflarda (pairGroupKey) 1-guruh ustozi hamma sinfga
         // BIR VAQTDA kiradi — guruh bo'yicha bir marta hisoblanadi.
-        if (a.pairEnabled && a.pairTeacherId) {
+        if (a.pairEnabled) {
           const pk = String(a.pairGroupKey || '').trim();
-          if (a.teacherId === tid) {
-            const key = `PP|${a.subjectId}|${pk}|${tid}`;
-            if (!pk || !seen.has(key)) { if (pk) seen.add(key); total += wh; }
-          } else if (a.pairTeacherId === tid) {
+          const once = (key) => {
+            if (!key) { total += wh; return; }
+            if (seen.has(key)) return;
+            seen.add(key);
             total += wh;
-          }
+          };
+          if (a.teacherId === tid) { once(pk ? `PP|${a.subjectId}|${pk}|${tid}` : ''); return; }
+          // UMUMIY guruh parallel sinflarda BITTA dars — bir marta sanaladi
+          const own = pairSideGroups(a).find((g) => g.teacherId === tid);
+          if (own) once(own.shared && pk ? `PS|${a.subjectId}|${pk}|${own.gid}` : '');
           return;
         }
         // Almashinuv (2 fan bitta vaqtda) — ikkala ustoz ham band

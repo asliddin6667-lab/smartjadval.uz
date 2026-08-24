@@ -12,6 +12,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { DAYS } from "../utils/constants";
 import { isTeachingSlot } from "../utils/scheduleGenerator";
+import { pairSideGroups } from "../utils/pairGroups";
 import {
   classIdsOf, teacherIdsOf, collectCardEntries, unitOf, resolveMove, applyActions, sameCard,
   softWarnings, checkPlace, findAutoPartner, onlyBusyReasons, unitLabel, slotLabel,
@@ -101,19 +102,23 @@ export default function TeacherGrid({
       (classSubjects?.[cls.id] || []).forEach((a) => {
         if (!a?.subjectId) return;
 
-        // Bir vaqtda 2 fan — 2-fan ustozi o'z fani bilan alohida qator
-        if (a.pairEnabled && a.pairSubjectId && a.pairTeacherId === teacherId) {
-          out.push({
-            classId: cls.id,
-            className: cls.name,
-            subjectId: a.pairSubjectId,
-            subjectName: subjectMap.get(a.pairSubjectId)?.name || "Fan",
-            need: Number(a.weeklyHours || 0),
-            roomId: a.pairRoomId || "",
-            roles: ["2 fan birga"],
-            simple: false,
-          });
-          return;
+        // Bir vaqtda bir nechta fan — 2-, 3-, 4-guruh ustozi o'z fani
+        // bilan alohida qator bo'lib chiqadi
+        if (a.pairEnabled) {
+          const own = pairSideGroups(a).find((g) => g.teacherId === teacherId);
+          if (own) {
+            out.push({
+              classId: cls.id,
+              className: cls.name,
+              subjectId: own.subjectId,
+              subjectName: subjectMap.get(own.subjectId)?.name || "Fan",
+              need: Number(a.weeklyHours || 0),
+              roomId: own.roomId || "",
+              roles: ["2 fan birga"],
+              simple: false,
+            });
+            return;
+          }
         }
 
         const roles = [];

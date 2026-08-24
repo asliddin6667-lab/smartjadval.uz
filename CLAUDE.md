@@ -118,7 +118,8 @@ tarixi, [Backups.jsx](src/pages/Backups.jsx) — "Zaxira nusxalar" sahifasi,
 - `classSubjects` "sim uchun" siqiladi (`encodeBlob`/`decodeBlob`, `WIRE_VERSION = 3`):
   `CS_DEFAULTS` dagi default qiymatlar tashlanadi, qaytarishda tiklanadi.
   **`classSubjects` yozuviga yangi maydon qo'shsangiz — `CS_DEFAULTS` ni ham yangilang**,
-  aks holda qiymat bulutdan noto'g'ri tiklanadi.
+  aks holda qiymat bulutdan noto'g'ri tiklanadi. Bo'sh massivlar —
+  `CS_EMPTY_ARRAYS` (`levelGroups`, `pairExtra`).
 - `demo@smartjadval.uz` hisobi hech qachon bulutga yozilmaydi; ma'lumoti bo'sh bo'lsa
   [demoData.js](src/utils/demoData.js) dan avtomatik to'ldiriladi.
 
@@ -169,37 +170,73 @@ sifatida ishlatiladi — nomini o'zgartirish saqlangan barcha jadvallarni buzadi
 Bir katakda bir nechta dars bo'lishi normal: guruhli fanlar (`splitEnabled`), daraja
 guruhlari (`levelGroupEnabled`), parallel sinflar (`classIds` bir nechta), juft/toq
 hafta almashinuvi (`weekAltEnabled`), fan almashinuvi (`swapEnabled`),
-**bir vaqtda 2 fan** (`pairEnabled`).
+**bir vaqtda bir nechta fan** (`pairEnabled`).
 
-**Bir vaqtda 2 fan (`pairEnabled`)** — sinf ikkiga bo'linadi va guruhlar AYNI BIR
-SOATDA turli fan o'qiydi (masalan 1-guruh Ona tili, 2-guruh Rus tili). `swapEnabled`
-dan farqi: guruhlar almashmaydi va 2 soatlik blok talab qilinmaydi.
-Sozlama maydonlari: `pairEnabled`, `pairSubjectId`, `pairTeacherId`, `pairRoomId`
-(guruh nomlari — `groupName1`/`groupName2`, 1-guruh ustozi/xonasi — `teacherId`/`roomId`).
-Generatorda `type: "pair"` so'rovi; dars yozuvlari `pairKey` bilan bog'lanadi —
-shu kalit ularni [Schedule.jsx](src/pages/Schedule.jsx) `groupLessons()` da BITTA
-karta qiladi, [moveResolver.js](src/utils/moveResolver.js) `sameCard()` da birga
-ko'chiradi va `compactSchedule()` ning `baseKeyOf()` sida BITTA birlik qiladi.
-**Uchala joyda ham `pairKey` hisobga olinishi SHART** — bittasida unutilsa, juft
-dars bo'linib, guruhlar har xil soatga (hatto har xil kunga) tarqalib ketadi.
-2-fanni "Sinf fanlari" ro'yxatida ALOHIDA belgilash shart emas
+**Bir vaqtda bir nechta fan (`pairEnabled`)** — sinf 2, 3, 4… guruhga bo'linadi va
+guruhlar AYNI BIR SOATDA turli fan o'qiydi (masalan 1-guruh Ona tili, 2-guruh Rus
+tili, 3-guruh SAT). `swapEnabled` dan farqi: guruhlar almashmaydi va 2 soatlik blok
+talab qilinmaydi.
+
+Guruhlar modeli — [pairGroups.js](src/utils/pairGroups.js) (`pairSideGroups()`,
+`pairSideSlots()`, `normalizePairExtra()`). **Yangi kod pair maydonlarini qo'lda
+o'qimasin — shu yordamchilardan foydalansin**, aks holda 3-guruhdan boshlab
+ma'lumot ko'rinmay qoladi.
+
+| Guruh | Qayerda yashaydi |
+|---|---|
+| 1-guruh | qatorning o'z fani: `subjectId`, `teacherId`, `roomId`, `groupName1` |
+| 2-guruh | `pairSubjectId`, `pairTeacherId`, `pairRoomId`, `groupName2`, `pairShare2` |
+| 3-guruh+ | `pairExtra[]` = `{ gid, name, shared, subjectId, teacherId, roomId }` |
+
+Kartada ko'pi bilan `PAIR_MAX_GROUPS = 6` guruh bo'ladi. Generatorda `type: "pair"`
+so'rovi; dars yozuvlari `pairKey` bilan bog'lanadi — shu kalit ularni
+[Schedule.jsx](src/pages/Schedule.jsx) `groupLessons()` da BITTA karta qiladi,
+[moveResolver.js](src/utils/moveResolver.js) `sameCard()` da birga ko'chiradi va
+`compactSchedule()` ning `baseKeyOf()` sida BITTA birlik qiladi.
+**Uchala joyda ham `pairKey` hisobga olinishi SHART** — bittasida unutilsa, karta
+bo'linib, guruhlar har xil soatga (hatto har xil kunga) tarqalib ketadi.
+Guruh fanlarini "Sinf fanlari" ro'yxatida ALOHIDA belgilash shart emas
 (belgilansa — soat ikki marta hisoblanadi, UI ogohlantiradi).
 
-**Parallel sinflar (`pairGroupKey`).** Bir nechta sinf 1-guruh fanini BIRGA,
-bitta ustozdan o'qishi mumkin, 2-guruh fani esa har sinfda BOSHQA bo'ladi
-(11-A: Matematika + SAT, 11-B: Matematika + Rus tili — Matematika bitta dars).
-Model **oynali**: guruhga kirgan HAR BIR sinfda o'z `classSubjects` yozuvi turadi,
-ularni `pairGroupKey` bog'laydi. 1-guruhga tegishli maydonlar
-(`weeklyHours, teacherId, roomId, groupName1/2, allowDouble, isCore, spacedDays`
-— `PAIR_SHARED_FIELDS`) barcha a'zoda BIR XIL yoziladi; `pairSubjectId/
-pairTeacherId/pairRoomId` esa sinfga xos. Guruhga ko'pi bilan 3 sinf kiradi
-(`PAIR_MAX_EXTRA = 2`). UI — [ClassSubjects.jsx](src/pages/ClassSubjects.jsx)
+**Parallel sinflar (`pairGroupKey`).** Bir nechta sinf bitta kartani baham ko'radi —
+hammasi AYNI SOATDA o'qiydi. Model **oynali**: guruhga kirgan HAR BIR sinfda o'z
+`classSubjects` yozuvi turadi, ularni `pairGroupKey` bog'laydi. Guruhga ko'pi bilan
+3 sinf kiradi (`PAIR_MAX_EXTRA = 2`).
+
+Har bir guruh alohida **UMUMIY** (`shared`) bo'lishi mumkin:
+
+- **1-guruh** — HAR DOIM umumiy: bitta dars, bitta ustoz, hamma sinf uchun.
+  Umumiy maydonlar `PAIR_SHARED_FIELDS` (`weeklyHours, teacherId, roomId,
+  groupName1/2, allowDouble, isCore, spacedDays, pairShare2`) barcha a'zoda
+  BIR XIL yoziladi.
+- **2-guruh** — `pairShare2` yoqilsa umumiy (fani/ustozi/xonasi hamma sinfda bir
+  xil), aks holda har sinfda O'Z fani.
+- **3-guruh+** — har `pairExtra` yozuvining o'z `shared` bayrog'i bor. Massivning
+  TUZILISHI (`gid`, `name`, `shared`) barcha a'zoda bir xil turadi; qiymatlar esa
+  umumiy guruhda bir xil, aks holda sinfga xos. Sinxronlash —
+  ClassSubjects `eachPairRow()` / `mergePairExtra()`.
+
+Misol: 11-A va 11-B — Matematika (1-guruh, umumiy) + Rus tili (2-guruh, umumiy) +
+3-guruh sinfga xos (11-A: SAT, 11-B: Biologiya).
+
+UI — [ClassSubjects.jsx](src/pages/ClassSubjects.jsx) dagi guruh kartalari
+(«🔗 Parallel sinflarda umumiy» belgisi + «➕ Yana fan qo'shish») va
 "🔗 Parallel sinflar" bo'limi, faqat `pairEnabled` yoqilganda ko'rinadi.
-Generatorda a'zolar `pairMap` orqali BITTA so'rovga birlashadi: `classIds` —
-hamma sinf, `pairGroups[]` — har sinfning 2-guruhi. Kunlik fan limiti
-sinfma-sinf hisoblanadi (`req.perClassSIdx`), guruhsiz holatda esa avvalgidek
-`swapSubjectId` ishlaydi. Ustoz soatlarida 1-guruh ustozi guruh bo'yicha BIR
-MARTA sanaladi (ClassSubjects `computeTeacherHours`, TeacherAvailability).
+A'zo sinf kartasida FAQAT umumiy bo'lmagan guruhlar sozlanadi.
+
+Generatorda a'zolar `pairMap` orqali BITTA so'rovga birlashadi: `classIds` — hamma
+sinf, `pairGroups[]` — 1-guruhdan keyingi har bir "slot"; umumiy guruh bitta yozuv
+(`classIds` ichida hamma sinf), umumiy bo'lmagani esa har sinf uchun alohida yozuv.
+Kunlik fan limiti sinfma-sinf hisoblanadi (`req.perClassSIdx` — endi har sinf uchun
+fan indekslari RO'YXATI), guruhsiz holatda esa avvalgidek `swapSubjectId` ishlaydi.
+Ustoz soatlarida umumiy guruh BIR MARTA sanaladi (ClassSubjects
+`computeTeacherHours`, TeacherAvailability, Schedule `computeTeacherLoadRows`,
+VacancyAnalysis).
+
+⚠️ Kartadagi hamma guruh bir vaqtda o'qiydi, shuning uchun **ustoz ham, xona ham
+butun karta bo'ylab takrorlanmasligi shart** — UI tanlash ro'yxatlarini filtrlaydi
+va ogohlantiradi, generator esa takroriy xonani olib tashlaydi (`dedupeRooms`),
+takroriy ustozli so'rovni esa qabul qilmaydi.
 
 ### Jadval dvigatellari
 

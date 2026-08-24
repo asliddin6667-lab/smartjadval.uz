@@ -9,6 +9,7 @@
 import { DAYS } from './constants';
 import { loadStyledXLSX } from './excelUtils';
 import { isTeachingSlot } from './scheduleGenerator';
+import { pairSideGroups } from './pairGroups';
 
 function lessonClassIds(lesson) {
   return Array.isArray(lesson.classIds) ? lesson.classIds : [lesson.classId].filter(Boolean);
@@ -112,7 +113,7 @@ export async function exportAnalysisExcel({
       (classSubjects?.[classId] || []).forEach((a) => {
         if (a.subjectId === subjectId) req += Number(a.weeklyHours || 0);
         if (a.swapEnabled && a.swapSubjectId === subjectId) req += Number(a.weeklyHours || 0);
-        if (a.pairEnabled && a.pairSubjectId === subjectId) req += Number(a.weeklyHours || 0);
+        if (pairSideGroups(a).some((g) => g.subjectId === subjectId)) req += Number(a.weeklyHours || 0);
       });
       return req;
     };
@@ -124,7 +125,7 @@ export async function exportAnalysisExcel({
         const ids = new Set();
         if (a.teacherId) ids.add(a.teacherId);
         if (a.swapTeacherId) ids.add(a.swapTeacherId);
-        if (a.pairEnabled && a.pairTeacherId) ids.add(a.pairTeacherId);
+        pairSideGroups(a).forEach((g) => { if (g.teacherId) ids.add(g.teacherId); });
         if (Array.isArray(a.teacherIds)) a.teacherIds.forEach((x) => x && ids.add(x));
         if (Array.isArray(a.groups)) a.groups.forEach((g) => g?.teacherId && ids.add(g.teacherId));
         ids.forEach((tid) => {
@@ -133,7 +134,7 @@ export async function exportAnalysisExcel({
           e.classes.add(cid);
           if (a.subjectId) e.subjects.add(a.subjectId);
           if (a.swapEnabled && a.swapSubjectId) e.subjects.add(a.swapSubjectId);
-          if (a.pairEnabled && a.pairSubjectId) e.subjects.add(a.pairSubjectId);
+          pairSideGroups(a).forEach((g) => e.subjects.add(g.subjectId));
         });
       });
     });
@@ -143,13 +144,13 @@ export async function exportAnalysisExcel({
       const out = new Set();
       (classSubjects?.[classId] || []).forEach((a) => {
         const match = a.subjectId === subjectId || (a.swapEnabled && a.swapSubjectId === subjectId)
-          || (a.pairEnabled && a.pairSubjectId === subjectId);
+          || pairSideGroups(a).some((g) => g.subjectId === subjectId);
         if (!match) return;
         if (a.teacherId) out.add(a.teacherId);
         if (Array.isArray(a.teacherIds)) a.teacherIds.forEach((x) => x && out.add(x));
         if (Array.isArray(a.groups)) a.groups.forEach((g) => g?.teacherId && out.add(g.teacherId));
         if (a.swapEnabled && a.swapSubjectId === subjectId && a.swapTeacherId) out.add(a.swapTeacherId);
-        if (a.pairEnabled && a.pairSubjectId === subjectId && a.pairTeacherId) out.add(a.pairTeacherId);
+        pairSideGroups(a).forEach((g) => { if (g.subjectId === subjectId && g.teacherId) out.add(g.teacherId); });
       });
       return [...out];
     };
@@ -168,7 +169,7 @@ export async function exportAnalysisExcel({
       (classSubjects?.[classId] || []).forEach((a) => {
         if (a.subjectId) ids.add(a.subjectId);
         if (a.swapEnabled && a.swapSubjectId) ids.add(a.swapSubjectId);
-        if (a.pairEnabled && a.pairSubjectId) ids.add(a.pairSubjectId);
+        pairSideGroups(a).forEach((g) => ids.add(g.subjectId));
       });
       // Jadvalda bor, lekin sozlamada yo'q fanlar ham ko'rinsin
       cellIdx.forEach((_v, k) => {
