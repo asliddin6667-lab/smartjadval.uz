@@ -1,5 +1,6 @@
 import { DAYS } from "./constants";
 import { normalizePairExtra, pairSideGroups, pairAllGroups } from "./pairGroups";
+import { supervisionRows, findSupervisionGaps } from "./homeroom";
 
 export function isTeachingSlot(timeslot) {
   const type = timeslot?.type || "lesson";
@@ -829,18 +830,18 @@ function attemptSchedule(
   const LOCKED = { locked: true };
   const lockedCount = {};
   if (lockedSchedule) {
-    const groupedCS = new Set();
-    classes.forEach((c) => {
-      (classSubjects[c.id] || []).forEach((a) => {
-        if (a.groupKey || (a.levelGroupEnabled && a.levelGroupKey)) groupedCS.add(`${c.id}__${a.subjectId}`);
-      });
-    });
-    const isGroupedLesson = (l) => classIdsOf(l).some((cid) => groupedCS.has(`${cid}__${l.subjectId}`));
+    // ——— QULFLANGAN DARS TURIDAN QAT’I NAZAR JOYIDA QOLADI ———
+    // Ilgari guruhli darslar (🔁 parallel dars va daraja guruhlari) bu yerda
+    // jimgina tashlanardi: foydalanuvchi 🔒 bossa ham qayta generatsiyada ular
+    // boshqa soatga ko‘chib ketardi. Endi barcha qulflangan dars urug‘ sifatida
+    // qoladi. Soat hisobi esa pastdagi `lockedCount` orqali HAR BIR a’zo sinfdan
+    // ayriladi (guruh yozuvi `classIds` da hamma sinfni saqlaydi), shuning uchun
+    // ayni soat ikkinchi marta joylanmaydi.
     DAYS.forEach((day, d) => {
       allSortedTs.forEach((ts) => {
         const cell = lockedSchedule?.[day]?.[ts.id];
         if (!Array.isArray(cell)) return;
-        const manual = cell.filter((l) => l && l.manual && !isGroupedLesson(l));
+        const manual = cell.filter((l) => l && l.manual);
         if (!manual.length) return;
         if (!schedule[day]) schedule[day] = {};
         schedule[day][ts.id] = [...(schedule[day][ts.id] || []), ...manual];
@@ -887,6 +888,32 @@ function attemptSchedule(
       });
     });
   }
+
+  // ═════════ «BOLA NAZORATSIZ QOLMASIN» (1–4 SINF) ═════════
+  // Boshlang'ich sinfda darslarning katta qismini sinf rahbari beradi.
+  // U boshqa sinfga kirib ketgan soatda shu sinfda BOSHQA ustozning darsi
+  // turishi kerak — aks holda bolalar nazoratsiz qoladi.
+  //
+  // Cheklov QATTIQ qilinmaydi (aks holda jadval umuman chiqmay qoladi):
+  //   • «o'rin bosar» darslar TANQIS resurs — ular oddiy darslardan
+  //     oldin joylanadi (`tier`);
+  //   • rahbarning tashqi darsi esa aynan o'sha kataklar ustiga tortiladi
+  //     (`scoreCandidate` dagi SUPERVISE_W).
+  // Rahbari umuman chiqmaydigan sinf (tashqi soati 0) bu mexanizmga
+  // qo'shilmaydi — bekorga tartibni buzmasin.
+  const homeroomTIdx = new Int16Array(C).fill(-1);   // sinf indeksi → rahbar ustoz indeksi
+  const homeClassesOfT = new Map();                  // ustoz indeksi → [sinf indeksi, ...]
+  supervisionRows({ classes, classSubjects, timeslots, lunchGroups }).forEach((row) => {
+    if (row.outHours <= 0) return;                   // rahbar sinfdan chiqmaydi
+    const ci = cIdxOf.get(row.classId);
+    const ti = tIdxOf.get(row.teacherId);
+    if (ci === undefined || ti === undefined) return;
+    homeroomTIdx[ci] = ti;
+    const arr = homeClassesOfT.get(ti) || [];
+    arr.push(ci);
+    homeClassesOfT.set(ti, arr);
+  });
+  const superviseOn = homeClassesOfT.size > 0;
 
   const simpleRequests = [];
   const groupMap = new Map();
@@ -1125,6 +1152,36 @@ function attemptSchedule(
       teacherTotalReq[id] = (teacherTotalReq[id] || 0) + (r.blockSize || 1);
     });
   });
+  // ——— NAZORAT BELGILARI: bu dars kimga «o'rin bosar», kim uchun «tashqi» ———
+  //   coverCIdxs — shu dars QAYSI boshlang'ich sinfda rahbar o'rnini bosadi
+  //                (sinf shu darsda, lekin dars rahbarniki EMAS);
+  //   outCIdxs   — dars rahbarniki, lekin O'Z sinfida emas: u shu soatda
+  //                sinfdan chiqib ketadi.
+  function setSuperviseFlags(req) {
+    req.coverCIdxs = null;
+    req.outCIdxs = null;
+    if (!superviseOn) return;
+    const tset = new Set(req.tids);
+    const cset = new Set(req.classIds || []);
+    let cover = null;
+    (req.classIds || []).forEach((cid) => {
+      const ci = cIdxOf.get(cid);
+      if (ci === undefined) return;
+      const ti = homeroomTIdx[ci];
+      if (ti < 0) return;
+      if (!tset.has(teachers[ti].id)) (cover || (cover = [])).push(ci);
+    });
+    let out = null;
+    req.tids.forEach((tid) => {
+      const ti = tIdxOf.get(tid);
+      if (ti === undefined) return;
+      (homeClassesOfT.get(ti) || []).forEach((ci) => {
+        if (!cset.has(classes[ci].id)) (out || (out = [])).push(ci);
+      });
+    });
+    req.coverCIdxs = cover;
+    req.outCIdxs = out;
+  }
   function difficulty(r) {
     const tids = (r.teacherIds || [r.teacherId]).filter(Boolean);
     const maxTeacherLoad = tids.reduce((mx, id) => Math.max(mx, teacherTotalReq[id] || 0), 0);
@@ -1139,7 +1196,10 @@ function attemptSchedule(
     const spaced = r.spacedDays ? 7 : 0;
     const core = r.isCore ? 6 : 0;
     const block = (r.blockSize || 1) >= 2 ? 10 : 0;
-    return maxTeacherLoad + (r.blockSize || 1) * 2 + teacherOff + teacherBlk + classOff + multiClass + multiTeacher + spaced + core + block;
+    // «O'rin bosar» dars — tanqis: rahbar chiqib ketgan soatni faqat shu
+    // darslar yopa oladi, shuning uchun navbatda oldinroq turadi.
+    const cover = r.coverCIdxs ? r.coverCIdxs.length * 14 : 0;
+    return maxTeacherLoad + (r.blockSize || 1) * 2 + teacherOff + teacherBlk + classOff + multiClass + multiTeacher + spaced + core + block + cover;
   }
   function isValidRequest(req) {
     const reqTeacherIds = (req.teacherIds || [req.teacherId]).filter(Boolean);
@@ -1227,6 +1287,7 @@ function attemptSchedule(
   for (const req of allRequests) {
     if (!isValidRequest(req)) continue;
     req.tids = (req.teacherIds || [req.teacherId]).filter(Boolean);
+    setSuperviseFlags(req);
     dedupeRooms(req);
     req.rids = (req.roomIds || [req.roomId]).filter(Boolean);
     // Bu yerga yetib kelmasligi kerak (dedupeRooms tozalab bo'ldi), lekin
@@ -1282,6 +1343,9 @@ function attemptSchedule(
       Boolean(req.groupKey) || Boolean(req.spacedDays) || Boolean(req.isCore);
     req.constrained = multiResource || otherConstrained;
     req.tier = multiResource ? 0 : (otherConstrained ? 1 : 2);
+    // «O'rin bosar» darslar oddiy darslardan OLDIN joylansin: rahbar
+    // chiqib ketgan soat faqat ular bilan yopiladi, boshqa dars yaramaydi.
+    if (req.coverCIdxs) { req.constrained = true; req.tier = Math.min(req.tier, 1); }
     if (req.isCore) req.priority = (req.priority || 0) + 12;
     // ——— KELAJAK SOATI (QATTIQ): faqat DUSHANBA, 1-DARS ———
     // Bu fan boshqa kunga hech qachon tushmaydi. 1-dars sharti faqat oxirgi
@@ -1779,6 +1843,39 @@ function attemptSchedule(
     }
     return p;
   }
+  // ——— «BOLA NAZORATSIZ QOLMASIN» jarimasi ———
+  // Ikki tomondan ishlaydi:
+  //   1) rahbarning TASHQI darsi — o'z sinfida shu soatda allaqachon boshqa
+  //      ustozning darsi tursa MUKOFOT, bo'sh bo'lsa JARIMA;
+  //   2) «o'rin bosar» dars — rahbar shu vaqtda band bo'lsa MUKOFOT.
+  // Sinf o'sha soatda maktabda bo'lmasa (kunini tugatgan, boshqa smena,
+  // obed) — jarima ham, mukofot ham yo'q: bolalar uyda/nazoratda.
+  function supervisePenalty(req, d, i) {
+    if (!superviseOn) return 0;
+    let pen = 0;
+    const bs = req.blockSize;
+    if (req.outCIdxs) {
+      for (const ci of req.outCIdxs) {
+        const quota = dayQuota[ci * D + d];
+        for (let o = 0; o < bs; o++) {
+          const off = ci * DT + d * T + i + o;
+          const r = slotRank[off];
+          if (r < 0 || r >= quota) continue;    // sinf maktabda emas
+          pen += classGrid[off] ? -SUPERVISE_W : SUPERVISE_W;
+        }
+      }
+    }
+    if (req.coverCIdxs) {
+      for (const ci of req.coverCIdxs) {
+        const ti = homeroomTIdx[ci];
+        if (ti < 0) continue;
+        for (let o = 0; o < bs; o++) {
+          if (teacherGrid[ti * DTB + tbOff(d, i + o)]) pen -= SUPERVISE_W;
+        }
+      }
+    }
+    return pen;
+  }
   function scoreCandidate(req, d, i) {
     const blockSize = req.blockSize;
     const adjacencyPenalty = blockSize === 1 && adjacentSame(d, i, blockSize, req) ? 1500 : 0;
@@ -1826,8 +1923,9 @@ function attemptSchedule(
       }
     }
     const spacedPen = spacedPenalty(req, d);
+    const supervisePen = supervisePenalty(req, d, i);
     const randomPenalty = rng() * RAND_W;
-    return compactPenalty + repeatPenalty + classLoadPenalty + teacherPenalty + spreadPenalty + corePenalty + adjacencyPenalty + dayCapPenalty + spacedPen + fixedPen + randomPenalty;
+    return compactPenalty + repeatPenalty + classLoadPenalty + teacherPenalty + spreadPenalty + corePenalty + adjacencyPenalty + dayCapPenalty + spacedPen + supervisePen + fixedPen + randomPenalty;
   }
   function bestCandidate(req, withForwardCheck) {
     let best = null;
@@ -1846,6 +1944,9 @@ function attemptSchedule(
   const REPEAT_HARD_W = 260; // bir kunda fan takrorlansa — sezilarli jarima
   // Kun o'rtasida bo'sh soat (oyna) — eng og'ir jarima: sinf nazoratsiz qoladi
   const GAP_HARD_W = 5200;
+  // Boshlang'ich sinf rahbari chiqib ketgan soat — oynadan yengil, lekin
+  // kunlik yuk tengligidan (DAYCAP_W) ancha og'ir.
+  const SUPERVISE_W = 2600;
   // ——— ASOSIY FAN og'irliklari ———
   const CORE_EARLY_W = 420;
   const CORE_LATE_W = 2200;
@@ -3727,9 +3828,16 @@ function buildValidationReport(ctx) {
       if (got < need) remainingList.push({ className: cls.name, subjectName: subj.name, missing: need - got });
     });
   });
+  // ——— NAZORATSIZ SOATLAR (1–4 sinf) ———
+  // Jadval yaroqsiz emas, lekin bolalar kun o'rtasida ustozsiz qoladi.
+  // `ok` ga qo'shilmaydi: bu sozlama muammosi, ziddiyat emas.
+  const superviseGaps = findSupervisionGaps({
+    classes, classSubjects, teachers, timeslots, lunchGroups, schedule,
+  });
   return {
     requiredTotal, placedTotal, remainingTotal: Math.max(0, requiredTotal - placedTotal), remainingList,
     teacherConflicts, roomConflicts, classConflicts, lunchConflicts, offDayConflicts, blockedSlotConflicts,
+    superviseGaps,
     ok: requiredTotal === placedTotal && !teacherConflicts.length && !roomConflicts.length &&
       !classConflicts.length && !lunchConflicts.length && !offDayConflicts.length &&
       !blockedSlotConflicts.length,

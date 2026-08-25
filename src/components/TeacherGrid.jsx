@@ -16,6 +16,7 @@ import { pairSideGroups } from "../utils/pairGroups";
 import {
   classIdsOf, teacherIdsOf, collectCardEntries, unitOf, resolveMove, applyActions, sameCard,
   softWarnings, checkPlace, findAutoPartner, onlyBusyReasons, unitLabel, slotLabel,
+  superviseMoveWarnings,
 } from "../utils/moveResolver";
 import { groupSlotsByShift, shiftSlotNumbers } from "../utils/shiftSlots";
 
@@ -304,6 +305,8 @@ export default function TeacherGrid({
     const warnings = [
       ...softWarnings(ctx, src.unit, day),
       ...(res.mode === "swap" && partner ? softWarnings(ctx, partner, src.day) : []),
+      // Ko'chirish 1–4 sinfda bolani ustozsiz qoldirmaydimi?
+      ...(res.ok ? superviseMoveWarnings(ctx, res.actions) : []),
     ];
 
     if (res.ok && !lockedTouched && !warnings.length) {

@@ -14,6 +14,7 @@
 import { DAYS } from "./constants";
 import { isTeachingSlot, classHasLunchAt, overlappingSlots, isFixedMondaySubject } from "./scheduleGenerator";
 import { slotDisplayNumber } from "./shiftSlots";
+import { findSupervisionGaps } from "./homeroom";
 
 export function classIdsOf(lesson) {
   return Array.isArray(lesson?.classIds) ? lesson.classIds : [lesson?.classId].filter(Boolean);
@@ -366,6 +367,23 @@ export function applyActions(schedule, actions) {
     next[toDay][toSlotId] = [...next[toDay][toSlotId], ...entries];
   });
   return next;
+}
+
+// ═══ «BOLA NAZORATSIZ QOLMASIN» — KO'CHIRISHDAN OLDIN OGOHLANTIRISH ═══
+// Reja NUSXADA qo'llanadi va 1–4 sinflarda YANGI "nazoratsiz soat" paydo
+// bo'lganmi, shu tekshiriladi. Ko'chirish TAQIQLANMAYDI — direktor bilib
+// turib ko'chirishi mumkin, shuning uchun bu faqat ogohlantirish.
+// Mantiq [homeroom.js](./homeroom.js) da — bu yerda "oldin/keyin" farqi.
+export function superviseMoveWarnings(ctx, actions) {
+  if (!Array.isArray(actions) || !actions.length) return [];
+  const key = (g) => `${g.classId}|${g.day}|${g.tsId}`;
+  const before = new Set(findSupervisionGaps(ctx).map(key));
+  const after = findSupervisionGaps({ ...ctx, schedule: applyActions(ctx.schedule, actions) });
+  const fresh = after.filter((g) => !before.has(key(g)));
+  if (!fresh.length) return [];
+  return [...new Set(fresh.map((g) =>
+    `🧒 ${g.className}: ${g.day}, ${g.lessonNumber}-dars bo'sh qoladi, lekin sinf rahbari (${g.teacherName || "—"}) o'sha soatda ${g.busyIn.join(", ") || "boshqa sinf"} da dars beradi — bolalar nazoratsiz qoladi.`
+  ))];
 }
 
 // ═══ ALMASHINUVNI TEKSHIRISH ═══

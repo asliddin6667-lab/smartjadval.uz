@@ -290,6 +290,13 @@ Ustoz yuklamasi esa aksincha — har guruh ustozi ALOHIDA sanaladi.
   kunlik yuk notekisligi → yumshoq jarima. Vaqt byudjeti `budgetFor(totalHours)` da
   hisoblanadi va deadline'ga qarab erta to'xtaydi, shuning uchun UI qotib qolmaydi.
   `lockedSchedule` — 🔒 qulflangan darslar qayta generatsiyada joyida qoladi.
+  **Qulf dars TURIGA bog‘liq emas:** guruhli darslar (🔁 parallel dars, daraja
+  guruhlari, parallel sinflar) ham urug‘ sifatida qabul qilinadi. Soat ikki marta
+  joylanmasligini `lockedCount` ta’minlaydi — u qulflangan yozuvning `classIds`
+  dagi HAR BIR sinfidan `weeklyHours` ni ayiradi, shuning uchun guruh so‘rovi
+  faqat qolgan soatga tuziladi. Qulflangan darsni seedan chiqarib tashlash
+  (avval guruhli darslar shunday edi) — dars boshqa soatga ko‘chib ketishi
+  demakdir.
 - [moveResolver.js](src/utils/moveResolver.js) — **qo'lda ko'chirish/almashtirishning
   yagona dvigateli**. Sinf setkasi ([Schedule.jsx](src/pages/Schedule.jsx)) va ustoz
   setkasi ([TeacherGrid.jsx](src/components/TeacherGrid.jsx)) ikkalasi ham shundan
@@ -346,6 +353,64 @@ umumiy vaqt chegarasi qo'yilgan.
   Endi `restorePlace()` avval `rawFree()` bilan katakni tekshiradi, band bo'lsa
   boshqa bo'sh katak qidiradi. Har qanday yangi "bekor qilish" yo'li shu
   funksiyadan foydalanishi SHART.
+
+### Boshlang'ich sinf rahbari — «bola nazoratsiz qolmasin»
+
+1–4 sinfda darslarning katta qismini BITTA ustoz beradi. U boshqa sinfga
+kirib ketgan soatda shu sinfda BOSHQA ustozning darsi turishi kerak —
+aks holda bolalar ustozsiz qoladi.
+
+Butun mantiq [homeroom.js](src/utils/homeroom.js) da:
+
+- **Sinf rahbari** — `classes[].headTeacherId`. Belgilanmagan bo'lsa
+  boshlang'ich sinf uchun AVTOMATIK aniqlanadi (`detectHomeroomId`): «Sinf
+  fanlari»da eng ko'p FAN bergan ustoz, teng bo'lsa eng ko'p soat bergani.
+  Eski `headTeacher` MATN maydoni saqlanib qoldi (eksport va qidiruv unga
+  tayanadi) — [Classes.jsx](src/pages/Classes.jsx) uni tanlangan ustoz ismi
+  bilan sinxron yuritadi. `classes[].superviseOff === true` — qoida shu
+  sinfga qo'llanmaydi.
+- **`buildTeacherStreams()`** — ustozning haftalik yuklamasi «dars oqimlari»
+  bo'yicha: parallel dars, daraja guruhi va parallel sinflar BIR MARTA
+  sanaladi. Schedule.jsx `computeTeacherLoadRows` ham SHU funksiyaga
+  tayanadi — hisob ikki joyda ajralib ketmasin.
+- **`supervisionRows()`** — sinfdagi «begona ustoz» soati (`coverHours`),
+  rahbarning tashqi soati (`outHours`) va `riskHours = outHours − coverHours`.
+  Boshqa smenadagi sinflar hisobga olinmaydi (vaqt kesishmaydi).
+- **`findSupervisionGaps()`** — TAYYOR jadvaldagi buzilishlar: sinf katagi
+  bo'sh, kun hali tugamagan va aynan o'sha vaqtda rahbar boshqa sinfda.
+  Kun oxiridagi bo'sh kataklar va obed hisobga olinmaydi.
+
+**Nega qattiq cheklov emas.** Kunlik kvota (`quotaRankOk` + `balanceOk`)
+sinf kunini ketma-ket prefiks qilib to'ldiradi, shuning uchun jadval 100%
+chiqqanda katak bo'sh QOLMAYDI — rahbar chiqib ketgan soatda u yerda
+albatta boshqa ustozning darsi turadi. Ya'ni qoida ko'p hollarda O'ZIDAN
+bajariladi. Buzilish faqat soat tushmay qolganda yoki QO'LDA tahrirdan
+keyin paydo bo'ladi. Shuning uchun generatorda faqat ikkita yumshoq
+turtki bor ([scheduleGenerator.js](src/utils/scheduleGenerator.js)):
+
+| Joy | Nima qiladi |
+|---|---|
+| `setSuperviseFlags(req)` | so'rovga `coverCIdxs` / `outCIdxs` belgilarini qo'yadi |
+| `req.tier` | «o'rin bosar» darslar 1-pog'onaga ko'tariladi — oddiy darslardan oldin joylanadi |
+| `supervisePenalty()` | rahbarning tashqi darsi sinf katagi TO'LA bo'lgan soatga tortiladi (`SUPERVISE_W = 2600`, oynadan yengil, kunlik yuk tengligidan og'ir) |
+
+Mexanizm faqat rahbarning tashqi soati bor sinflarda yoqiladi
+(`row.outHours > 0`) — aks holda tartib bekorga buzilmasin.
+
+**Foydalanuvchi nimani ko'radi** ([Schedule.jsx](src/pages/Schedule.jsx)):
+
+- `supervisionCapacityWarnings()` — `riskHours > 0` bo'lsa OGOHLANTIRISH
+  (xato emas): ortiqcha soatlar sinf kunini erta tugatish bilan qoplanadi;
+- 🧒 qizil quti — `findSupervisionGaps()` topgan HAQIQIY nazoratsiz soatlar.
+  `schedule` o'zgarganda qayta hisoblanadi, ya'ni qo'lda tahrirdan keyin ham
+  darhol yangilanadi;
+- ko'chirish oynasida `superviseMoveWarnings()` ([moveResolver.js](src/utils/moveResolver.js))
+  — reja NUSXADA qo'llanib, YANGI nazoratsiz soat paydo bo'lsa ogohlantiradi
+  (taqiqlamaydi: direktor bilib turib ko'chirishi mumkin).
+
+⚠️ `homeroom.js` `scheduleGenerator.js` dan HECH NARSA import qilmaydi
+(teskari import bor) — `isTeachingSlot`, `slotAllowsClass`, `classHasLunchAt`
+va vaqt bandlari mantig'i u yerda ataylab takrorlangan.
 
 ### Ma'lumot xatolaridan tiklanish
 

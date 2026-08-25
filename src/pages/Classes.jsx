@@ -1,15 +1,22 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import ConfirmModal from "../components/ConfirmModal";
 import { genId } from "../utils/helpers";
 import { CLASS_LETTERS, DAYS, EDU_LANGS } from "../utils/constants";
+import { sortByName } from "../utils/sortHelpers";
+import { detectHomeroomId, isPrimaryClass, PRIMARY_MAX_GRADE } from "../utils/homeroom";
 
-export default function ClassesPage({ classes, setClasses, toast }) {
+const EMPTY_FORM = {
+  name: "", studentCount: "", headTeacher: "", headTeacherId: "",
+  offDays: [], eduLang: "uz", superviseOff: false,
+};
+
+export default function ClassesPage({ classes, setClasses, teachers = [], classSubjects = {}, toast }) {
   const [search, setSearch] = useState("");
   const [showModal, setShowModal] = useState(false);
   const [editItem, setEditItem] = useState(null);
   const [deleteId, setDeleteId] = useState(null);
   const [confirmClearAll, setConfirmClearAll] = useState(false);
-  const [form, setForm] = useState({ name: "", studentCount: "", headTeacher: "", offDays: [], eduLang: "uz" });
+  const [form, setForm] = useState(EMPTY_FORM);
   const [autoForm, setAutoForm] = useState({ grade: 1, count: 4, studentCount: "", headTeacher: "", eduLang: "uz" });
   const [allCounts, setAllCounts] = useState(() => Object.fromEntries(Array.from({ length: 11 }, (_, i) => [i + 1, ""])));
 
@@ -17,21 +24,89 @@ export default function ClassesPage({ classes, setClasses, toast }) {
   const allTotal = Array.from({ length: 11 }, (_, i) => i + 1)
     .reduce((sum, grade) => sum + Math.min(CLASS_LETTERS.length, Math.max(0, Number(allCounts[grade]) || 0)), 0);
 
+  // ——— SINF RAHBARI ———
+  // Ustozlar ro'yxati alifbo bo'yicha; nomi bo'yicha ham qidiriladi
+  const teacherList = useMemo(() => sortByName(teachers || []), [teachers]);
+  const teacherName = useMemo(
+    () => new Map((teachers || []).map(t => [t.id, t.name])),
+    [teachers],
+  );
+
+  // Boshlang'ich sinf uchun rahbar AVTOMATIK aniqlanadi: "Sinf fanlari"da
+  // eng ko'p FAN bergan ustoz. Qo'lda belgilanmagan bo'lsa shu ishlatiladi.
+  const autoHeadOf = useMemo(() => {
+    const map = new Map();
+    (classes || []).forEach(c => {
+      if (!isPrimaryClass(c)) return;
+      const tid = detectHomeroomId(classSubjects?.[c.id] || []);
+      if (tid) map.set(c.id, tid);
+    });
+    return map;
+  }, [classes, classSubjects]);
+
+  // Jadvalda/eksportlarda ko'rinadigan ism: qo'lda tanlangani → avtomatik → eski matn
+  function headNameOf(c) {
+    const explicit = String(c.headTeacherId || "").trim();
+    if (explicit) return teacherName.get(explicit) || c.headTeacher || "—";
+    const auto = autoHeadOf.get(c.id);
+    if (auto) return `${teacherName.get(auto) || "—"} (avto)`;
+    return c.headTeacher || "—";
+  }
+
+  // Qidiruv sinf nomi va rahbar ismi bo'yicha (avtomatik aniqlangani ham)
+  const q = search.trim().toLowerCase();
   const filtered = classes.filter(c =>
-    c.name.toLowerCase().includes(search.toLowerCase()) ||
-    c.headTeacher?.toLowerCase().includes(search.toLowerCase())
+    !q || c.name.toLowerCase().includes(q) || headNameOf(c).toLowerCase().includes(q)
   ).sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "uz", { numeric: true, sensitivity: "base" }));
+
+  // Modal uchun: shu sinf boshlang'ichmi va avtomatik rahbari kim
+  const formPrimary = isPrimaryClass({ name: form.name });
+  const autoHead = editItem ? autoHeadOf.get(editItem.id) || "" : "";
 
   function openAdd() {
     setEditItem(null);
-    setForm({ name: "", studentCount: "", headTeacher: "", offDays: [], eduLang: "uz" });
+    setForm(EMPTY_FORM);
     setShowModal(true);
   }
 
   function openEdit(item) {
     setEditItem(item);
-    setForm({ name: item.name, studentCount: item.studentCount, headTeacher: item.headTeacher || "", offDays: Array.isArray(item.offDays) ? item.offDays : [], eduLang: item.eduLang || "uz" });
+    setForm({
+      name: item.name,
+      studentCount: item.studentCount,
+      headTeacher: item.headTeacher || "",
+      headTeacherId: item.headTeacherId || "",
+      offDays: Array.isArray(item.offDays) ? item.offDays : [],
+      eduLang: item.eduLang || "uz",
+      superviseOff: item.superviseOff === true,
+    });
     setShowModal(true);
+  }
+
+  // Barcha 1–4 sinflarga rahbarni bir bosishda yozib qo'yish.
+  // Qo'lda belgilangan sinflarga tegilmaydi.
+  function autoAssignHeadTeachers() {
+    let filled = 0;
+    let missed = 0;
+    const updated = (classes || []).map(c => {
+      if (!isPrimaryClass(c)) return c;
+      if (String(c.headTeacherId || "").trim()) return c;
+      const tid = detectHomeroomId(classSubjects?.[c.id] || []);
+      if (!tid) { missed += 1; return c; }
+      filled += 1;
+      return { ...c, headTeacherId: tid, headTeacher: teacherName.get(tid) || c.headTeacher || "" };
+    });
+    if (!filled) {
+      toast(
+        missed
+          ? "Rahbar aniqlanmadi: avval «Sinf fanlari»da 1–4 sinflarga fan va ustoz biriktiring"
+          : "Barcha boshlang'ich sinflarda rahbar allaqachon belgilangan",
+        "warning",
+      );
+      return;
+    }
+    setClasses(updated);
+    toast(`${filled} ta boshlang'ich sinfga rahbar belgilandi ✓`, "success");
   }
 
   function toggleFormOffDay(day) {
@@ -59,12 +134,20 @@ export default function ClassesPage({ classes, setClasses, toast }) {
 
   function handleSave() {
     if (!form.name.trim()) return;
+    // `headTeacher` — eski MATN maydoni. Eksportlar va qidiruv hali unga
+    // tayanadi, shuning uchun tanlangan ustoz ismi bilan sinxron yuritiladi.
+    const data = {
+      ...form,
+      headTeacher: form.headTeacherId
+        ? (teacherName.get(form.headTeacherId) || form.headTeacher || "")
+        : form.headTeacher,
+    };
     if (editItem) {
-      const updated = classes.map(c => c.id === editItem.id ? { ...c, ...form } : c);
+      const updated = classes.map(c => c.id === editItem.id ? { ...c, ...data } : c);
       setClasses(updated);
       toast("Sinf yangilandi ✓", "success");
     } else {
-      setClasses([...classes, { id: genId(), ...form, createdAt: Date.now() }]);
+      setClasses([...classes, { id: genId(), ...data, createdAt: Date.now() }]);
       toast("Sinf qo'shildi ✓", "success");
     }
     setShowModal(false);
@@ -227,6 +310,12 @@ export default function ClassesPage({ classes, setClasses, toast }) {
                 <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{filtered.length} ta sinf</span>
                 {classes.length > 0 && (
                   <>
+                    {classes.some(isPrimaryClass) && (
+                      <button className="btn btn-secondary" onClick={autoAssignHeadTeachers}
+                        title={`1–${PRIMARY_MAX_GRADE} sinflarda eng ko'p fandan dars beradigan ustozni sinf rahbari qilib yozib qo'yadi`}>
+                        🎓 Boshlang'ich sinf rahbarlarini aniqlash
+                      </button>
+                    )}
                     <button className="btn btn-secondary" onClick={setSaturdayOffForAll} title="Barcha sinflarda Shanbani dam kuni qilish (5 kunlik hafta)">
                       📅 Barchaga Shanba dam
                     </button>
@@ -274,7 +363,12 @@ export default function ClassesPage({ classes, setClasses, toast }) {
                       <td>
                         <span className="badge badge-info">{c.studentCount || "—"} ta</span>
                       </td>
-                      <td style={{ color: "var(--text-secondary)", fontSize: 13 }}>{c.headTeacher || "—"}</td>
+                      <td style={{ color: "var(--text-secondary)", fontSize: 13 }}>
+                        {headNameOf(c)}
+                        {isPrimaryClass(c) && c.superviseOff && (
+                          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>nazorat qoidasi o'chirilgan</div>
+                        )}
+                      </td>
                       <td>
                         {Array.isArray(c.offDays) && c.offDays.length > 0
                           ? <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>{c.offDays.map(d => <span key={d} className="badge badge-warning">{d}</span>)}</div>
@@ -326,9 +420,44 @@ export default function ClassesPage({ classes, setClasses, toast }) {
               </div>
               <div className="form-group">
                 <label className="form-label">Sinf rahbari</label>
-                <input className="form-control" placeholder="F.I.Sh" value={form.headTeacher}
-                  onChange={e => setForm({ ...form, headTeacher: e.target.value })} />
+                {teacherList.length > 0 ? (
+                  <select className="form-control" value={form.headTeacherId}
+                    onChange={e => setForm({ ...form, headTeacherId: e.target.value })}>
+                    <option value="">
+                      {autoHead ? `Avtomatik: ${teacherName.get(autoHead) || "—"}` : "— tanlanmagan —"}
+                    </option>
+                    {teacherList.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  </select>
+                ) : (
+                  <input className="form-control" placeholder="F.I.Sh" value={form.headTeacher}
+                    onChange={e => setForm({ ...form, headTeacher: e.target.value })} />
+                )}
+                <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>
+                  {formPrimary
+                    ? "Boshlang'ich sinfda rahbar bo'sh qoldirilsa — «Sinf fanlari»dagi eng ko'p fan bergan ustoz avtomatik olinadi."
+                    : "1–4 sinflarda bu ustoz bo'yicha «bola nazoratsiz qolmasin» qoidasi ishlaydi."}
+                </div>
               </div>
+
+              {/* ——— NAZORAT QOIDASI (faqat 1–4 sinf) ———
+                  Rahbar boshqa sinfga kirib ketgan soatda bu sinfda BOSHQA
+                  ustozning darsi turishi kerak. Ba'zi maktabda buni qo'lda
+                  boshqarishadi — shunda qoidani o'chirib qo'yish mumkin. */}
+              {formPrimary && (
+                <div className="form-group">
+                  <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
+                    <input type="checkbox" style={{ marginTop: 3 }} checked={!form.superviseOff}
+                      onChange={e => setForm({ ...form, superviseOff: !e.target.checked })} />
+                    <span>
+                      <span style={{ fontWeight: 600 }}>🧒 Bola nazoratsiz qolmasin</span>
+                      <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                        Sinf rahbari boshqa sinfda dars berayotgan soatda bu sinfda
+                        boshqa ustozning darsi turadi — kun o'rtasida bo'sh soat qolmaydi.
+                      </div>
+                    </span>
+                  </label>
+                </div>
+              )}
               <div className="form-group">
                 <label className="form-label">Dam olish kunlari (bu kunlarga dars qo'yilmaydi)</label>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>

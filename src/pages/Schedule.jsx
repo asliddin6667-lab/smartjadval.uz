@@ -7,10 +7,11 @@ import {
 import { exportColoredSchedule } from "../utils/coloredScheduleExport";
 import {
   collectCardEntries, unitOf, resolveMove, applyActions, softWarnings, checkPlace,
-  findAutoPartner, onlyBusyReasons, unitLabel, slotLabel,
+  findAutoPartner, onlyBusyReasons, unitLabel, slotLabel, superviseMoveWarnings,
 } from "../utils/moveResolver";
 import { slotDisplayNumber } from "../utils/shiftSlots";
-import { pairSideGroups, pairAllGroups, pairCardKey } from "../utils/pairGroups";
+import { pairSideGroups, pairAllGroups } from "../utils/pairGroups";
+import { buildTeacherStreams, supervisionRows, findSupervisionGaps } from "../utils/homeroom";
 import MoveResolveModal from "../components/MoveResolveModal";
 import SaveScheduleModal from "../components/SaveScheduleModal";
 import TeacherGrid from "../components/TeacherGrid";
@@ -436,6 +437,8 @@ export default function SchedulePage({
     const warnings = [
       ...softWarnings(ctx, src.unit, day),
       ...(res.mode === "swap" && partner ? softWarnings(ctx, partner, src.day) : []),
+      // Ko'chirish 1–4 sinfda bolani ustozsiz qoldirmaydimi?
+      ...(res.ok ? superviseMoveWarnings(ctx, res.actions) : []),
     ];
 
     if (res.ok && !lockedTouched && !warnings.length) {
@@ -478,11 +481,23 @@ export default function SchedulePage({
     const cell = schedule?.[day]?.[slotId] || [];
     const entries = collectCardEntries(cell, card);
     const next = { ...schedule, [day]: { ...(schedule?.[day] || {}) } };
-    next[day][slotId] = cell.map((l) =>
-      entries.includes(l) ? { ...l, locked: value, manual: value ? true : l.manual } : l
-    );
+    next[day][slotId] = cell.map((l) => (entries.includes(l) ? setLock(l, value) : l));
     setSchedule(next);
     toast?.(value ? "Dars qulflandi 🔒" : "Qulf ochildi 🔓", "success");
+  }
+
+  // Qulflangan dars zichlash va avtomatik to‘ldirishdan ham himoyalanishi kerak —
+  // buni `manual` bayrog‘i beradi. Lekin qulf OCHILGANDA o‘sha bayroq qolib ketsa,
+  // dars boshqa qimirlamay qolardi (zichlash ham, `fillRemaining` ham manual darsga
+  // tegmaydi). Shuning uchun qulf uchun qo‘yilgan `manual` alohida belgilanadi
+  // (`lockManual`) va qulf ochilganda qaytarib olinadi.
+  function setLock(l, value) {
+    if (value) {
+      if (l.manual) return { ...l, locked: true };
+      return { ...l, locked: true, manual: true, lockManual: true };
+    }
+    const { lockManual, ...rest } = l;
+    return lockManual ? { ...rest, locked: false, manual: false } : { ...rest, locked: false };
   }
 
   function lockedCount() {
@@ -500,7 +515,7 @@ export default function SchedulePage({
       next[day] = {};
       sortedTimeslots.forEach((ts) => {
         next[day][ts.id] = (schedule?.[day]?.[ts.id] || []).map((l) =>
-          l.locked ? { ...l, locked: false } : l
+          l.locked ? setLock(l, false) : l
         );
       });
     });
@@ -1121,69 +1136,14 @@ export default function SchedulePage({
   // hech qanday algoritm bilan to'liq chiqmaydi — bu ma'lumotdagi ziddiyat.
   // Parallel (daraja guruhi) va «Parallel sinflar» darslari BIR MARTA sanaladi:
   // ular bir vaqtda bir nechta sinfga o'tiladi.
+  // Hisoblash mantiqi [homeroom.js](../utils/homeroom.js) dagi
+  // `buildTeacherStreams` da yashaydi — u nazorat qoidasida ham ishlatiladi,
+  // shuning uchun ikki joyda takrorlanmasin (ajralib ketsa soat ikkilanadi).
   function computeTeacherLoadRows() {
-    const need = new Map();   // teacherId -> Map(dars oqimi -> soat)
-    const rel = new Map();    // teacherId -> { classes:Set, subjects:Set }
-    const touch = (tid) => {
-      let r = rel.get(tid);
-      if (!r) { r = { classes: new Set(), subjects: new Set() }; rel.set(tid, r); }
-      return r;
-    };
-    const add = (tid, key, hours, classId, subjectId) => {
-      const h = Number(hours || 0);
-      if (!tid || h <= 0) return;
-      const m = need.get(tid) || new Map();
-      m.set(key, Math.max(m.get(key) || 0, h));
-      need.set(tid, m);
-      const r = touch(tid);
-      if (classId) r.classes.add(classId);
-      if (subjectId) r.subjects.add(subjectId);
-    };
-
-    classes.forEach((cls) => {
-      (classSubjects?.[cls.id] || []).forEach((a, idx) => {
-        const h = Number(a.weeklyHours || 0);
-        const lg = String(a.levelGroupKey || "").trim();
-        const gk = String(a.groupKey || "").trim();
-        // Haqiqiy bo'linish: 1- va 2-guruhga TURLI ustoz. Bir xil ustoz
-        // qo'yilgan bo'lsa generator buni oddiy dars deb joylaydi.
-        const realSplit = Boolean(a.splitEnabled && a.teacherId2 && a.teacherId2 !== a.teacherId);
-        if (a.levelGroupEnabled && a.levelGroups?.length) {
-          // Daraja guruhlari: bir xil KALITLI sinflar birga, AYNI SOATDA
-          // o'qiydi (generator ularni bitta so'rovga qo'shadi). Shuning uchun
-          // kalitga guruh INDEKSI emas, USTOZ id'si kiradi — guruhlar tartibi
-          // sinflarda har xil bo'lsa ham soat ikkilanmaydi. Kalit bo'sh bo'lsa
-          // sinflar birga o'qimaydi: kalit sinfning O'ZIGA xos bo'ladi.
-          const base = lg ? `LG|${lg}|${a.subjectId}` : `LGC|${cls.id}|${idx}`;
-          a.levelGroups.forEach((g) => add(g.teacherId, `${base}|${g.teacherId}`, h, cls.id, a.subjectId));
-        } else if (a.pairEnabled) {
-          // Bir vaqtda bir nechta fan: kartadagi guruhlar AYNI SOATDA o'tadi va
-          // parallel sinflar bitta kartani baham ko'radi — har ustoz kartada
-          // BIR MARTA sanaladi (`add()` bir xil kalitda max oladi).
-          const card = pairCardKey(a, cls.id);
-          pairAllGroups(a).forEach((g) => add(g.teacherId, `${card}|${g.teacherId}`, h, cls.id, g.subjectId));
-        } else if (gk && !realSplit) {
-          // 🔁 PARALLEL DARS (`groupKey`): bir nechta sinf AYNI SOATDA, bitta
-          // ustozdan o'qiydi — generator ularni BITTA so'rovga birlashtiradi
-          // (scheduleGenerator `groupMap`, kalit: fan + ustoz + xona + guruh).
-          // Demak ustoz soati ham BIR MARTA sanalishi kerak; aks holda 2
-          // soatlik dars 5 sinfda 10 soat bo'lib ko'rinadi va «smenasiga
-          // sig'maydi» degan yolg'on ogohlantirish chiqadi.
-          add(a.teacherId, `G|${a.subjectId}|${a.teacherId}|${a.roomId || ""}|${gk}`, h, cls.id, a.subjectId);
-        } else {
-          add(a.teacherId, `C|${cls.id}|${idx}`, h, cls.id, a.subjectId);
-          if (realSplit) add(a.teacherId2, `C2|${cls.id}|${idx}`, h, cls.id, a.subjectId);
-        }
-        if (a.swapEnabled && a.swapTeacherId) add(a.swapTeacherId, `SW|${cls.id}|${idx}`, h, cls.id, a.swapSubjectId);
-        if (a.weekAltEnabled && a.weekAltTeacherId) add(a.weekAltTeacherId, `WA|${cls.id}|${idx}`, Number(a.weekAltHours || 1), cls.id, a.weekAltSubjectId);
-      });
-    });
-
     const rows = [];
-    need.forEach((m, tid) => {
+    buildTeacherStreams(classes, classSubjects).forEach((info, tid) => {
       const t = teacherMap.get(tid);
-      const info = rel.get(tid) || { classes: new Set(), subjects: new Set() };
-      const hours = [...m.values()].reduce((s, x) => s + x, 0);
+      const hours = info.total;
       const off = new Set(Array.isArray(t?.offDays) ? t.offDays : []);
       const bs = t?.blockedSlots && typeof t.blockedSlots === "object" ? t.blockedSlots : {};
       let avail = 0;
@@ -1193,7 +1153,7 @@ export default function SchedulePage({
         sortedTimeslots.forEach((ts) => {
           if (!isTeachingSlot(ts) || bl.has(ts.id)) return;
           // Ustoz shu soatda kamida bitta o'z sinfiga dars bera oladimi?
-          const ok = [...info.classes].some((cid) => {
+          const ok = [...info.classIds].some((cid) => {
             const c = classes.find((x) => x.id === cid);
             if (Array.isArray(c?.offDays) && c.offDays.includes(day)) return false;
             return slotAllowsClass(ts, cid) && !classHasLunchAt(ts, cid, lunchGroups, day);
@@ -1208,8 +1168,8 @@ export default function SchedulePage({
         hours,
         avail,
         max,
-        classNames: [...info.classes].map((cid) => classes.find((c) => c.id === cid)?.name).filter(Boolean),
-        subjectIds: info.subjects,
+        classNames: [...info.classIds].map((cid) => classes.find((c) => c.id === cid)?.name).filter(Boolean),
+        subjectIds: info.subjectIds,
         overSlots: hours > avail,
         overLimit: max > 0 && hours > max,
       });
@@ -1252,9 +1212,48 @@ export default function SchedulePage({
       });
   }
 
+  // ——— NAZORAT SIG'IMI (1–4 sinf) ———
+  // «Rahbar boshqa sinfga kirib ketganda bu sinfda boshqa ustozning darsi
+  // tursin» qoidasi JISMONAN bajarilishi uchun:
+  //     rahbarning tashqi soati  ≤  sinfdagi begona ustoz soati
+  // Chap tomon katta bo'lsa hech qanday algoritm yordam bera olmaydi —
+  // o'rniga qo'yadigan dars shunchaki YO'Q. Buni oldindan aytish kerak,
+  // aks holda foydalanuvchi sababini bilmay generatsiyani qayta-qayta bosadi.
+  const superviseCache = useMemo(
+    () => supervisionRows({ classes, classSubjects, timeslots: sortedTimeslots, lunchGroups }),
+    [classes, classSubjects, sortedTimeslots, lunchGroups],
+  );
+
+  function supervisionCapacityWarnings() {
+    // Rahbarning tashqi soati sinfdagi begona ustoz soatidan ko'p bo'lsa,
+    // ortiqcha soatlar faqat sinf kunini ERTA TUGATISH bilan qoplanadi.
+    // Bu imkonsiz emas, lekin jadvalni sezilarli toraytiradi — shuning
+    // uchun ogohlantiramiz, taqiqlamaymiz.
+    return superviseCache
+      .filter((r) => r.riskHours > 0)
+      .sort((a, b) => b.riskHours - a.riskHours)
+      .slice(0, 5)
+      .map((r) => {
+        const name = getName(teacherMap, r.teacherId);
+        const where = r.outClassIds
+          .map((cid) => classes.find((c) => c.id === cid)?.name)
+          .filter(Boolean).slice(0, 5).join(", ");
+        return `🧒 ${r.className}: sinf rahbari (${name}${r.auto ? ", avtomatik aniqlandi" : ""}) boshqa sinflarda ${r.outHours} soat dars beradi${where ? ` (${where})` : ""}, lekin ${r.className} da boshqa ustoz kiradigan fan atigi ${r.coverHours} soat. Qolgan ${r.riskHours} soatda ${r.className} ning darsi ALLAQACHON tugagan bo'lishi kerak, aks holda bolalar ustozsiz qoladi. Erkinroq jadval uchun ${r.className} ga yana bir fan ustozini biriktiring yoki rahbarning tashqi soatini kamaytiring.`;
+      });
+  }
+
+  // Tayyor jadvaldagi HAQIQIY buzilishlar (qo'lda ko'chirishdan keyin ham
+  // qayta hisoblanadi — shuning uchun `schedule` bog'liqliklar ichida)
+  const superviseGaps = useMemo(
+    () => findSupervisionGaps({
+      classes, classSubjects, teachers, timeslots: sortedTimeslots, lunchGroups, schedule,
+    }),
+    [classes, classSubjects, teachers, sortedTimeslots, lunchGroups, schedule],
+  );
+
   function capacityWarnings(scheduleComplete = false) {
     // Avval ustoz sig'imi: bu "soat tushmadi"ning eng ko'p uchraydigan sababi
-    const warns = [...teacherCapacityWarnings(scheduleComplete)];
+    const warns = [...teacherCapacityWarnings(scheduleComplete), ...supervisionCapacityWarnings()];
     // Sinf sig'imi ham BASHORAT — jadval to'liq chiqqan bo'lsa, u rad etilgan.
     if (!scheduleComplete) {
       classes.forEach((cls) => {
@@ -2080,7 +2079,7 @@ export default function SchedulePage({
             // ular amalda rad etilgan va faqat chalg'itadi.
             const complete = anyLessons && totalMissing === 0;
             const caps = capacityWarnings(complete);
-            if (!anyLessons && !gm.length && !caps.length) return null;
+            if (!anyLessons && !gm.length && !caps.length && !superviseGaps.length) return null;
             return (
               <>
                 {/* 1) HAQIQATAN tushmagan soat — «joylashmadi» faqat shu yerda */}
@@ -2120,6 +2119,46 @@ export default function SchedulePage({
                     ✅ Barcha fan soatlari to'liq joylashtirildi (100%).
                   </div>
                 )}
+
+                {/* 2b) BOLA NAZORATSIZ QOLGAN SOATLAR (1–4 sinf)
+                    Sinf katagi bo'sh, lekin kun tugamagan va aynan o'sha
+                    soatda sinf rahbari boshqa sinfda dars bermoqda. */}
+                {superviseGaps.length > 0 && (() => {
+                  const byClass = new Map();
+                  superviseGaps.forEach((g) => {
+                    const key = `${g.classId}|${g.teacherId}`;
+                    let e = byClass.get(key);
+                    if (!e) byClass.set(key, (e = { className: g.className, teacherName: g.teacherName, items: [] }));
+                    e.items.push(g);
+                  });
+                  return (
+                    <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 12, padding: 14, marginBottom: 16 }}>
+                      <div style={{ fontWeight: 800, color: "#991b1b", marginBottom: 4 }}>
+                        🧒 {superviseGaps.length} soat bola nazoratsiz qoladi
+                      </div>
+                      <div style={{ fontSize: 12.5, color: "#b91c1c", marginBottom: 8 }}>
+                        Sinf rahbari boshqa sinfda dars berayotgan paytda bu sinfning katagi bo'sh qolgan.
+                        O'sha katakka boshqa ustozning darsini ko'chiring yoki <b>＋</b> orqali qo'shing.
+                      </div>
+                      {[...byClass.values()].slice(0, 8).map((e, i) => (
+                        <div key={i} style={{ background: "#fff", border: "1px solid #fecaca", borderRadius: 10, padding: 10, marginBottom: 6 }}>
+                          <div style={{ fontWeight: 700, color: "#991b1b", fontSize: 13.5 }}>
+                            {e.className} · rahbar: {e.teacherName || "—"}
+                          </div>
+                          <div style={{ fontSize: 12.5, color: "#7f1d1d", marginTop: 4, display: "flex", flexWrap: "wrap", gap: 6 }}>
+                            {e.items.slice(0, 12).map((g, k) => (
+                              <span key={k} style={{ background: "#fee2e2", borderRadius: 6, padding: "2px 6px" }}>
+                                {g.day}, {g.lessonNumber}-dars
+                                {g.busyIn.length ? ` → ${g.busyIn.join(", ")}` : ""}
+                              </span>
+                            ))}
+                            {e.items.length > 12 && <span>… yana {e.items.length - 12} ta</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
 
                 {/* 3) Sozlama ogohlantirishlari — ALOHIDA quti, tushmagan soatdan mustaqil */}
                 {caps.length > 0 && (
