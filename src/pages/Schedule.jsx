@@ -10,7 +10,7 @@ import {
   findAutoPartner, onlyBusyReasons, unitLabel, slotLabel, superviseMoveWarnings,
 } from "../utils/moveResolver";
 import { slotDisplayNumber } from "../utils/shiftSlots";
-import { pairSideGroups, pairAllGroups } from "../utils/pairGroups";
+import { pairSideGroups, pairAllGroups, pairCardKey } from "../utils/pairGroups";
 import { buildTeacherStreams, supervisionRows, findSupervisionGaps } from "../utils/homeroom";
 import MoveResolveModal from "../components/MoveResolveModal";
 import SaveScheduleModal from "../components/SaveScheduleModal";
@@ -1269,6 +1269,105 @@ export default function SchedulePage({
   );
   const teacherLoadRows = () => teacherLoadCache;
 
+  // ——— XONA SIG'IMI ———
+  // Xona ham ustoz kabi bir vaqtda faqat BITTA darsni sig'diradi. Bitta
+  // xonaga biriktirilgan haftalik soat, o'sha xonani ishlatadigan sinflarning
+  // bo'sh slotlaridan ko'p bo'lsa — ortiqcha soat HECH QANDAY jadvalga
+  // tushmaydi. Bu ma'lumotdagi ziddiyat, algoritm uni yecha olmaydi.
+  //
+  // Dedup ustozdagi bilan AYNI qoida bo'yicha (CLAUDE.md): birga o'qiydigan
+  // sinflar bitta xonani BIR MARTA band qiladi.
+  //   🔁 parallel dars → groupKey, daraja guruhlari → levelGroupKey + xona,
+  //   parallel sinflar → pairCardKey + xona.
+  function computeRoomLoadRows() {
+    const streams = new Map();   // roomId → Map(oqim kaliti → { hours, classIds })
+    const add = (rid, key, hours, classId) => {
+      const h = Number(hours || 0);
+      if (!rid || h <= 0) return;
+      let e = streams.get(rid);
+      if (!e) streams.set(rid, (e = new Map()));
+      let st = e.get(key);
+      if (!st) e.set(key, (st = { hours: 0, classIds: new Set() }));
+      // Ayni oqim bir necha sinfdan kelsa — soat eng kattasi bo'yicha, bir marta
+      st.hours = Math.max(st.hours, h);
+      if (classId) st.classIds.add(classId);
+    };
+
+    classes.forEach((cls) => {
+      (classSubjects?.[cls.id] || []).forEach((a, idx) => {
+        if (!a) return;
+        const h = Number(a.weeklyHours || 0);
+        const lg = String(a.levelGroupKey || "").trim();
+        const gk = String(a.groupKey || "").trim();
+        const realSplit = Boolean(a.splitEnabled && a.teacherId2 && a.teacherId2 !== a.teacherId);
+
+        if (a.levelGroupEnabled && a.levelGroups?.length) {
+          const base = lg ? `LG|${lg}|${a.subjectId}` : `LGC|${cls.id}|${idx}`;
+          a.levelGroups.forEach((g) => add(g?.roomId, `${base}|${g?.roomId}`, h, cls.id));
+        } else if (a.pairEnabled) {
+          const card = pairCardKey(a, cls.id);
+          pairAllGroups(a).forEach((g) => add(g.roomId, `${card}|${g.roomId}`, h, cls.id));
+        } else if (gk && !realSplit) {
+          add(a.roomId, `G|${a.subjectId}|${a.roomId}|${gk}`, h, cls.id);
+        } else {
+          add(a.roomId, `C|${cls.id}|${idx}`, h, cls.id);
+          if (realSplit) add(a.roomId2, `C2|${cls.id}|${idx}`, h, cls.id);
+        }
+        // Fan almashinuvi qo'shimcha soat egallaydi — xona esa o'sha xona
+        if (a.swapEnabled && a.swapSubjectId) add(a.roomId, `SW|${cls.id}|${idx}`, h, cls.id);
+      });
+    });
+
+    const rows = [];
+    streams.forEach((e, rid) => {
+      let hours = 0;
+      const classIds = new Set();
+      e.forEach((st) => { hours += st.hours; st.classIds.forEach((c) => classIds.add(c)); });
+      // Xonaning o'z dam kuni yo'q — u faqat o'zini ishlatadigan sinflar
+      // dars qilayotgan soatda band bo'la oladi.
+      let avail = 0;
+      DAYS.forEach((day) => {
+        sortedTimeslots.forEach((ts) => {
+          if (!isTeachingSlot(ts)) return;
+          const ok = [...classIds].some((cid) => {
+            const c = classes.find((x) => x.id === cid);
+            if (Array.isArray(c?.offDays) && c.offDays.includes(day)) return false;
+            return slotAllowsClass(ts, cid) && !classHasLunchAt(ts, cid, lunchGroups, day);
+          });
+          if (ok) avail += 1;
+        });
+      });
+      rows.push({
+        id: rid,
+        name: getName(roomMap, rid),
+        hours,
+        avail,
+        classNames: [...classIds].map((cid) => classes.find((c) => c.id === cid)?.name).filter(Boolean),
+        overSlots: hours > avail,
+      });
+    });
+    return rows.sort((a, b) => (b.hours - b.avail) - (a.hours - a.avail));
+  }
+
+  const roomLoadCache = useMemo(
+    () => computeRoomLoadRows(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [classes, classSubjects, rooms, sortedTimeslots, lunchGroups],
+  );
+
+  // Xona sig'imi ogohlantirishlari. Ustoznikidagi kabi bu ham BASHORAT:
+  // jadval 100% chiqqan bo'lsa bashorat amalda rad etilgan — ko'rsatilmaydi.
+  function roomCapacityWarnings(scheduleComplete = false) {
+    if (scheduleComplete) return [];
+    return roomLoadCache
+      .filter((r) => r.overSlots)
+      .slice(0, 6)
+      .map((r) => {
+        const where = r.classNames.slice(0, 5).join(", ") + (r.classNames.length > 5 ? "…" : "");
+        return `🚪 ${r.name}: bu xonaga haftada ${r.hours} soat dars biriktirilgan, lekin xonada atigi ${r.avail} ta dars soati bor — ${r.hours - r.avail} soat HECH QANDAY jadvalga sig'maydi (${where}). Bir xona bir vaqtda bitta darsni sig'diradi: shu fanlarning bir qismini boshqa (bo'sh) xonaga ko'chiring.`;
+      });
+  }
+
   // Deyarli har soati band ustozlar — kun o'rtasidagi oynaning asosiy sababi:
   // bunday ustozning darsini boshqa soatga surib bo'lmaydi, chunki u soatda
   // boshqa sinfda dars berayotgan bo'ladi.
@@ -1337,7 +1436,11 @@ export default function SchedulePage({
 
   function capacityWarnings(scheduleComplete = false) {
     // Avval ustoz sig'imi: bu "soat tushmadi"ning eng ko'p uchraydigan sababi
-    const warns = [...teacherCapacityWarnings(scheduleComplete), ...supervisionCapacityWarnings()];
+    const warns = [
+      ...teacherCapacityWarnings(scheduleComplete),
+      ...roomCapacityWarnings(scheduleComplete),
+      ...supervisionCapacityWarnings(),
+    ];
     // Sinf sig'imi ham BASHORAT — jadval to'liq chiqqan bo'lsa, u rad etilgan.
     if (!scheduleComplete) {
       classes.forEach((cls) => {

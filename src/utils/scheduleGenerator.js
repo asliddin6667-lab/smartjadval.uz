@@ -681,6 +681,50 @@ function attemptSchedule(
       }
     });
   });
+  // ——— BLOK OBED KATAGIDAN OSHIB O'TADI (lunchGroups) ———
+  // Maktabda obed alohida vaqt bandi bo'lmasligi mumkin: sinf oddiy DARS
+  // soatida ovqatlanadi (`lunchGroups`). Bunday katak sinf setkasida BAND
+  // turadi — «4-dars → obed → 6-dars» sinf uchun oyna EMAS, chop etilgan
+  // jadvalda dars qatorma-qator ko'rinadi va ustoz obeddan keyin o'sha
+  // sinfda davom etadi. Shuning uchun blok bunday katakni O'TKAZIB YUBORADI.
+  //
+  // Sakrash faqat blokdagi HAMMA sinf o'sha soatda ovqatlanganda mumkin:
+  // bir sinfda obed, boshqasida yo'q bo'lsa — ikkinchisida haqiqiy oyna
+  // paydo bo'lardi. Sinf umuman maktabda bo'lmagan katak (`slotClassBlock` —
+  // boshqa smena) ham sakralmaydi: u haqiqiy uzilish.
+  //
+  // `blockOffs()` blok bo'laklarining `i` ga nisbatan ofsetlarini qaytaradi.
+  // Sakrash kerak bo'lmasa — `null`, ya'ni oddiy `i, i+1, …` (issiq yo'l).
+  // Bog'lab bo'lmasa — `undefined` (bu joyga blok tushmaydi).
+  const lunchInGrid = lunchGrid.some((v) => v === 1);
+  function lunchSkippable(req, d, k) {
+    for (const ci of req.cIdxs) {
+      const off = ci * DT + d * T + k;
+      if (!lunchGrid[off] || slotClassBlock[off]) return false;
+    }
+    return true;
+  }
+  function blockOffs(req, d, i) {
+    const bs = req.blockSize;
+    if (bs < 2 || !lunchInGrid) return null;
+    let k = i;
+    let jumped = false;
+    const offs = [0];
+    for (let o = 1; o < bs; o++) {
+      let next = k + 1;
+      while (next < T && lunchSkippable(req, d, next)) { next += 1; jumped = true; }
+      if (next >= T) return undefined;
+      // Zanjirning HAR BO'G'INI bog'lanadigan bo'lsin (tanaffus juda uzun
+      // bo'lsa — masalan smena almashinuvi — blok cho'zilib ketmaydi)
+      for (let x = k; x < next; x++) if (!linkOk(x)) return undefined;
+      offs.push(next - i);
+      k = next;
+    }
+    return jumped ? offs : null;
+  }
+  // Blok bo'lagining slot indeksi (`offs` — blockOffs natijasi)
+  const slotAt = (offs, i, o) => i + (offs ? offs[o] : o);
+
   // ——— ASOSIY FAN uchun soat o'rni (rank) ———
   const slotRank = new Int16Array(C * DT).fill(-1);
   for (let ci = 0; ci < C; ci++) {
@@ -1508,7 +1552,10 @@ function attemptSchedule(
     if (dayRearrange) return true;
     const relax = Math.max(req.balRelax || 0, solveSlack, balEmergency ? 1 : 0);
     if (relax >= 3) return true;
-    const last = i + req.blockSize - 1;
+    const qOffs = blockOffs(req, d, i);
+    if (qOffs === undefined) return false;
+    const last = slotAt(qOffs, i, req.blockSize - 1);
+    if (last >= T) return false;
     for (const ci of req.cIdxs) {
       const lim = dayQuota[ci * D + d] + relax;
       if (lim <= 0) return false;
@@ -1554,14 +1601,18 @@ function attemptSchedule(
       for (const ci of req.cIdxs) if (classOffMask[ci * D + d]) { dayOk = false; break; }
       if (dayOk) for (const ti of req.tIdxs) if (teacherOffMask[ti * D + d]) { dayOk = false; break; }
       if (!dayOk) continue;
-      for (let i = 0; i + req.blockSize <= T; i++) {
+      for (let i = 0; i < T; i++) {
+        const offs = blockOffs(req, d, i);
+        if (offs === undefined) continue;
+        if (!offs && i + req.blockSize > T) continue;
         let ok = true;
         for (let o = 0; o < req.blockSize; o++) {
-          if (o > 0 && !linkOk(i + o - 1)) { ok = false; break; }
-          for (const ci of req.cIdxs) { if (lunchGrid[ci * DT + d * T + i + o] || slotClassBlock[ci * DT + d * T + i + o]) { ok = false; break; } }
+          const k = slotAt(offs, i, o);
+          if (o > 0 && !offs && !linkOk(k - 1)) { ok = false; break; }
+          for (const ci of req.cIdxs) { if (lunchGrid[ci * DT + d * T + k] || slotClassBlock[ci * DT + d * T + k]) { ok = false; break; } }
           if (!ok) break;
           // Ustoz setkasida qulflangan soat — bu katak umuman ishlatilmaydi
-          for (const ti of req.tIdxs) { if (teacherBlockGrid[ti * DT + d * T + i + o]) { ok = false; break; } }
+          for (const ti of req.tIdxs) { if (teacherBlockGrid[ti * DT + d * T + k]) { ok = false; break; } }
           if (!ok) break;
         }
         if (ok) dom.push({ d, i });
@@ -1608,10 +1659,13 @@ function attemptSchedule(
     if (!spacedDayOk(req, d)) return false;
     if (!balanceOk(req, d)) return false;
     if (!quotaRankOk(req, d, i)) return false;
-    const base = d * T + i;
+    const fOffs = blockOffs(req, d, i);
+    if (fOffs === undefined) return false;
     for (let o = 0; o < req.blockSize; o++) {
-      const off = base + o;
-      const toff = tbOff(d, i + o);
+      const k = slotAt(fOffs, i, o);
+      if (k >= T) return false;
+      const off = d * T + k;
+      const toff = tbOff(d, k);
       for (const ci of req.cIdxs) if (classGrid[ci * DT + off]) return false;
       for (const ti of req.tIdxs) if (teacherGrid[ti * DTB + toff] || teacherBlockGrid[ti * DT + off]) return false;
       for (const rg of req.roomArrs) if (rg[toff]) return false;
@@ -1622,11 +1676,16 @@ function attemptSchedule(
   // fitsAt dan farqi: yumshoq qoidalar (kunlik me'yor, fan limiti, ora kunda)
   // tekshirilmaydi — faqat sinf/ustoz/xona bandligi va qulflangan soat.
   function rawFree(req, d, i) {
-    if (i < 0 || i + req.blockSize > T) return false;
+    if (i < 0) return false;
+    const rOffs = blockOffs(req, d, i);
+    if (rOffs === undefined) return false;
+    if (!rOffs && i + req.blockSize > T) return false;
     for (let o = 0; o < req.blockSize; o++) {
-      if (o > 0 && !linkOk(i + o - 1)) return false;
-      const off = d * T + i + o;
-      const toff = tbOff(d, i + o);
+      const k = slotAt(rOffs, i, o);
+      if (k >= T) return false;
+      if (o > 0 && !rOffs && !linkOk(k - 1)) return false;
+      const off = d * T + k;
+      const toff = tbOff(d, k);
       for (const ci of req.cIdxs) {
         if (lunchGrid[ci * DT + off] || slotClassBlock[ci * DT + off] || classGrid[ci * DT + off]) return false;
       }
@@ -1762,9 +1821,12 @@ function attemptSchedule(
     const day = DAYS[d];
     const slots = [];
     const entries = [];
-    const base = d * T + i;
+    // Blok obed katagidan oshib o'tgan bo'lsa, bo'laklar ketma-ket EMAS —
+    // ofsetlar joylashtirish yozuvida saqlanadi (unplace ham shuni o'qiydi).
+    const pOffs = blockOffs(req, d, i);
     for (let o = 0; o < req.blockSize; o++) {
-      const ts = teachingTs[i + o];
+      const kk = slotAt(pOffs, i, o);
+      const ts = teachingTs[kk];
       slots.push(ts);
       const cell = schedule[day][ts.id];
       const es = buildEntries(req, o);
@@ -1773,15 +1835,15 @@ function attemptSchedule(
       if (req.fixedDay !== undefined) es.forEach((e) => { e.fixedMonday = true; });
       es.forEach((e) => cell.push(e));
       entries.push(...es);
-      const off = base + o;
-      const toff = tbOff(d, i + o);
+      const off = d * T + kk;
+      const toff = tbOff(d, kk);
       for (const ci of req.cIdxs) classGrid[ci * DT + off] = 1;
       for (const ti of req.tIdxs) teacherGrid[ti * DTB + toff] = 1;
       for (const rg of req.roomArrs) rg[toff] = 1;
     }
     applyCounters(req, d, +1);
     placedHours += req.blockSize;
-    const p = { req, d, day, startIdx: i, slots, entries, locked: false, active: true };
+    const p = { req, d, day, startIdx: i, offs: pOffs, slots, entries, locked: false, active: true };
     entries.forEach((e) => entryToPlacement.set(e, p));
     placements.push(p);
     req.placedRef = p;
@@ -1791,12 +1853,12 @@ function attemptSchedule(
     if (!p.active) return;
     p.active = false;
     const { req, d, day, startIdx } = p;
-    const base = d * T + startIdx;
     for (let o = 0; o < req.blockSize; o++) {
       const ts = p.slots[o];
       schedule[day][ts.id] = schedule[day][ts.id].filter((e) => !p.entries.includes(e));
-      const off = base + o;
-      const toff = tbOff(d, startIdx + o);
+      const kk = slotAt(p.offs, startIdx, o);
+      const off = d * T + kk;
+      const toff = tbOff(d, kk);
       for (const ci of req.cIdxs) classGrid[ci * DT + off] = 0;
       for (const ti of req.tIdxs) teacherGrid[ti * DTB + toff] = 0;
       for (const rg of req.roomArrs) rg[toff] = 0;
@@ -1847,8 +1909,9 @@ function attemptSchedule(
   function adjacentSame(d, i, blockSize, req) {
     const day = DAYS[d];
     const checks = [];
+    const aOffs = blockOffs(req, d, i);
     const before = i - 1;
-    const after = i + blockSize;
+    const after = slotAt(aOffs, i, blockSize - 1) + 1;
     if (before >= 0 && linkOk(before)) checks.push(before);
     if (after < T && linkOk(after - 1)) checks.push(after);
     for (const k of checks) {
@@ -1863,7 +1926,7 @@ function attemptSchedule(
   }
   function forwardCheckPenalty(req, d, i) {
     let penalty = 0;
-    const bEnd = i + req.blockSize - 1;
+    const bEnd = slotAt(blockOffs(req, d, i), i, req.blockSize - 1);
     for (const other of req.affected) {
       if (other.placedRef || other.failed) continue;
       const fc = other.feasCount;
@@ -1904,11 +1967,12 @@ function attemptSchedule(
     if (!superviseOn) return 0;
     let pen = 0;
     const bs = req.blockSize;
+    const spOffs = blockOffs(req, d, i);
     if (req.outCIdxs) {
       for (const ci of req.outCIdxs) {
         const quota = dayQuota[ci * D + d];
         for (let o = 0; o < bs; o++) {
-          const off = ci * DT + d * T + i + o;
+          const off = ci * DT + d * T + slotAt(spOffs, i, o);
           const r = slotRank[off];
           if (r < 0 || r >= quota) continue;    // sinf maktabda emas
           pen += classGrid[off] ? -SUPERVISE_W : SUPERVISE_W;
@@ -1920,7 +1984,7 @@ function attemptSchedule(
         const ti = homeroomTIdx[ci];
         if (ti < 0) continue;
         for (let o = 0; o < bs; o++) {
-          if (teacherGrid[ti * DTB + tbOff(d, i + o)]) pen -= SUPERVISE_W;
+          if (teacherGrid[ti * DTB + tbOff(d, slotAt(spOffs, i, o))]) pen -= SUPERVISE_W;
         }
       }
     }
@@ -1931,10 +1995,18 @@ function attemptSchedule(
     const adjacencyPenalty = blockSize === 1 && adjacentSame(d, i, blockSize, req) ? 1500 : 0;
     // Blok obed ustidan o'tsa — yumshoq jarima: haqiqiy ketma-ket juftlik
     // afzal, obedli variant faqat boshqa iloji qolmaganda tanlanadi.
+    // Blok obed katagidan yoki uzun tanaffusdan oshib o'tsa — yumshoq jarima:
+    // haqiqiy ketma-ket juftlik afzal, oshirish faqat iloji qolmaganda.
+    const scOffs = blockOffs(req, d, i);
     let bridgePenalty = 0;
-    for (let o = 1; o < blockSize; o++) if (linkBridged(i + o - 1)) bridgePenalty += BRIDGE_W;
+    for (let o = 1; o < blockSize; o++) {
+      const prev = slotAt(scOffs, i, o - 1);
+      const cur = slotAt(scOffs, i, o);
+      if (cur > prev + 1) { bridgePenalty += BRIDGE_W; continue; }
+      if (linkBridged(cur - 1)) bridgePenalty += BRIDGE_W;
+    }
     let compactPenalty = 0;
-    for (const ci of req.cIdxs) { for (let o = 0; o < blockSize; o++) { compactPenalty += emptyBeforeCount(d, ci, i + o) * GAP_HARD_W; } }
+    for (const ci of req.cIdxs) { for (let o = 0; o < blockSize; o++) { compactPenalty += emptyBeforeCount(d, ci, slotAt(scOffs, i, o)) * GAP_HARD_W; } }
     let repeatPenalty = 0;
     for (const ci of req.cIdxs) { repeatPenalty += classDailySubj[(ci * D + d) * S + req.sIdx] * REPEAT_HARD_W; }
     const spreadPenalty = Math.abs((d % 2) - (blockSize >= 2 ? 0 : 1));
@@ -2015,8 +2087,10 @@ function attemptSchedule(
   function collectBlockers(req, d, i, frozen, maxBlockers) {
     const day = DAYS[d];
     const blockers = new Set();
+    const cbOffs = blockOffs(req, d, i);
     for (let o = 0; o < req.blockSize; o++) {
-      const ts = teachingTs[i + o];
+      const ts = teachingTs[slotAt(cbOffs, i, o)];
+      if (!ts) break;
       const cell = schedule[day][ts.id];
       for (const l of cell) {
         const conflicts = classIdsOf(l).some((cid) => req.classIds.includes(cid)) ||
@@ -2502,10 +2576,11 @@ function attemptSchedule(
   }
 
   function markBits(req, d, i, val) {
-    const base = d * T + i;
+    const mOffs = blockOffs(req, d, i);
     for (let o = 0; o < req.blockSize; o++) {
-      const off = base + o;
-      const toff = tbOff(d, i + o);
+      const kk = slotAt(mOffs, i, o);
+      const off = d * T + kk;
+      const toff = tbOff(d, kk);
       for (const ci of req.cIdxs) classGrid[ci * DT + off] = val;
       for (const ti of req.tIdxs) teacherGrid[ti * DTB + toff] = val;
       for (const rg of req.roomArrs) rg[toff] = val;
@@ -2587,18 +2662,22 @@ function attemptSchedule(
       const r = reqs[idx];
       for (const k of targets) {
         if (used.has(k)) continue;
-        if (k + r.blockSize > T) continue;
+        const sOffs = blockOffs(r, d, k);
+        if (sOffs === undefined) continue;
+        if (!sOffs && k + r.blockSize > T) continue;
         let ok = true;
         for (let o = 1; o < r.blockSize; o++) {
-          if (!tset.has(k + o) || used.has(k + o) || !linkOk(k + o - 1)) { ok = false; break; }
+          const kk = slotAt(sOffs, k, o);
+          if (kk >= T || !tset.has(kk) || used.has(kk)) { ok = false; break; }
+          if (!sOffs && !linkOk(kk - 1)) { ok = false; break; }
         }
         if (!ok) continue;
         if (!fitsAt(r, d, k)) continue;
         place(r, d, k);
-        for (let o = 0; o < r.blockSize; o++) used.add(k + o);
+        for (let o = 0; o < r.blockSize; o++) used.add(slotAt(sOffs, k, o));
         if (solve(idx + 1)) return true;
         unplace(r.placedRef);
-        for (let o = 0; o < r.blockSize; o++) used.delete(k + o);
+        for (let o = 0; o < r.blockSize; o++) used.delete(slotAt(sOffs, k, o));
       }
       return false;
     };
@@ -2729,8 +2808,11 @@ function attemptSchedule(
   function singleBlockerAt(req, d, i) {
     const day = DAYS[d];
     const set = new Set();
+    const sbOffs = blockOffs(req, d, i);
     for (let o = 0; o < req.blockSize; o++) {
-      const cell = schedule[day][teachingTs[i + o].id];
+      const sTs = teachingTs[slotAt(sbOffs, i, o)];
+      if (!sTs) break;
+      const cell = schedule[day][sTs.id];
       for (const l of cell) {
         const conflict = classIdsOf(l).some((cid) => req.classIds.includes(cid)) ||
           (l.teacherId && req.tids.includes(l.teacherId)) ||
@@ -3743,7 +3825,7 @@ function attemptSchedule(
         if (!p.active) continue;
         let clash = false;
         for (let o = 0; o < p.req.blockSize && !clash; o++) {
-          const off = p.d * T + p.startIdx + o;
+          const off = p.d * T + slotAt(p.offs, p.startIdx, o);
           for (const ti of p.req.tIdxs) { if (occ.has("T" + ti + ":" + off)) { clash = true; break; } }
           if (clash) break;
           for (const ci of p.req.cIdxs) { if (occ.has("C" + ci + ":" + off)) { clash = true; break; } }
@@ -3752,7 +3834,7 @@ function attemptSchedule(
         }
         if (clash) { bad.push(p); continue; }
         for (let o = 0; o < p.req.blockSize; o++) {
-          const off = p.d * T + p.startIdx + o;
+          const off = p.d * T + slotAt(p.offs, p.startIdx, o);
           for (const ti of p.req.tIdxs) occ.set("T" + ti + ":" + off, p);
           for (const ci of p.req.cIdxs) occ.set("C" + ci + ":" + off, p);
           for (const rid of p.req.rids) occ.set("R" + rid + ":" + off, p);
@@ -4004,6 +4086,19 @@ export function compactSchedule(
     });
   });
 
+  // FAQAT obed kataklari: blok ular ustidan oshib o'tishi mumkin, smena
+  // chegarasi va dam kuni ustidan esa — YO'Q (u haqiqiy uzilish).
+  const lunchOnly = new Uint8Array(C * DT);
+  classes.forEach((c, ci) => {
+    DAYS.forEach((day, d) => {
+      teachingTs.forEach((ts, i) => {
+        if (classHasLunchAt(ts, c.id, lunchGroups, day)) lunchOnly[ci * DT + d * T + i] = 1;
+      });
+    });
+  });
+  // Birlik bo'laklarining `i` ga nisbatan o'rinlari (obed sakralgan bo'lsa).
+  const uSlotAt = (u, o) => u.i + (u.offs ? u.offs[o] : o);
+
   const slotRank = new Int16Array(C * DT).fill(-1);
   for (let ci = 0; ci < C; ci++) {
     for (let d = 0; d < D; d++) {
@@ -4070,20 +4165,41 @@ export function compactSchedule(
         // 0, 1, 2, … qismlari ketma-ket kataklardan yig'iladi. Uzunlik
         // qat'iy emas — 4 soatlik blok ham shu yerda butun qoladi.
         const parts = [g];
+        const offs = [0];
         let len = 1;
+        let jumped = false;
         if (g.bi === 0) {
-          while (i + len < T && linkOk(i + len - 1)) {
+          // Blokning bo'lagi obed katagining NARIGI tomonida turishi mumkin
+          // («4-dars → obed → 6-dars»). Bunday katak o'tkazib yuboriladi,
+          // aks holda zichlash blokni ikkiga bo'lib yuborardi.
+          const gcIdxs = [...new Set(g.entries.flatMap((l) => classIdsOf(l)))]
+            .map((cid) => cIdxOf.get(cid)).filter((x) => x !== undefined);
+          const lunchHere = (k) => gcIdxs.length > 0
+            && gcIdxs.every((ci) => lunchOnly[ci * DT + d * T + k]);
+          let cur = i;
+          for (;;) {
+            let nx = cur + 1;
+            while (nx < T && lunchHere(nx)) { nx += 1; jumped = true; }
+            if (nx >= T) break;
+            let linked = true;
+            for (let x = cur; x < nx; x++) if (!linkOk(x)) { linked = false; break; }
+            if (!linked) break;
             let next = null;
             let nextKey = "";
-            for (const [k2, g2] of perDay[d][i + len]) {
+            for (const [k2, g2] of perDay[d][nx]) {
               if (g2.base === g.base && g2.bi === len) { next = g2; nextKey = k2; break; }
             }
             if (!next) break;
             parts.push(next);
-            consumed.add(`${d}|${i + len}|${nextKey}`);
+            offs.push(nx - i);
+            consumed.add(`${d}|${nx}|${nextKey}`);
             len += 1;
+            cur = nx;
           }
         }
+        // Obed ustidan o'tgan blok joyidan qo'zg'almaydi: uni ko'chirish
+        // uchun narigi tomonda ham xuddi shunday obed kerak bo'lardi.
+        const jumpOffs = jumped && parts.length === offs.length ? offs : null;
         const entries = parts.flatMap((x) => x.entries);
         const cSet = new Set();
         const tSet = new Set();
@@ -4136,7 +4252,8 @@ export function compactSchedule(
         let cap = len;
         for (const sk of subjKeys) if (sk.subjectId === subjectId) cap = Math.max(cap, sk.cap);
         units.push({
-          d, i, len, locked, entries, spaced, core, cap, subjKeys,
+          d, i, len, offs: jumpOffs, locked: locked || Boolean(jumpOffs),
+          entries, spaced, core, cap, subjKeys,
           parts: parts.map((x) => x.entries),
           cIdxs, tids: [...tSet], rids: [...rSet],
           subjectId,
@@ -4164,8 +4281,9 @@ export function compactSchedule(
   };
   const setBits = (u, d, i, val) => {
     for (let o = 0; o < u.len; o++) {
-      const off = d * T + i + o;
-      const toff = tbOff(d, i + o);
+      const k = i + (u.offs ? u.offs[o] : o);
+      const off = d * T + k;
+      const toff = tbOff(d, k);
       for (const ci of u.cIdxs) classGrid[ci * DT + off] = val;
       for (const id of u.tids) gridOf(tGrid, id)[toff] = val;
       for (const id of u.rids) gridOf(rGrid, id)[toff] = val;
@@ -4455,7 +4573,12 @@ export function compactSchedule(
   // Bo'sh katakka keyingi darsni tortib bo'lmasa (ustoz o'sha soatda boshqa
   // sinfda band), ikkala soatdagi bir-biriga bog'liq barcha darslar birgalikda
   // o'rin almashadi — boshqa sinflarda yangi oyna paydo bo'lmaydi.
-  const unitsAt = (d, k) => units.filter((u) => u.d === d && k >= u.i && k < u.i + u.len);
+  const unitsAt = (d, k) => units.filter((u) => {
+    if (u.d !== d) return false;
+    if (!u.offs) return k >= u.i && k < u.i + u.len;
+    for (let o = 0; o < u.len; o++) if (uSlotAt(u, o) === k) return true;
+    return false;
+  });
   const resOfUnit = (u) => [
     ...u.tids.map((x) => "T" + x),
     ...u.rids.map((x) => "R" + x),
@@ -4866,7 +4989,8 @@ export function compactSchedule(
   units.forEach((u) => {
     const day = DAYS[u.d];
     u.parts.forEach((entries, o) => {
-      const ts = teachingTs[u.i + o];
+      const ts = teachingTs[uSlotAt(u, o)];
+      if (!ts) return;
       entries.forEach((e) => out[day][ts.id].push(e));
     });
   });

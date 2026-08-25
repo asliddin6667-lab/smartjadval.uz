@@ -359,8 +359,22 @@ HAQIQIY ketma-ket juftlikni qidiradi, obeddan oshirishni faqat boshqa
 iloji qolmaganda tanlaydi. **Blok butunligini tekshiradigan har qanday
 yangi kod `nextConsecutive` emas, `linkOk()` dan foydalansin** — aks holda
 zichlash (`compactSchedule`) bunday blokni ikkiga bo'lib yuboradi.
-Sinf guruhi oddiy dars soatida ovqatlansa (`lunchGroups`), blok o'sha
-katakdan O'TMAYDI — u yerda setkada haqiqiy teshik paydo bo'lardi.
+**Obed alohida vaqt bandi bo'lmasa ham qoida ishlaydi.** Sinf oddiy DARS
+soatida ovqatlansa (`lunchGroups`), o'sha katak sinf setkasida BAND turadi —
+demak «4-dars → obed → 6-dars» ham oyna emas. Blok bunday katakni O'TKAZIB
+YUBORADI: `blockOffs(req, d, i)` blok bo'laklarining `i` ga nisbatan
+ofsetlarini qaytaradi (`null` — oddiy ketma-ket, `undefined` — bu joyga blok
+tushmaydi), `slotAt(offs, i, o)` esa bo'lakning slot indeksini beradi.
+Sakrash faqat blokdagi HAMMA sinf o'sha soatda ovqatlanganda mumkin: bir
+sinfda obed, boshqasida yo'q bo'lsa — ikkinchisida haqiqiy oyna paydo
+bo'lardi. Smena chegarasi (`slotClassBlock`) va dam kuni ustidan sakralmaydi.
+**Blok kataklarini bo'ylab yuradigan har qanday yangi kod `i + o` emas,
+`slotAt(blockOffs(...), i, o)` dan foydalansin** — joylashtirish yozuvida
+ofsetlar `p.offs` da saqlanadi (`place`/`unplace` shuni o'qiydi).
+`compactSchedule` da xuddi shu qoida `u.offs` / `uSlotAt(u, o)` orqali
+takrorlangan; obed ustidan o'tgan blok u yerda joyidan qo'zg'almaydi
+(`locked`), aks holda uni ko'chirish uchun narigi tomonda ham xuddi shunday
+obed kerak bo'lardi.
 
 **«4 SOAT BLOK» — FAQAT SUPERADMIN.** Aynan shu mexanizm, faqat blok
 uzunligi `QUAD_SIZE = 4`: fan bir kunda KETMA-KET 4 soat tushadi. Sozlama —
