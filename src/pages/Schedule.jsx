@@ -134,6 +134,7 @@ export default function SchedulePage({
   const [genRound, setGenRound] = useState(0);
   const [genDone, setGenDone] = useState(false);
   const [genElapsed, setGenElapsed] = useState(0);   // sekundomer (soniya)
+  const [compacting, setCompacting] = useState(false); // «Oynani yopish» ishlayapti
   const genTimerRef = useRef(null);
 
   const subjectMap = useMemo(() => new Map(subjects.map((s, i) => [s.id, { ...s, _colorIndex: i }])), [subjects]);
@@ -793,25 +794,46 @@ export default function SchedulePage({
   // ishlatiladi. MUHIM: oyna kamaysa natija QABUL QILINADI; "bir kunda bir fan"
   // limiti ikkinchi darajali mezon (ilgari u tufayli zichlash butunlay rad
   // etilar va ekranda oynali jadval qolib ketardi).
-  function compactUntilClean(startSch, minPlaced) {
+  //
+  // `opts.hard` — MAJBURIY rejim: oyna nolga tushmaguncha to'xtamaydi.
+  // Bir urinish natija bermasa ham taslim bo'lmaydi: `spin` boshqa yo'ldan
+  // yurishga majbur qiladi, shuning uchun keyingi urinish AYNAN o'sha
+  // natijani qaytarmaydi. Oddiy (hard bo'lmagan) rejim avvalgidek —
+  // birinchi yaxshilanmagan urinishda to'xtaydi, chunki u generatsiya
+  // sikli ichida chaqiriladi va vaqtni ushlab qolmasligi kerak.
+  function compactUntilClean(startSch, minPlaced, opts = {}) {
+    const hard = Boolean(opts.hard);
+    const rounds = opts.rounds ?? (hard ? 8 : 4);
+    const budgetMs = opts.budgetMs ?? 2500;
     let best = startSch;
-    for (let k = 0; k < 4; k++) {
+    let bestGaps = countGaps(best);
+    let bestOver = countOverCap(best);
+    let bestBal = countImbalance(best);
+    for (let k = 0; k < rounds; k++) {
+      // Oyna yopilgan bo'lsa qayta urinishning ma'nosi yo'q. Vaqt chegarasi
+      // zichlash dvigatelining O'ZIDA (`budgetMs`) — bu yerda soat o'qilmaydi,
+      // chunki funksiya render oqimidan ham chaqiriladi.
+      if (k > 0 && bestGaps === 0) break;
       let next;
       try {
-        next = compactSchedule(classes, timeslots, lunchGroups, best, classSubjects, teachers, subjects, rooms);
+        next = compactSchedule(
+          classes, timeslots, lunchGroups, best, classSubjects, teachers, subjects, rooms,
+          hard ? { hard: true, spin: k, budgetMs } : undefined,
+        );
       } catch {
         break;
       }
       if (!next) break;
-      const gBefore = countGaps(best);
+      if (countPlacedUnits(next) < minPlaced) break;
       const gAfter = countGaps(next);
-      const okPlaced = countPlacedUnits(next) >= minPlaced;
-      const okOver = countOverCap(next) <= countOverCap(best);
-      if (!okPlaced) break;
-      if (gAfter < gBefore || (gAfter === gBefore && okOver && countImbalance(next) < countImbalance(best))) {
+      const overAfter = countOverCap(next);
+      const balAfter = countImbalance(next);
+      if (gAfter < bestGaps || (gAfter === bestGaps && overAfter <= bestOver && balAfter < bestBal)) {
         best = next;
-        if (gAfter === 0) break;
-      } else {
+        bestGaps = gAfter;
+        bestOver = overAfter;
+        bestBal = balAfter;
+      } else if (!hard) {
         break;
       }
     }
@@ -903,7 +925,12 @@ export default function SchedulePage({
         const b = fast ? fastB : deepB;
         // Tezkor bosqichda strategiyalar navbatma-navbat (xilma-xillik),
         // chuqur bosqichda esa g'olib strategiya boshqa seed bilan qayta uriniladi.
-        const strategy = fast ? r % 6 : bestStrategy;
+        // MUHIM: har uchinchi chuqur urinishda BOSHQA strategiya sinaladi —
+        // aks holda qidiruv bitta "cho'qqi"da qotib qoladi va 100% chiqmagan
+        // ma'lumotda urinishlar bir xil natijani takrorlab yuraveradi.
+        const strategy = fast
+          ? r % 6
+          : (r % 3 === 2 ? (bestStrategy + 1 + Math.floor(r / 3)) % 6 : bestStrategy);
         const raw = generateSchedule(
           classes, subjects, teachers, rooms, timeslots, classSubjects, lunchGroups, seed,
           { solveMs: b.solveMs, compactMs: b.compactMs, polishMs: b.polishMs, strategy, quiet: true }
@@ -914,7 +941,12 @@ export default function SchedulePage({
         let cand = raw;
         try {
           const packed = compactSchedule(classes, timeslots, lunchGroups, raw, classSubjects, teachers, subjects, rooms);
-          if (packed && countPlacedUnits(packed) >= countPlacedUnits(raw) && countGaps(packed) < countGaps(raw)) cand = packed;
+          if (packed && countPlacedUnits(packed) >= countPlacedUnits(raw)) {
+            const gp = countGaps(packed);
+            const gr = countGaps(raw);
+            // Oyna teng bo'lsa ham kunlik yuk tekisroq bo'lsa — zichlangani olinadi
+            if (gp < gr || (gp === gr && countImbalance(packed) < countImbalance(raw))) cand = packed;
+          }
         } catch { /* zichlash ixtiyoriy — xato bo'lsa asl nomzod qoladi */ }
         const placed = countPlacedUnits(cand);
         const over = countOverCap(cand);
@@ -968,8 +1000,12 @@ export default function SchedulePage({
         }
       }
 
-      // Yakuniy zichlash — oyna qolmasligi kafolati
-      finalSch = compactUntilClean(finalSch, bestPlaced);
+      // ——— YAKUNIY ZICHLASH: OYNA QOLMASLIGI KAFOLATI ———
+      // MAJBURIY rejim: oyna qolgan bo'lsa bir necha marta, har safar
+      // boshqa yo'ldan va kattaroq byudjet bilan qayta uriniladi.
+      // Oyna allaqachon 0 bo'lsa — bitta yengil urinish bilan cheklanadi,
+      // ya'ni tayyor jadval uchun vaqt behuda sarflanmaydi.
+      finalSch = compactUntilClean(finalSch, bestPlaced, { hard: true, rounds: 4, budgetMs: 1500 });
 
       setSchedule(finalSch);
 
@@ -1956,20 +1992,81 @@ export default function SchedulePage({
       return;
     }
     // To'ldirgandan keyin darhol zichlaymiz — oyna qolmasin
-    setSchedule(compactUntilClean(filled, countPlacedUnits(filled)));
+    setSchedule(compactUntilClean(filled, countPlacedUnits(filled), {
+      hard: true, rounds: 3, budgetMs: 1400,
+    }));
     toast?.(`${placed} ta soat avtomatik joylashtirildi ✓`, "success");
   }
 
-  // Qo'lda tahrirdan keyin ham oynani yopish tugmasi
-  function compactNow() {
-    if (!setSchedule) return;
+  // ——— «🧲 OYNANI YOPISH» — MAJBURIY, OYNA NOLGA TUSHGUNCHA ———
+  // Bir marta zichlab qo'ya qolmaydi: oyna qolsa TO'XTAMAYDI — har urinishda
+  // boshqa yo'ldan boradi (`spin`) va byudjet oshib boradi, ya'ni qidiruv
+  // chuqurlashadi. To'xtash sharti faqat ikkitasi: oyna 0 yoki vaqt tugadi.
+  // Sikl `async` — har urinishdan oldin brauzerga chizish imkoni beriladi,
+  // shuning uchun tugma "⏳ Yopilyapti…" holatida ko'rinadi va ilova
+  // qotib qolmaydi. Soat YO'QOLMAYDI: joylangan darslar soni kamaysa
+  // natija qabul qilinmaydi.
+  async function compactNow() {
+    if (!setSchedule || compacting) return;
+    const minPlaced = countPlacedUnits(schedule);
     const before = countGaps(schedule);
-    const next = compactUntilClean(schedule, countPlacedUnits(schedule));
-    const after = countGaps(next);
-    setSchedule(next);
-    if (after < before) toast?.(`Jadval zichlandi — ${before - after} ta bo'sh soat yopildi ✓`, "success");
-    else if (after === 0) toast?.("Kun o'rtasida bo'sh soat yo'q ✓", "success");
-    else toast?.(`${after} ta bo'sh soatni yopib bo'lmadi — ustoz bandligi to'sqinlik qilyapti`, "warning");
+    if (before === 0) { toast?.("Kun o'rtasida bo'sh soat yo'q ✓", "success"); return; }
+
+    setCompacting(true);
+    const t0 = Date.now();
+    const TIME_CAP_MS = 15000;   // qattiq chegara — brauzer kutib qolmasin
+    let best = schedule;
+    let bestGaps = before;
+    let bestBal = countImbalance(best);
+    let stall = 0;
+    try {
+      for (let k = 0; k < 12; k++) {
+        // Brauzer ekranni yangilab ulgursin (rAF paintdan oldin, setTimeout keyin)
+        await new Promise((res) => requestAnimationFrame(() => setTimeout(res, 0)));
+        if (Date.now() - t0 > TIME_CAP_MS) break;
+
+        let next;
+        try {
+          next = compactSchedule(
+            classes, timeslots, lunchGroups, best, classSubjects, teachers, subjects, rooms,
+            { hard: true, spin: k, budgetMs: 900 + k * 500 },
+          );
+        } catch {
+          break;
+        }
+        if (!next || countPlacedUnits(next) < minPlaced) break;
+
+        const g = countGaps(next);
+        const bal = countImbalance(next);
+        if (g < bestGaps || (g === bestGaps && bal < bestBal)) {
+          best = next;
+          bestGaps = g;
+          bestBal = bal;
+          stall = 0;
+        } else {
+          stall += 1;
+        }
+        if (bestGaps === 0) break;
+        // Ketma-ket 3 urinish hech narsa bermadi — bu ma'lumotda oyna
+        // yopilmaydi (ustoz sig'imi/dam kuni). Behuda kutmaymiz.
+        if (stall >= 3) break;
+      }
+
+      setSchedule(best);
+      const secs = ((Date.now() - t0) / 1000).toFixed(1);
+      if (bestGaps === 0) {
+        toast?.(`Oynalar to'liq yopildi — ${before} ta bo'sh soat ketdi ✓ · ⏱ ${secs} s`, "success");
+      } else if (bestGaps < before) {
+        toast?.(
+          `${before - bestGaps} ta oyna yopildi, ${bestGaps} tasi qoldi — yana bosing yoki ustoz bandligini tekshiring · ⏱ ${secs} s`,
+          "warning",
+        );
+      } else {
+        toast?.(`${bestGaps} ta bo'sh soatni yopib bo'lmadi — ustoz bandligi yoki dam kuni to'sqinlik qilyapti`, "warning");
+      }
+    } finally {
+      setCompacting(false);
+    }
   }
 
   function addManualLesson() {
@@ -2190,8 +2287,14 @@ export default function SchedulePage({
               </button>
             )}
             {setSchedule && gapTotal > 0 && (
-              <button className="sch-btn sch-btn-soft-blue" onClick={compactNow} type="button" title="Kun o'rtasidagi bo'sh soatlarni yopish">
-                🧲 Oynani yopish ({gapTotal})
+              <button
+                className="sch-btn sch-btn-soft-blue"
+                onClick={compactNow}
+                type="button"
+                disabled={compacting}
+                title="Kun o'rtasidagi bo'sh soatlarni majburiy yopish — oyna nolga tushmaguncha qidiriladi"
+              >
+                {compacting ? "⏳ Yopilyapti…" : `🧲 Oynani yopish (${gapTotal})`}
               </button>
             )}
             {setSchedule && lockedTotal > 0 && (
@@ -2411,7 +2514,10 @@ export default function SchedulePage({
                   🧲 {gapTotal} ta oyna (kun o'rtasidagi bo'sh soat) qoldi
                 </div>
                 <div style={{ fontSize: 13, color: "#1e3a8a", marginTop: 6 }}>
-                  Yuqoridagi «🧲 Oynani yopish» tugmasini bosing — jadval qayta zichlanadi.
+                  Yuqoridagi «🧲 Oynani yopish» tugmasini bosing — jadval oyna nolga tushmaguncha
+                  qayta-qayta zichlanadi (har urinishda boshqa yo'ldan boradi). Soat yo'qolmaydi,
+                  ustoz/xona bandligi va dam kunlari saqlanadi. Bir bosishda hammasi yopilmasa —
+                  yana bosing.
                 </div>
                 {tight.length > 0 && (
                   <div style={{ fontSize: 13, color: "#1e3a8a", marginTop: 6 }}>

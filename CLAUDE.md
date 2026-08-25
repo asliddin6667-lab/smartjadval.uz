@@ -305,6 +305,44 @@ Ustoz yuklamasi esa aksincha — har guruh ustozi ALOHIDA sanaladi.
 Hard cheklovlar (ikkala dvigatelda ham): ustoz/sinf dam kuni, obed guruhlari, smena
 (`timeslot.classIds`), ustoz/sinf/xona bandligi.
 
+**ZICHLASH — «🧲 Oynani yopish» (`compactSchedule`, 9-parametr `options`).**
+Funksiya ikki rejimda ishlaydi:
+
+- **oddiy** (`options` berilmasa) — generatsiya sikli ichida har nomzod uchun
+  chaqiriladi, tez (~30–100 ms), avvalgi xatti-harakat;
+- **majburiy** (`{ hard: true, spin, budgetMs }`) — «🧲 Oynani yopish» tugmasi,
+  `resolveAll()` va generatsiyaning YAKUNIY bosqichi. Oyna nolga tushmaguncha
+  yoki `budgetMs` tugamaguncha to'xtamaydi.
+
+Majburiy rejim bosqichlari (har raundda tartib bilan, `totalGaps()` kamaymasa
+keyingisiga o'tiladi):
+
+| # | Bosqich | Nima qiladi |
+|---|---|---|
+| 1 | `dayFullSolve(d)` | BUTUN kunni qayta yechadi: har sinf uchun maqsad — kunning dastlabki `n` ta ochiq katagi (`n` = o'sha kundagi dars soni). Yechim topilsa o'sha kunda hech bir sinfda oyna qolmaydi |
+| 2 | `prefixRebuild` + `gapChainFix` | bitta sinf ichida prefiks yig'ish, zanjirli almashtirish (eski bosqichlar) |
+| 3 | `transplantPass` | boshqa kundagi darsni oynaga tortib olish |
+| 4 | `pushOut` | oynadan keyingi darsni boshqa kunga chiqarish (oyna DARHOL kamaysa) |
+| 5 | `shrinkAndSolve` | kunni bir soatga qisqartirib IKKALA kunni qayta yechish; natija yomon bo'lsa `restoreSnap` bilan hammasi joyiga qaytariladi |
+| — | `kick(n)` | mahalliy «cho'qqi»da qotib qolganda bir necha darsni ataylab tasodifiy joyga surish (iterated local search). Eng yaxshi holat `bestSnap` da saqlanadi va sikl oxirida tiklanadi |
+
+`dayFullSolve` — **dinamik MRV + oldindan tekshirishli** backtracking. Kunda ~80
+ta «o'zgaruvchi» bo'ladi; qat'iy tartibli oddiy backtracking bu o'lchamda deyarli
+har doim tugun chegarasiga urilardi (sinovda 33 000 marta chegara, 3 marta yechim).
+Har qadamda eng kam variantli birlik tanlanadi, biror birlikning varianti umuman
+qolmasa shox darhol kesiladi. **Bu qidiruvni sekinlashtiradigan har qanday
+o'zgartirish (masalan yana bir qat'iy tartib) natijani keskin yomonlashtiradi.**
+
+`spin` — takroriy chaqiruvda domen va tartib aylantiriladi. Busiz «yana bosing»
+aynan o'sha natijani qaytarardi. Shuning uchun UI sikli (`compactNow`) har
+urinishda `spin` ni oshiradi va byudjetni kattalashtiradi.
+
+⚠️ **Zichlash ilgari ustozning DAM KUNINI tekshirmasdi** — generator uni hurmat
+qilar, lekin keyingi zichlash darsni dam kuniga ko'chirib yuborardi (sinovda 24
+sinfli maktabda 18 ta buzilish). Endi `offDays` `tBlockedMap` ga to'liq yopiq kun
+sifatida yoziladi. Zichlashga yangi cheklov qo'shsangiz — shu joyga qo'shing,
+`fits()` va domen hisobi ikkalasi ham o'sha jadvalni o'qiydi.
+
 **KUNLIK KVOTA — oynasizlik va teng taqsimotning kafolati.**
 Generator ishga tushishidan oldin har sinf uchun `dayQuota[sinf][kun]` hisoblanadi
 (`setDayQuotas()`): sinfning HAQIQIY talabi (barcha so'rov bloklari yig'indisi +

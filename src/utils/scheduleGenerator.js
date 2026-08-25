@@ -3991,8 +3991,26 @@ function buildValidationReport(ctx) {
 // soatlarga (teacher.blockedSlots) zichlash paytida ham dars surilmaydi.
 export function compactSchedule(
   classes = [], timeslots = [], lunchGroups = [], schedule = {}, classSubjects = {}, teachers = [],
-  subjects = [], rooms = null
+  subjects = [], rooms = null, options = {}
 ) {
+  // ——— REJIM ———
+  // `hard: true` — «🧲 Oynani yopish» tugmasi va generatsiyaning YAKUNIY
+  // bosqichi uchun: oyna NOLGA tushmaguncha qo'shimcha, ancha kuchli
+  // bosqichlar ishlaydi (butun kunni qayta yechish, darsni boshqa kunga
+  // surib chiqarish). Nomzod tanlashdagi oddiy chaqiruvlarda bu bosqich
+  // umuman yoqilmaydi — generatsiya tezligi o'zgarmaydi.
+  // `spin` — bir xil jadvalni QAYTA zichlaganda boshqa yo'ldan borish uchun
+  // (domen va tartib aylantiriladi). Busiz takroriy chaqiruv aynan o'sha
+  // natijani qaytarardi va "yana urinish" ma'nosiz bo'lardi.
+  const opt = options && typeof options === "object" ? options : {};
+  const HARD = Boolean(opt.hard);
+  const SPIN = Math.max(0, Math.floor(Number(opt.spin) || 0));
+  const HARD_MS = Math.max(600, Math.min(12000, Number(opt.budgetMs) || 2500));
+  const rot = (arr) => {
+    if (!SPIN || arr.length < 2) return arr;
+    const k = SPIN % arr.length;
+    return k ? arr.slice(k).concat(arr.slice(0, k)) : arr;
+  };
   // KELAJAK SOATI: nom bo'yicha aniqlanadi — eski jadvallarda `fixedMonday`
   // belgisi bo'lmasligi mumkin, lekin baribir joyidan qo'zg'almasligi kerak.
   const fixedMondayIds = fixedMondaySubjectIds(subjects);
@@ -4027,15 +4045,28 @@ export function compactSchedule(
   const DTB = D * TB;
   const tbOff = (d, i) => d * TB + tsBucket[i];
 
-  // ——— USTOZ SETKASI: qulflangan soatlar (zichlashda ham hurmat qilinadi) ———
+  // ——— USTOZ UCHUN YOPIQ KATAKLAR ———
+  // Ikki manba: ustoz setkasidagi qulflangan soatlar (`blockedSlots`) VA
+  // ustozning DAM KUNI (`offDays`).
+  // ⚠️ Dam kuni ilgari zichlashda umuman tekshirilmasdi: generator uni
+  // hurmat qilardi, lekin keyingi zichlash darsni ustozning dam kuniga
+  // ko'chirib yuborishi mumkin edi (sinovda 24 sinfli maktabda 18 ta
+  // buzilish). Endi dam kuni butunlay yopiq katak sifatida qaraladi.
   const tBlockedMap = new Map(); // teacherId -> Uint8Array(DT)
   (Array.isArray(teachers) ? teachers : []).forEach((t) => {
-    const bs = t && t.blockedSlots && typeof t.blockedSlots === "object" ? t.blockedSlots : null;
-    if (!bs) return;
+    if (!t || !t.id) return;
+    const bs = t.blockedSlots && typeof t.blockedSlots === "object" ? t.blockedSlots : null;
+    const off = new Set(Array.isArray(t.offDays) ? t.offDays : []);
+    if (!bs && !off.size) return;
     const g = new Uint8Array(DT);
     let any = false;
     DAYS.forEach((day, d) => {
-      const list = Array.isArray(bs[day]) ? bs[day] : [];
+      if (off.has(day)) {
+        for (let i = 0; i < T; i++) g[d * T + i] = 1;
+        any = true;
+        return;
+      }
+      const list = bs && Array.isArray(bs[day]) ? bs[day] : [];
       list.forEach((sid) => {
         const i = teachIdxById.get(sid);
         if (i !== undefined) { g[d * T + i] = 1; any = true; }
@@ -4477,7 +4508,13 @@ export function compactSchedule(
   };
 
   const movableAll = units.filter((u) => !u.locked && u.domain.length > 1);
-  const movable = [...movableAll.filter((u) => u.core), ...movableAll.filter((u) => !u.core)];
+  // `rot` — takroriy chaqiruvda (spin) tartib aylanadi: shu tufayli
+  // «yana urinish» boshqa yechimga olib boradi. Asosiy fanlar baribir
+  // oldinda qoladi — aylantirish har guruh ICHIDA bo'ladi.
+  const movable = [
+    ...rot(movableAll.filter((u) => u.core)),
+    ...rot(movableAll.filter((u) => !u.core)),
+  ];
   const stop = Date.now() + 2500;
   for (let round = 0; round < 12 && Date.now() < stop; round++) {
     let moved = 0;
@@ -4971,6 +5008,331 @@ export function compactSchedule(
     }
     if (transplantPass(Math.round(tpBudget / 2))) any = true;
     if (!any) break;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  //  MAJBURIY OYNA YOPISH  (faqat `hard` rejimda)
+  //  «🧲 Oynani yopish» tugmasi va generatsiyaning yakuniy bosqichi shu
+  //  yerga tushadi. Yuqoridagi bosqichlar "yaxshilash" bo'lsa, bu yerdagi
+  //  sikl MAQSADGA qarab ishlaydi: oyna nolga tushmaguncha yoki vaqt
+  //  tugamaguncha to'xtamaydi va har raundda kuchliroq vositaga o'tadi.
+  // ══════════════════════════════════════════════════════════════
+  const allCIdxs = [];
+  for (let ci = 0; ci < C; ci++) allCIdxs.push(ci);
+  const totalGaps = () => gapsOf(allCIdxs);
+  const dayGapsOf = (d) => {
+    let g = 0;
+    for (let ci = 0; ci < C; ci++) g += dayGapOf(ci, d);
+    return g;
+  };
+  const rotBy = (arr, k) => {
+    if (arr.length < 2) return arr;
+    const n = ((k % arr.length) + arr.length) % arr.length;
+    return n ? arr.slice(n).concat(arr.slice(0, n)) : arr;
+  };
+
+  // ——— BUTUN KUNNI QAYTA YECHISH ———
+  // `prefixRebuild` bitta sinfni yig'adi va yo'lni BOSHQA sinfning darsi
+  // to'sib tursa taslim bo'ladi — aynan shu sababli ekranda oyna qolib
+  // ketardi. Bu yerda kun BUTUNLIGICHA yechiladi: har sinf uchun maqsad
+  // kataklar — kunning DASTLABKI n ta ochiq katagi (n = o'sha kundagi dars
+  // soni). Yechim topilsa, o'sha kunda HECH BIR sinfda oyna qolmaydi:
+  // har sinfning darslari aynan prefiksni to'ldiradi. Ustoz/xona/sinf
+  // bandligi va ustoz setkasidagi qulflar `fits()` orqali saqlanadi.
+  const dayFullSolve = (d, stopAt, spin) => {
+    if (dayGapsOf(d) === 0) return false;
+    const dayUnits = units.filter((u) => u.d === d);
+    const movers = dayUnits.filter((u) => !u.locked);
+    if (!movers.length) return false;
+
+    const targets = [];
+    for (let ci = 0; ci < C; ci++) {
+      const cBase = ci * DT + d * T;
+      const open = [];
+      for (let k = 0; k < T; k++) if (!blocked[cBase + k]) open.push(k);
+      targets.push(new Set(open.slice(0, classDayCount[ci * D + d])));
+    }
+    // Qulflangan (yoki obed ustidan o'tgan) dars prefiksdan tashqarida
+    // bo'lsa — bu kunni to'liq yechib bo'lmaydi, uni qo'zg'atishga
+    // haqqimiz yo'q. U holda boshqa vositalar (pushOut) ishga tushadi.
+    for (const u of dayUnits) {
+      if (!u.locked) continue;
+      for (const ci of u.cIdxs) {
+        for (let o = 0; o < u.len; o++) if (!targets[ci].has(uSlotAt(u, o))) return false;
+      }
+    }
+
+    // Domenlar statik: maqsad kataklar + blok bog'lanishi + ustoz qulflari
+    const doms = movers.map((u) => {
+      const list = [];
+      for (let k = 0; k + u.len <= T; k++) {
+        let ok = true;
+        for (let o = 0; o < u.len; o++) {
+          if (o > 0 && !linkOk(k + o - 1)) { ok = false; break; }
+          for (const ci of u.cIdxs) if (!targets[ci].has(k + o)) { ok = false; break; }
+          if (!ok) break;
+          for (const id of u.tids) {
+            const bg = tBlockedMap.get(id);
+            if (bg && bg[d * T + k + o]) { ok = false; break; }
+          }
+          if (!ok) break;
+        }
+        if (ok) list.push(k);
+      }
+      return rotBy(list, spin);
+    });
+    if (doms.some((x) => !x.length)) return false;
+
+    const saved = movers.map((u) => ({ u, i: u.i }));
+    rearrange = true;
+    movers.forEach((u) => setBits(u, d, u.i, 0));
+
+    // ——— QIDIRUV: DINAMIK MRV + OLDINDAN TEKSHIRISH ———
+    // Bir kunda 80 ga yaqin "o'zgaruvchi" bo'ladi. Oddiy (qat'iy tartibli)
+    // backtracking bunday o'lchamda deyarli har doim tugun chegarasiga
+    // urilardi — sinovda 33 000 marta chegara, atigi 3 marta yechim.
+    // Endi har qadamda:
+    //   • eng KAM variantli birlik tanlanadi (MRV) — qiyin joy oldin hal
+    //     bo'ladi, shuning uchun xato tanlov ildizga yaqin sezildi;
+    //   • biror birlikning varianti UMUMAN qolmasa, shox darhol kesiladi
+    //     (oldindan tekshirish) — bu tugunlar sonini bir necha barobar
+    //     kamaytiradi;
+    //   • yagona variantli birlik darhol qo'yiladi (majburiy tanlov).
+    const nodeCap = Math.max(1500, Math.min(20000, movers.length * 120));
+    const left = new Set(movers.map((_, x) => x));
+    let nodes = 0;
+    const solve = () => {
+      if (!left.size) return true;
+      nodes += 1;
+      if (nodes > nodeCap) return false;
+      if ((nodes & 63) === 0 && Date.now() > stopAt) return false;
+      let pick = -1;
+      let vals = null;
+      for (const oi of left) {
+        const u = movers[oi];
+        const ok = [];
+        for (const k of doms[oi]) if (fits(u, d, k)) ok.push(k);
+        if (!ok.length) return false;               // o'lik shox — darhol orqaga
+        if (!vals || ok.length < vals.length) { pick = oi; vals = ok; }
+        if (vals.length === 1) break;               // majburiy tanlov
+      }
+      const u = movers[pick];
+      const keep = u.i;
+      left.delete(pick);
+      for (const k of vals) {
+        setBits(u, d, k, 1);
+        u.i = k;
+        if (solve()) return true;
+        setBits(u, d, k, 0);
+      }
+      u.i = keep;
+      left.add(pick);
+      return false;
+    };
+    if (solve()) { rearrange = false; return true; }
+    saved.forEach((s) => { s.u.i = s.i; setBits(s.u, d, s.i, 1); });
+    rearrange = false;
+    return false;
+  };
+
+  // ——— DARSNI BOSHQA KUNGA SURIB CHIQARISH ———
+  // Oynani SHU kundagi dars bilan to'ldirib bo'lmasa (ustoz o'sha soatda
+  // boshqa sinfda band va zanjir ham yordam bermasa), teskarisini qilamiz:
+  // oynadan KEYINGI darsni butunlay boshqa kunga olib chiqamiz — kun
+  // qisqaradi va oyna yopiladi. Qabul mezoni qat'iy: ta'sirlangan
+  // sinflarda oyna soni KAMAYISHI shart, ya'ni bu qadam hech qachon
+  // yangi oyna yaratmaydi. Kunlik yuk tengligi bu yerda ikkinchi darajali
+  // (ustuvorlik: joylangan soat → oyna → kunlik yuk).
+  const pushOut = (ci, d, stopAt) => {
+    const hole = firstHoleOf(ci, d);
+    if (hole < 0) return false;
+    const list = units
+      .filter((u) => !u.locked && u.d === d && u.cIdxs.includes(ci) && u.i > hole)
+      .sort((a, b) => b.i - a.i);
+    for (const u of list) {
+      if (Date.now() > stopAt) return false;
+      const before = gapsOf(u.cIdxs);
+      const oldD = u.d;
+      const oldI = u.i;
+      setBits(u, oldD, oldI, 0);
+      let bd = -1;
+      let bi = -1;
+      let bg = before;
+      for (const cand of u.domain) {
+        if (cand.d === oldD) continue;
+        if (!fits(u, cand.d, cand.i)) continue;
+        setBits(u, cand.d, cand.i, 1);
+        const g = gapsOf(u.cIdxs);
+        setBits(u, cand.d, cand.i, 0);
+        if (g < bg) { bg = g; bd = cand.d; bi = cand.i; if (!bg) break; }
+      }
+      if (bd >= 0) {
+        setBits(u, bd, bi, 1);
+        bumpSubj(u, oldD, -1);
+        bumpSubj(u, bd, +1);
+        u.d = bd;
+        u.i = bi;
+        return true;
+      }
+      setBits(u, oldD, oldI, 1);
+    }
+    return false;
+  };
+
+  // ——— KUNNI QISQARTIRIB QAYTA YECHISH (oxirgi va eng kuchli chora) ———
+  // Ba'zan oyna PRINSIPIAL yopilmaydi: kun boshidagi soatlarga hamma sinf
+  // birdan tiqiladi va ustozlar yetmaydi (masalan 28 sinf × 4 ta birinchi
+  // soat, lekin ustozlar soni undan kam). Bunday holda darslarni kunlarga
+  // TENG bo'lish shartining o'zi oynani majburlab qo'yadi.
+  // Yechim: shu kundagi bitta darsni boshqa kunga olib chiqamiz (kun bir
+  // soatga qisqaradi) va IKKALA kunni butunlay qayta yechamiz. Natija
+  // faqat umumiy oyna KAMAYGANDA qabul qilinadi — aks holda hamma narsa
+  // aynan joyiga qaytariladi (`snapshot`/`restoreSnap`).
+  const snapshot = () => units.map((u) => ({ u, d: u.d, i: u.i }));
+  const restoreSnap = (snap) => {
+    units.forEach((u) => { setBits(u, u.d, u.i, 0); bumpSubj(u, u.d, -1); });
+    snap.forEach((s) => { s.u.d = s.d; s.u.i = s.i; });
+    units.forEach((u) => { setBits(u, u.d, u.i, 1); bumpSubj(u, u.d, +1); });
+  };
+  const shrinkAndSolve = (ci, d, stopAt, spin) => {
+    if (dayGapOf(ci, d) === 0) return false;
+    const before = totalGaps();
+    const cands = units
+      .filter((u) => !u.locked && u.d === d && u.cIdxs.includes(ci))
+      .sort((a, b) => b.i - a.i)
+      .slice(0, 3);   // kunning oxirgi darslari — ularni olib chiqish arzon
+    for (const u of cands) {
+      let tries = 0;
+      for (const cand of u.domain) {
+        if (Date.now() > stopAt) return false;
+        if (cand.d === d) continue;
+        if (!fits(u, cand.d, cand.i)) continue;
+        if ((tries += 1) > 40) break;
+        const snap = snapshot();
+        const oldD = u.d;
+        setBits(u, oldD, u.i, 0);
+        bumpSubj(u, oldD, -1);
+        setBits(u, cand.d, cand.i, 1);
+        bumpSubj(u, cand.d, +1);
+        u.d = cand.d;
+        u.i = cand.i;
+        dayFullSolve(oldD, stopAt, spin);
+        dayFullSolve(cand.d, stopAt, spin);
+        if (totalGaps() < before) return true;
+        restoreSnap(snap);
+      }
+    }
+    return false;
+  };
+
+  // ——— SILKITISH ———
+  // Tuzatish bosqichlari mahalliy "cho'qqi"da qotib qolishi mumkin: hamma
+  // qadam natijasiz, lekin jadval baribir oynali. Shunda bir necha darsni
+  // ATAYLAB tasodifiy joyga ko'chiramiz va tuzatishni qaytadan yuritamiz.
+  // Vaqtincha yomonlashishga ruxsat beriladi, chunki ENG YAXSHI holat
+  // alohida saqlanadi va sikl oxirida tiklanadi.
+  const kick = (n) => {
+    const pool = units.filter((u) => !u.locked && u.domain.length > 1);
+    if (!pool.length) return;
+    for (let x = 0; x < n; x++) {
+      const u = pool[Math.floor(Math.random() * pool.length)];
+      const c = u.domain[Math.floor(Math.random() * u.domain.length)];
+      if (!c || (c.d === u.d && c.i === u.i)) continue;
+      const oldD = u.d;
+      const oldI = u.i;
+      setBits(u, oldD, oldI, 0);
+      if (fits(u, c.d, c.i)) {
+        setBits(u, c.d, c.i, 1);
+        bumpSubj(u, oldD, -1);
+        bumpSubj(u, c.d, +1);
+        u.d = c.d;
+        u.i = c.i;
+      } else {
+        setBits(u, oldD, oldI, 1);
+      }
+    }
+  };
+
+  if (HARD && totalGaps() > 0) {
+    const hardStop = Date.now() + HARD_MS;
+    const daySlice = Math.max(150, Math.round(HARD_MS / (D * 3)));
+    let stall = 0;
+    let lastGaps = totalGaps();
+    let bestGaps = lastGaps;
+    let bestSnap = snapshot();
+    for (let round = 0; round < 40 && Date.now() < hardStop; round++) {
+      if (lastGaps === 0) break;
+      let any = false;
+
+      // 1) eng kuchli qadam — kunni butunlay qayta yechish
+      for (let d = 0; d < D && Date.now() < hardStop; d++) {
+        if (dayGapsOf(d) === 0) continue;
+        if (dayFullSolve(d, Math.min(hardStop, Date.now() + daySlice), SPIN + round)) any = true;
+      }
+
+      // 2) sinfma-sinf: prefiks yig'ish + zanjirli almashtirish
+      for (const ci of rotBy(allCIdxs, SPIN + round)) {
+        if (Date.now() > hardStop) break;
+        for (let d = 0; d < D; d++) {
+          if (dayGapOf(ci, d) === 0) continue;
+          if (prefixRebuild(ci, d)) any = true;
+          if (gapChainFix(ci, d)) any = true;
+        }
+      }
+
+      // 3) boshqa kundagi darsni oynaga tortib olish
+      if (totalGaps() > 0 && Date.now() < hardStop) {
+        if (transplantPass(Math.max(200, Math.min(tpBudget, hardStop - Date.now())))) any = true;
+      }
+
+      // 4) darsni boshqa kunga surib chiqarish (oyna darhol kamayadigan holat)
+      if (totalGaps() > 0) {
+        for (const ci of rotBy(allCIdxs, SPIN + round)) {
+          if (Date.now() > hardStop) break;
+          for (let d = 0; d < D; d++) {
+            let guard = 0;
+            while (guard < 6 && dayGapOf(ci, d) > 0 && Date.now() < hardStop) {
+              guard += 1;
+              if (!pushOut(ci, d, hardStop)) break;
+              any = true;
+            }
+          }
+        }
+      }
+
+      // 5) OXIRGI CHORA — kunni qisqartirib ikkala kunni qayta yechish.
+      // Qimmat, shuning uchun faqat yuqoridagi bosqichlar oyna sonini
+      // KAMAYTIRA olmaganda ishga tushadi (shunchaki "qimirlatish" mezon emas).
+      if (totalGaps() >= lastGaps && totalGaps() > 0) {
+        for (const ci of rotBy(allCIdxs, SPIN + round)) {
+          if (Date.now() > hardStop) break;
+          for (let d = 0; d < D && Date.now() < hardStop; d++) {
+            let guard = 0;
+            while (guard < 4 && dayGapOf(ci, d) > 0 && Date.now() < hardStop) {
+              guard += 1;
+              if (!shrinkAndSolve(ci, d, hardStop, SPIN + round)) break;
+              any = true;
+            }
+          }
+        }
+      }
+
+      // To'xtash mezoni — OYNA SONI, bosqichlarning "qimirladi" bayrog'i emas.
+      // Ilgari har qanday ko'chirish `any` ni yoqar va sikl hech qanday
+      // natijasiz butun byudjetni yeb qo'yardi (sinovda 17 soniya).
+      const nowGaps = totalGaps();
+      if (nowGaps < bestGaps) { bestGaps = nowGaps; bestSnap = snapshot(); }
+      if (nowGaps < lastGaps) { lastGaps = nowGaps; stall = 0; continue; }
+      stall += 1;
+      // Hech narsa qimirlamagan bo'lsa silkitishning ham foydasi kam
+      if (!any && stall >= 2) break;
+      if (stall >= 3 || Date.now() > hardStop) break;
+      kick(3 + stall * 4);
+      lastGaps = totalGaps();
+    }
+    // Sikl silkitishdan keyin yomonroq holatda tugagan bo'lishi mumkin —
+    // ekranga HAR DOIM eng yaxshi variant chiqadi.
+    if (totalGaps() > bestGaps) restoreSnap(bestSnap);
   }
 
   // ——— Yangi jadvalni yig'amiz ———
