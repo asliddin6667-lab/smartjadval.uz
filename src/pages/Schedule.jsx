@@ -67,6 +67,17 @@ function classIdsOf(lesson) {
   return Array.isArray(lesson?.classIds) ? lesson.classIds : [lesson?.classId].filter(Boolean);
 }
 
+// Karta kaliti — sanoq YOZUV emas, KARTA bo‘yicha ketadi: guruhli fan, daraja
+// guruhlari va «bir vaqtda bir nechta fan» bitta katakda bir nechta yozuv bo‘lsa
+// ham ekranda BITTA karta bo‘lib turadi (kalit `groupLessons` bilan bir xil,
+// ustiga sinflar ro‘yxati qo‘shiladi — birga o‘qiydigan karta bitta sanaladi).
+function cardKeyOf(l) {
+  const base = l.pairKey
+    ? ["pair", l.pairKey, l.blockIndex ?? ""].join("__")
+    : [l.subjectId, l.groupKey || "", l.blockIndex ?? ""].join("__");
+  return `${base}##${classIdsOf(l).slice().sort().join("|")}`;
+}
+
 function uniqBy(array, getKey) {
   const seen = new Set();
   return array.filter((item) => {
@@ -500,10 +511,21 @@ export default function SchedulePage({
     return lockManual ? { ...rest, locked: false, manual: false } : { ...rest, locked: false };
   }
 
+  // Sanoq KARTA bo‘yicha: ekranda bitta karta bo‘lib turgan guruhli dars
+  // (daraja guruhlari, guruhli fan, «bir vaqtda bir nechta fan») bir marta sanaladi.
   function lockedCount() {
     let n = 0;
     DAYS.forEach((d) => sortedTimeslots.forEach((ts) => {
-      (schedule?.[d]?.[ts.id] || []).forEach((l) => { if (l.locked) n += 1; });
+      const cell = schedule?.[d]?.[ts.id] || [];
+      if (!cell.length) return;
+      const seen = new Set();
+      cell.forEach((l) => {
+        if (!l.locked) return;
+        const key = cardKeyOf(l);
+        if (seen.has(key)) return;
+        seen.add(key);
+        n += 1;
+      });
     }));
     return n;
   }
@@ -521,6 +543,65 @@ export default function SchedulePage({
     });
     setSchedule(next);
     toast?.("Barcha qulflar ochildi 🔓", "success");
+  }
+
+  // ——— BUTUN SINFNI BIR BOSISHDA QULFLASH ———
+  // `classId === "all"` bo‘lsa — jadvaldagi HAMMA dars. Birga o‘qiydigan dars
+  // (🔁 parallel dars, daraja guruhlari, parallel sinflar) bitta yozuvda bir
+  // nechta sinfni saqlaydi — u qulflansa sherik sinfda ham qulflanadi, chunki
+  // ular ayni soatda birga o‘qiydi. Shuning uchun soni alohida sanaladi va
+  // xabarda ko‘rsatiladi.
+
+  function classLockStats(classId) {
+    let total = 0;
+    let locked = 0;
+    DAYS.forEach((day) => sortedTimeslots.forEach((ts) => {
+      const cell = schedule?.[day]?.[ts.id] || [];
+      if (!cell.length) return;
+      const seen = new Map();
+      cell.forEach((l) => {
+        if (classId !== "all" && !classIdsOf(l).includes(classId)) return;
+        const key = cardKeyOf(l);
+        seen.set(key, (seen.get(key) || false) || Boolean(l.locked));
+      });
+      seen.forEach((isLocked) => { total += 1; if (isLocked) locked += 1; });
+    }));
+    return { total, locked };
+  }
+
+  function toggleClassLock(classId, value) {
+    if (!setSchedule) return;
+    const next = {};
+    let n = 0;       // o‘zgargan KARTA soni
+    let shared = 0;  // shundan sherik sinflar bilan umumiy
+    DAYS.forEach((day) => {
+      next[day] = { ...(schedule?.[day] || {}) };
+      sortedTimeslots.forEach((ts) => {
+        const cell = schedule?.[day]?.[ts.id] || [];
+        if (!cell.length) { next[day][ts.id] = cell; return; }
+        const seen = new Set();
+        next[day][ts.id] = cell.map((l) => {
+          if (classId !== "all" && !classIdsOf(l).includes(classId)) return l;
+          if (Boolean(l.locked) === value) return l;
+          const key = cardKeyOf(l);
+          if (!seen.has(key)) {
+            seen.add(key);
+            n += 1;
+            if (classIdsOf(l).length > 1) shared += 1;
+          }
+          return setLock(l, value);
+        });
+      });
+    });
+    if (!n) return;
+    setSchedule(next);
+    const who = classId === "all"
+      ? "Jadval"
+      : (classes.find((c) => c.id === classId)?.name || "Sinf");
+    const note = shared > 0 ? ` · ${shared} tasi sherik sinflar bilan umumiy` : "";
+    toast?.(value
+      ? `${who}: ${n} ta dars qulflandi 🔒${note}`
+      : `${who}: ${n} ta qulf ochildi 🔓${note}`, "success");
   }
 
   // ═══════════ KATAK RENDERI ═══════════
@@ -1875,6 +1956,15 @@ export default function SchedulePage({
   }
 
   const lockedTotal = setSchedule ? lockedCount() : 0;
+  // Tanlangan sinf (yoki "Barcha sinflar") bo‘yicha qulf holati
+  const classLock = setSchedule && gridMode === "class"
+    ? classLockStats(selectedClass)
+    : { total: 0, locked: 0 };
+  const classLockAll = selectedClass === "all";
+  // "Barcha sinflar"da ochish uchun allaqachon «🔓 Qulflar» tugmasi bor —
+  // takrorlamaymiz, u holatda faqat qulflash varianti ko‘rsatiladi.
+  const classLockShow = classLock.total > 0 && (!classLockAll || classLock.locked < classLock.total);
+  const classLockValue = classLock.locked < classLock.total;
   const gapTotal = setSchedule ? countGaps(schedule) : 0;
   const lessonTotal = countLessons(schedule);
 
@@ -1983,6 +2073,20 @@ export default function SchedulePage({
             {setSchedule && lockedTotal > 0 && (
               <button className="sch-btn sch-btn-soft-blue" onClick={unlockAll} type="button" title="Barcha qulflarni ochish">
                 🔓 Qulflar ({lockedTotal})
+              </button>
+            )}
+            {classLockShow && (
+              <button
+                className="sch-btn sch-btn-soft-blue"
+                onClick={() => toggleClassLock(selectedClass, classLockValue)}
+                type="button"
+                title={classLockValue
+                  ? `${classLockAll ? "Jadvaldagi barcha darsni" : "Tanlangan sinfning barcha darsini"} qulflash — «⚡ Avtomatik jadval» bosilganda ular joyidan qimirlamaydi`
+                  : "Tanlangan sinfning barcha qulfini ochish"}
+              >
+                {classLockValue
+                  ? `🔒 ${classLockAll ? "Hammasini" : "Sinfni"} qulflash (${classLock.total - classLock.locked})`
+                  : `🔓 Sinf qulfini ochish (${classLock.locked})`}
               </button>
             )}
             {setSavedSchedules && (
