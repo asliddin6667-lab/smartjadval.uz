@@ -96,6 +96,8 @@ export const CS_DEFAULTS = {
   swapRoomId: "",
   teacherId2: "",
   allowDouble: true,
+  // 4 soat blok — faqat superadmin yoqadi, shuning uchun default o'chiq
+  allowQuad: false,
   swapEnabled: false,
   splitEnabled: false,
   weekAltHours: 1,

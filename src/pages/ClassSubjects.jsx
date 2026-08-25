@@ -34,6 +34,7 @@ function getGradeFromClassName(name = "") {
 const POOL_SHARED_FIELDS = [
   "weeklyHours",
   "allowDouble",
+  "allowQuad",
   "isCore",
   "spacedDays",
   "levelGroupCount",
@@ -110,6 +111,8 @@ function makeAssignment(subject, firstTeacherId = "") {
     // "2 soat blok" — fan qo'shilganda HAR DOIM o'chiq.
     // Faqat foydalanuvchi ⚙️ Sozlamalardan o'zi yoqsa ishlaydi.
     allowDouble: false,
+    // "4 soat blok" — faqat superadmin ko'radigan sozlama
+    allowQuad: false,
     levelGroupCount: 3,
     levelGroups: makeLevelGroups(3),
     parallelEnabled: false,
@@ -147,6 +150,7 @@ const PAIR_SHARED_FIELDS = [
   "groupName1",
   "groupName2",
   "allowDouble",
+  "allowQuad",
   "isCore",
   "spacedDays",
   // Guruh tuzilishi: 2-guruh umumiymi — bu ham hamma a'zoda bir xil
@@ -266,7 +270,10 @@ function computeTeacherHours(classSubjects) {
   return load;
 }
 
-export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, classSubjects, setClassSubjects, schedule, setSchedule, toast }) {
+export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, classSubjects, setClassSubjects, schedule, setSchedule, toast, currentUser }) {
+  // "4 soat blok" — FAQAT superadmin uchun. Boshqa rollarda bu sozlama
+  // umuman ko'rinmaydi (mavjud yozuvda yoqilgan bo'lsa ham tegilmaydi).
+  const isSuperadmin = currentUser?.role === "superadmin";
   // Superadmin belgilagan standart soatlar (bulutdan; kelmasa — ichki reja)
   const [curriculum, setCurriculum] = useState(() => getCachedCurriculum());
   useEffect(() => {
@@ -480,6 +487,18 @@ Davom etamizmi?`;
   // "2 soat blok" faqat shu sinf fanida aniq yoqilgan bo'lsa ishlaydi.
   // Fanlar bo'limidagi umumiy sozlama bu yerga avtomatik ko'chmaydi.
   function assignmentAllowsDouble(a) { return Boolean(a?.allowDouble); }
+  // "4 soat blok" — faqat superadmin yoqadi (pastdagi `isSuperadmin`).
+  function assignmentAllowsQuad(a) { return Boolean(a?.allowQuad); }
+  // Haftalik soat qanday bloklarga bo'linishini ko'rsatadi: "4+2", "4+1+1"...
+  // Mantiq scheduleGenerator.js dagi splitHoursToBlocks bilan bir xil.
+  function describeBlocks(hours, allowDouble, allowQuad) {
+    let rest = Math.max(0, Number(hours || 0));
+    const parts = [];
+    if (allowQuad) while (rest >= 4) { parts.push(4); rest -= 4; }
+    if (allowDouble) while (rest >= 2) { parts.push(2); rest -= 2; }
+    while (rest > 0) { parts.push(1); rest -= 1; }
+    return parts.join(" + ");
+  }
 
   function sameLevelGroupAssignments(subjectId, levelGroupKey) {
     const key = String(levelGroupKey || "").trim();
@@ -827,6 +846,7 @@ Fan bilan birga ular ham o'chsinmi?`;
       groupName1: a.groupName1 || "1-guruh",
       groupName2: a.groupName2 || "2-guruh",
       allowDouble: Boolean(a.allowDouble),
+      allowQuad: Boolean(a.allowQuad),
       isCore: Boolean(a.isCore),
       spacedDays: Boolean(a.spacedDays),
       // Boshqa rejimlar o'chadi
@@ -1221,7 +1241,8 @@ Fan bilan birga ular ham o'chsinmi?`;
   function activeChips(a, s) {
     const chips = [];
     if (a.isCore) chips.push({ text: "⭐ Asosiy", bg: "#fef3c7", fg: "#92400e" });
-    if (assignmentAllowsDouble(a)) chips.push({ text: "2 soat blok", bg: "#e0e7ff", fg: "#3730a3" });
+    if (assignmentAllowsQuad(a)) chips.push({ text: "🧱 4 soat blok", bg: "#ede9fe", fg: "#5b21b6" });
+    if (assignmentAllowsDouble(a) && !assignmentAllowsQuad(a)) chips.push({ text: "2 soat blok", bg: "#e0e7ff", fg: "#3730a3" });
     if (a.spacedDays) chips.push({ text: "📆 Ora kunda", bg: "#ffedd5", fg: "#9a3412" });
     if (a.groupKey && !a.levelGroupEnabled) chips.push({ text: "🔁 Parallel", bg: "#d1fae5", fg: "#065f46" });
     if (a.splitEnabled && !a.levelGroupEnabled) chips.push({ text: a.swapEnabled ? "🔄 Almashinuv" : "✂️ 2 guruh", bg: "#fce7f3", fg: "#9d174d" });
@@ -1453,8 +1474,14 @@ Fan bilan birga ular ham o'chsinmi?`;
                               </label>
                               <label className="cs-toggle">
                                 <input type="checkbox" checked={assignmentAllowsDouble(a)} onChange={e => updateAssignment(s.id, { allowDouble: e.target.checked })} />
-                                <span>2 soat blok {assignmentAllowsDouble(a) && <em style={{ color: "var(--text-muted)", fontWeight: 400 }}>({hoursNow} soat → {Math.ceil(hoursNow / 2)} blok)</em>}</span>
+                                <span>2 soat blok {assignmentAllowsDouble(a) && !assignmentAllowsQuad(a) && <em style={{ color: "var(--text-muted)", fontWeight: 400 }}>({hoursNow} soat → {Math.ceil(hoursNow / 2)} blok)</em>}</span>
                               </label>
+                              {isSuperadmin && (
+                                <label className="cs-toggle" title="Fan bir kunda KETMA-KET 4 soat tushadi. Qolgan soatlar «2 soat blok» yoqilgan bo'lsa juftlanadi, aks holda bittalab joylanadi.">
+                                  <input type="checkbox" checked={assignmentAllowsQuad(a)} onChange={e => updateAssignment(s.id, { allowQuad: e.target.checked })} />
+                                  <span>🧱 4 soat blok {assignmentAllowsQuad(a) && <em style={{ color: "var(--text-muted)", fontWeight: 400 }}>({hoursNow} soat → {describeBlocks(hoursNow, assignmentAllowsDouble(a), true)})</em>}</span>
+                                </label>
+                              )}
                               <label className="cs-toggle" title="Dars kunlar oralab qo'yiladi: Dushanba → Chorshanba → Juma">
                                 <input type="checkbox" checked={Boolean(a.spacedDays)} onChange={e => updateAssignment(s.id, { spacedDays: e.target.checked })} />
                                 <span>📆 Ora kunda (kun oralab)</span>

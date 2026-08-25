@@ -344,6 +344,47 @@ kataklarga suriladi va shu paytda `solveSlack` vaqtincha to'liq ochiladi.
 Chuqur qidiruv qimmat, shuning uchun butun urinishga `forceBudgetMs = 2500`
 umumiy vaqt chegarasi qo'yilgan.
 
+**BLOK OBED/TANAFFUSDAN OSHIB O'TADI.** Maktabda obed alohida vaqt bandi
+bo'lsa (masalan 5-o'rin, `type: "lunch"`), blok «4-dars → obed → 6-dars»
+ko'rinishida ham joylanadi. Sabab: obed sloti `teachingTs` ro'yxatiga
+kirmaydi, ya'ni sinf uchun bu katak ham, oyna ham emas — chop etilgan
+jadvalda dars qatorma-qator turadi va ustoz ham obeddan keyin o'sha sinfda
+davom etadi. Qoida `blockLink[]` da (scheduleGenerator.js, `generateScheduleAttempt`
+va `compactSchedule` da AYNI bir xil hisoblanadi): `1` — bevosita ketma-ket,
+`2` — orada obed/tanaffus bor, `0` — bog'lab bo'lmaydi. Uzilish
+`BRIDGE_MAX_GAP = 60` daqiqadan uzun bo'lsa bog'lanmaydi — smena
+almashinuvidagi katta tanaffus blokni ikkiga cho'zib yubormaydi.
+Obedli variant `BRIDGE_W = 1200` jarima oladi, ya'ni generator avval
+HAQIQIY ketma-ket juftlikni qidiradi, obeddan oshirishni faqat boshqa
+iloji qolmaganda tanlaydi. **Blok butunligini tekshiradigan har qanday
+yangi kod `nextConsecutive` emas, `linkOk()` dan foydalansin** — aks holda
+zichlash (`compactSchedule`) bunday blokni ikkiga bo'lib yuboradi.
+Sinf guruhi oddiy dars soatida ovqatlansa (`lunchGroups`), blok o'sha
+katakdan O'TMAYDI — u yerda setkada haqiqiy teshik paydo bo'lardi.
+
+**«4 SOAT BLOK» — FAQAT SUPERADMIN.** Aynan shu mexanizm, faqat blok
+uzunligi `QUAD_SIZE = 4`: fan bir kunda KETMA-KET 4 soat tushadi. Sozlama —
+`classSubjects[].allowQuad`; `splitHoursToBlocks(hours, allowDouble, allowQuad)`
+avval 4 lik bloklarni ajratadi, qolganini `allowDouble` ga qarab 2 lik yoki
+bittalab bo'ladi (6 soat → `[4, 2]`, faqat quad bo'lsa → `[4, 1, 1]`).
+
+- Almashtirgich [ClassSubjects.jsx](src/pages/ClassSubjects.jsx) sozlamalar
+  panelida FAQAT `currentUser.role === "superadmin"` bo'lganda ko'rinadi
+  (`isSuperadmin`). Ma'lumot har foydalanuvchining o'z blobida yotgani uchun
+  boshqa rolda `allowQuad` hech qachon yoqilgan bo'lmaydi.
+- **Blok uzunligi hech qayerda 2 deb qotib qolmasligi kerak.** Generatordagi
+  joylashtirish `req.blockSize` bo'yicha umumiy, lekin `compactSchedule()`
+  ilgari faqat `blockIndex` 0 va 1 ni birlashtirardi — endi u qismlarni
+  `blockIndex` 0, 1, 2… tartibida ketma-ket yig'adi, aks holda 4 lik blok
+  zichlashda ikkiga bo'linib ketardi.
+- Kunlik fan limiti 4 ga ko'tariladi: generatorda `dayCapFor()`
+  (`blockSize` orqali) va `compactSchedule` dagi `quadSet`, UI tomonda esa
+  [Schedule.jsx](src/pages/Schedule.jsx) `subjectDayCap()`.
+- Soat SANOG'I o'zgarmaydi: blok — `weeklyHours` ni guruhlash usuli, shuning
+  uchun ustoz va sinf yuklamasi avvalgidek 4 soat deb hisoblanadi.
+- Sinf kunida 4 ta dars bo'lmasa yoki haftalik soat 4 dan kam bo'lsa blok
+  yig'ilmaydi — `capacityWarnings()` buni ro'yxatga chiqaradi.
+
 **Bekor qilishda soat yo'qolmasligi uchun:**
 
 - **BAND katakka qo'yish taqiqlangan.** `balancePass` ko'chirishni

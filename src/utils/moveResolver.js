@@ -323,9 +323,10 @@ export function softWarnings(ctx, unit, day) {
   if (unit.classIds.length > 1) {
     warns.push("Bu parallel/guruh dars — barcha ishtirokchi sinflarda birga ko'chadi.");
   }
-  const anyDouble = unit.entries.some((l) => Number(l.blockSize) === 2);
-  if (anyDouble) {
-    warns.push("Bu juft (2 soatlik) darsning bir qismi — ikkinchi qismi joyida qoladi.");
+  // Blok 2 yoki 4 soatlik bo'lishi mumkin — qismlari alohida ko'chiriladi
+  const blockLen = Math.max(0, ...unit.entries.map((l) => Number(l.blockSize) || 1));
+  if (blockLen > 1) {
+    warns.push(`Bu ${blockLen} soatlik blokning bir qismi — qolgan qismlari joyida qoladi.`);
   }
   // "Ora kunda": qo'shni kunda shu fan bo'lsa oraliq buziladi
   const dIdx = DAYS.indexOf(day);

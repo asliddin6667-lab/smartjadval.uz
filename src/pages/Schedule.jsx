@@ -257,8 +257,8 @@ export default function SchedulePage({
           {detail.subjectName}
           {isAlt && <span className="pretty-alt-sep"> / {altName}</span>}
           {isBlock && (
-            <span title="2 soat blok — ikkala soat birga ko'chadi" style={{ fontSize: 10.5, fontWeight: 800, marginLeft: 6, opacity: .75 }}>
-              ⛓ {Number(lesson.blockIndex || 0) + 1}/2
+            <span title={`${Number(lesson.blockSize)} soat blok — barcha soatlari birga ko'chadi`} style={{ fontSize: 10.5, fontWeight: 800, marginLeft: 6, opacity: .75 }}>
+              ⛓ {Number(lesson.blockIndex || 0) + 1}/{Number(lesson.blockSize || 2)}
             </span>
           )}
         </div>
@@ -1035,7 +1035,8 @@ export default function SchedulePage({
   }
 
   // ——— BIR KUNDA BIR FAN NECHA SOAT BO'LISHI MUMKIN? ———
-  // "2 soat blok" yoqilgan bo'lsa — 2 soat, aks holda 1 soat.
+  // "4 soat blok" yoqilgan bo'lsa — 4 soat, "2 soat blok"da — 2 soat,
+  // aks holda 1 soat.
   // Agar haftalik soat kunlarga sig'masa, limit avtomatik oshadi
   // (masalan 8 soat / 6 kun => kuniga 2 soat).
   function usableDaysOf(classId) {
@@ -1050,7 +1051,9 @@ export default function SchedulePage({
       || list.find((x) => x.swapEnabled && x.swapSubjectId === subjectId)
       || list.find((x) => pairSideGroups(x).some((g) => g.subjectId === subjectId));
     const need = requiredHours(classId, subjectId);
-    const base = a && (a.allowDouble || (a.swapEnabled && a.swapSubjectId === subjectId)) ? 2 : 1;
+    const base = a && a.allowQuad
+      ? 4
+      : a && (a.allowDouble || (a.swapEnabled && a.swapSubjectId === subjectId)) ? 2 : 1;
     return Math.max(base, Math.ceil(need / usableDaysOf(classId)) || 1);
   }
 
@@ -1351,6 +1354,24 @@ export default function SchedulePage({
         }
       });
     }
+    // ——— 4 SOAT BLOK: kunda ketma-ket 4 soat bormi? ———
+    // Blok hech qachon bo'linmaydi, shuning uchun sinf kunida 4 ta dars
+    // bo'lmasa bu soatlar umuman tushmaydi — sababi ko'rinib tursin.
+    classes.forEach((cls) => {
+      const perDay = sortedTimeslots.filter((ts) => isTeachingSlot(ts) && slotAllowsClass(ts, cls.id)).length;
+      (classSubjects?.[cls.id] || []).forEach((a) => {
+        if (!a?.allowQuad) return;
+        const sName = subjectMap.get(a.subjectId)?.name || "Fan";
+        const h = Number(a.weeklyHours || 0);
+        if (h < 4) {
+          warns.push(`⚠️ ${cls.name} · ${sName}: «4 soat blok» yoqilgan, lekin haftalik soat ${h} ta — blok yig'ilmaydi. Soatni 4 yoki undan ko'p qiling.`);
+          return;
+        }
+        if (perDay < 4) {
+          warns.push(`⛔ ${cls.name} · ${sName}: «4 soat blok» uchun kunda ketma-ket 4 ta dars kerak, lekin sinfda kuniga ${perDay} ta dars bor. Bu soatlar tushmaydi.`);
+        }
+      });
+    });
     // ——— «Kelajak soati» faqat DUSHANBA bo'ladi ———
     // Agar ustoz (yoki sinf) aynan dushanbada dam olsa, bu soat hech qanday
     // jadvalga tushmaydi. Sabab ko'rinmasa, foydalanuvchi generatsiyani

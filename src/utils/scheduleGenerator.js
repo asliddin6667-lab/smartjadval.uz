@@ -113,9 +113,19 @@ export function normalizeAssignment(item, subject) {
       item.allowDouble === undefined
         ? Boolean(subject?.allowDouble)
         : Boolean(item.allowDouble),
+    // ——— 4 SOAT BLOK (faqat superadmin yoqadi) ———
+    // Fan bir kunda KETMA-KET 4 soat tushadi. Fanlar bo'limidagi umumiy
+    // sozlamadan meros olinmaydi — faqat sinf fanida aniq yoqilsa ishlaydi.
+    allowQuad: Boolean(item.allowQuad),
     levelGroups,
   };
 }
+
+// ——— BLOK OBED/TANAFFUSDAN OSHIB O'TISHI MUMKIN ———
+// Ikki dars orasida faqat obed/tanaffus bandi tursa, 2 (yoki 4) soatlik blok
+// shu uzilishdan oshib o'tadi: «4-dars → obed → 6-dars». Uzilish shu
+// chegaradan uzun bo'lsa (smena almashinuvi) — blok o'tmaydi.
+const BRIDGE_MAX_GAP = 60; // daqiqa
 
 function toMinutes(time = "00:00") {
   const [h, m] = String(time).split(":").map(Number);
@@ -452,24 +462,51 @@ export function hasAdjacentSameSubject(schedule, day, tsId, classIds, subjectId,
   });
 }
 
-function splitHoursToBlocks(hours, allowDouble) {
+// ——— 4 SOAT BLOK ———
+// "2 soat blok" bilan bir xil mexanizm, faqat blok uzunligi 4.
+export const QUAD_SIZE = 4;
+
+// Haftalik soatni bloklarga ajratadi.
+//   allowQuad   — avval 4 soatlik bloklar ajraladi (ketma-ket 4 soat);
+//   allowDouble — qolgani 2 soatlik bloklarga bo'linadi;
+//   ikkalasi ham o'chiq bo'lsa — har soat alohida dars.
+// Masalan 6 soat: quad+double → [4, 2]; faqat quad → [4, 1, 1].
+function splitHoursToBlocks(hours, allowDouble, allowQuad) {
   const total = Number(hours || 0);
 
-  if (!allowDouble) {
+  if (!allowDouble && !allowQuad) {
     return Array.from({ length: total }, () => 1);
   }
 
   const blocks = [];
   let remaining = total;
 
-  while (remaining >= 2) {
-    blocks.push(2);
-    remaining -= 2;
+  if (allowQuad) {
+    while (remaining >= QUAD_SIZE) {
+      blocks.push(QUAD_SIZE);
+      remaining -= QUAD_SIZE;
+    }
   }
 
-  if (remaining === 1) blocks.push(1);
+  if (allowDouble) {
+    while (remaining >= 2) {
+      blocks.push(2);
+      remaining -= 2;
+    }
+  }
+
+  while (remaining > 0) {
+    blocks.push(1);
+    remaining -= 1;
+  }
 
   return blocks;
+}
+
+// Blok ustuvorligi: uzun blok kam joyga sig'adi — avvalroq joylanadi.
+// 1 soat → 0, 2 soat → 10 (eski qiymat), 4 soat → 30.
+function blockPriority(blockSize) {
+  return (Math.max(1, Number(blockSize || 1)) - 1) * 10;
 }
 
 // ——— KELAJAK SOATI: nom bo'yicha avtomatik aniqlash ———
@@ -564,6 +601,19 @@ function attemptSchedule(
   for (let i = 0; i < T - 1; i++) {
     nextConsecutive[i] = allIdxById.get(teachingTs[i + 1].id) === allIdxById.get(teachingTs[i].id) + 1;
   }
+  // ——— BLOKNING BO'G'INI ———
+  // blockLink[i]: 0 — bog'lab bo'lmaydi, 1 — bevosita ketma-ket,
+  // 2 — orada obed/tanaffus bandi bor, lekin blok baribir butun turadi.
+  // Obed sloti sinf setkasida katak sanalmaydi — «4-dars → obed → 6-dars»
+  // sinf uchun oyna emas, chop etilgan jadvalda dars qatorma-qator ko'rinadi.
+  const blockLink = new Uint8Array(Math.max(0, T - 1));
+  for (let i = 0; i < T - 1; i++) {
+    if (nextConsecutive[i]) { blockLink[i] = 1; continue; }
+    const gap = toMinutes(teachingTs[i + 1].startTime) - toMinutes(teachingTs[i].endTime);
+    blockLink[i] = gap >= 0 && gap <= BRIDGE_MAX_GAP ? 2 : 0;
+  }
+  const linkOk = (i) => blockLink[i] > 0;
+  const linkBridged = (i) => blockLink[i] === 2;
   // Ustoz/xona bandligi vaqt bandi bo'yicha: bir soatda o'tadigan ikki smena
   // sloti bitta bandga tushadi va bir-birining ustoziga/xonasiga da'vo qila olmaydi.
   const { bucketOf: tsBucket, count: TB } = buildTimeBuckets(teachingTs);
@@ -932,7 +982,7 @@ function attemptSchedule(
         a.weeklyHours = Math.max(0, Number(a.weeklyHours || 0) - lockedH);
         if (a.weeklyHours <= 0) return;
       }
-      const blocks = splitHoursToBlocks(a.weeklyHours, Boolean(a.allowDouble));
+      const blocks = splitHoursToBlocks(a.weeklyHours, Boolean(a.allowDouble), Boolean(a.allowQuad));
       if (a.levelGroupEnabled && a.levelGroupKey) {
         if (!a.levelGroups.length) return;
         const key = `${a.subjectId}__LEVEL__${a.levelGroupKey}`;
@@ -941,7 +991,7 @@ function attemptSchedule(
             type: "levelGroup", subjectId: a.subjectId, levelGroupKey: a.levelGroupKey,
             classIds: [], blocks, levelGroups: a.levelGroups, isCore: a.isCore,
             spacedDays: a.spacedDays,
-            priority: a.weeklyHours + 40 + (a.allowDouble ? 15 : 0) + a.levelGroups.length,
+            priority: a.weeklyHours + 40 + (a.allowQuad ? 30 : a.allowDouble ? 15 : 0) + a.levelGroups.length,
           });
         }
         const group = levelGroupMap.get(key);
@@ -958,12 +1008,12 @@ function attemptSchedule(
       if (a.weekAltEnabled && a.weekAltSubjectId && a.weekAltTeacherId) {
         const altHours = Math.max(1, Math.min(Number(a.weekAltHours || 1), Number(a.weeklyHours || 1)));
         const normalHours = Math.max(0, Number(a.weeklyHours || 0) - altHours);
-        const normalBlocks = splitHoursToBlocks(normalHours, Boolean(a.allowDouble));
+        const normalBlocks = splitHoursToBlocks(normalHours, Boolean(a.allowDouble), Boolean(a.allowQuad));
         normalBlocks.forEach((blockSize) => {
           simpleRequests.push({
             type: "single", classIds: [cls.id], subjectId: a.subjectId,
             teacherId: a.teacherId, roomId: a.roomId,
-            blockSize, priority: a.weeklyHours + (blockSize === 2 ? 10 : 0), isCore: a.isCore,
+            blockSize, priority: a.weeklyHours + blockPriority(blockSize), isCore: a.isCore,
             spacedDays: a.spacedDays,
           });
         });
@@ -1082,7 +1132,7 @@ function attemptSchedule(
               { teacherId: a.teacherId, roomId: a.roomId || "", groupPart: a.groupName1 || "1-guruh" },
               { teacherId: a.teacherId2, roomId: a.roomId2 || "", groupPart: a.groupName2 || "2-guruh" },
             ],
-            blockSize, priority: a.weeklyHours + (blockSize === 2 ? 10 : 0) + 15, isCore: a.isCore,
+            blockSize, priority: a.weeklyHours + blockPriority(blockSize) + 15, isCore: a.isCore,
             spacedDays: a.spacedDays,
           });
         });
@@ -1093,7 +1143,7 @@ function attemptSchedule(
             type: "group", subjectId: a.subjectId, teacherId: a.teacherId, roomId: a.roomId,
             groupKey: a.groupKey, blocks, classIds: [], isCore: a.isCore,
             spacedDays: a.spacedDays,
-            priority: a.weeklyHours + 20 + (a.allowDouble ? 10 : 0),
+            priority: a.weeklyHours + 20 + (a.allowQuad ? 20 : a.allowDouble ? 10 : 0),
           });
         }
         const group = groupMap.get(key);
@@ -1105,7 +1155,7 @@ function attemptSchedule(
         blocks.forEach((blockSize) => {
           simpleRequests.push({
             type: "single", classIds: [cls.id], subjectId: a.subjectId, teacherId: a.teacherId,
-            roomId: a.roomId, blockSize, priority: a.weeklyHours + (blockSize === 2 ? 10 : 0), isCore: a.isCore,
+            roomId: a.roomId, blockSize, priority: a.weeklyHours + blockPriority(blockSize), isCore: a.isCore,
             spacedDays: a.spacedDays,
           });
         });
@@ -1129,7 +1179,7 @@ function attemptSchedule(
         // Kunlik fan limiti 2-fan uchun ham hisoblansin
         swapSubjectId: first.subjectId || "",
         teacherIds, roomIds, blockSize,
-        priority: pg.weeklyHours + (blockSize === 2 ? 10 : 0) + 18
+        priority: pg.weeklyHours + blockPriority(blockSize) + 18
           + (pg.classIds.length > 1 ? 12 : 0),
       });
     });
@@ -1507,7 +1557,7 @@ function attemptSchedule(
       for (let i = 0; i + req.blockSize <= T; i++) {
         let ok = true;
         for (let o = 0; o < req.blockSize; o++) {
-          if (o > 0 && !nextConsecutive[i + o - 1]) { ok = false; break; }
+          if (o > 0 && !linkOk(i + o - 1)) { ok = false; break; }
           for (const ci of req.cIdxs) { if (lunchGrid[ci * DT + d * T + i + o] || slotClassBlock[ci * DT + d * T + i + o]) { ok = false; break; } }
           if (!ok) break;
           // Ustoz setkasida qulflangan soat — bu katak umuman ishlatilmaydi
@@ -1574,7 +1624,7 @@ function attemptSchedule(
   function rawFree(req, d, i) {
     if (i < 0 || i + req.blockSize > T) return false;
     for (let o = 0; o < req.blockSize; o++) {
-      if (o > 0 && !nextConsecutive[i + o - 1]) return false;
+      if (o > 0 && !linkOk(i + o - 1)) return false;
       const off = d * T + i + o;
       const toff = tbOff(d, i + o);
       for (const ci of req.cIdxs) {
@@ -1799,8 +1849,8 @@ function attemptSchedule(
     const checks = [];
     const before = i - 1;
     const after = i + blockSize;
-    if (before >= 0 && nextConsecutive[before]) checks.push(before);
-    if (after < T && nextConsecutive[after - 1]) checks.push(after);
+    if (before >= 0 && linkOk(before)) checks.push(before);
+    if (after < T && linkOk(after - 1)) checks.push(after);
     for (const k of checks) {
       const cell = schedule[day][teachingTs[k].id];
       for (const l of cell) {
@@ -1879,11 +1929,15 @@ function attemptSchedule(
   function scoreCandidate(req, d, i) {
     const blockSize = req.blockSize;
     const adjacencyPenalty = blockSize === 1 && adjacentSame(d, i, blockSize, req) ? 1500 : 0;
+    // Blok obed ustidan o'tsa — yumshoq jarima: haqiqiy ketma-ket juftlik
+    // afzal, obedli variant faqat boshqa iloji qolmaganda tanlanadi.
+    let bridgePenalty = 0;
+    for (let o = 1; o < blockSize; o++) if (linkBridged(i + o - 1)) bridgePenalty += BRIDGE_W;
     let compactPenalty = 0;
     for (const ci of req.cIdxs) { for (let o = 0; o < blockSize; o++) { compactPenalty += emptyBeforeCount(d, ci, i + o) * GAP_HARD_W; } }
     let repeatPenalty = 0;
     for (const ci of req.cIdxs) { repeatPenalty += classDailySubj[(ci * D + d) * S + req.sIdx] * REPEAT_HARD_W; }
-    const spreadPenalty = Math.abs((d % 2) - (blockSize === 2 ? 0 : 1));
+    const spreadPenalty = Math.abs((d % 2) - (blockSize >= 2 ? 0 : 1));
     let classLoadPenalty = 0;
     for (const ci of req.cIdxs) { classLoadPenalty += classDayCount[ci * D + d]; }
     // Kunlik me'yordan oshib ketmasin — darslar kunlarga teng tarqalsin
@@ -1925,7 +1979,7 @@ function attemptSchedule(
     const spacedPen = spacedPenalty(req, d);
     const supervisePen = supervisePenalty(req, d, i);
     const randomPenalty = rng() * RAND_W;
-    return compactPenalty + repeatPenalty + classLoadPenalty + teacherPenalty + spreadPenalty + corePenalty + adjacencyPenalty + dayCapPenalty + spacedPen + supervisePen + fixedPen + randomPenalty;
+    return compactPenalty + repeatPenalty + classLoadPenalty + teacherPenalty + spreadPenalty + corePenalty + adjacencyPenalty + bridgePenalty + dayCapPenalty + spacedPen + supervisePen + fixedPen + randomPenalty;
   }
   function bestCandidate(req, withForwardCheck) {
     let best = null;
@@ -1944,6 +1998,8 @@ function attemptSchedule(
   const REPEAT_HARD_W = 260; // bir kunda fan takrorlansa — sezilarli jarima
   // Kun o'rtasida bo'sh soat (oyna) — eng og'ir jarima: sinf nazoratsiz qoladi
   const GAP_HARD_W = 5200;
+  // Blok obed/tanaffusdan oshib o'tgani — taqiq emas, afzallik masalasi
+  const BRIDGE_W = 1200;
   // Boshlang'ich sinf rahbari chiqib ketgan soat — oynadan yengil, lekin
   // kunlik yuk tengligidan (DAYCAP_W) ancha og'ir.
   const SUPERVISE_W = 2600;
@@ -2534,7 +2590,7 @@ function attemptSchedule(
         if (k + r.blockSize > T) continue;
         let ok = true;
         for (let o = 1; o < r.blockSize; o++) {
-          if (!tset.has(k + o) || used.has(k + o) || !nextConsecutive[k + o - 1]) { ok = false; break; }
+          if (!tset.has(k + o) || used.has(k + o) || !linkOk(k + o - 1)) { ok = false; break; }
         }
         if (!ok) continue;
         if (!fitsAt(r, d, k)) continue;
@@ -3875,6 +3931,15 @@ export function compactSchedule(
   for (let i = 0; i < T - 1; i++) {
     nextConsecutive[i] = allIdxById.get(teachingTs[i + 1].id) === allIdxById.get(teachingTs[i].id) + 1;
   }
+  // Blok obed/tanaffusdan oshib o'tishi mumkin — qoida generatordagi bilan
+  // bir xil, aks holda zichlash bunday blokni ikkiga bo'lib yuborardi.
+  const blockLink = new Uint8Array(Math.max(0, T - 1));
+  for (let i = 0; i < T - 1; i++) {
+    if (nextConsecutive[i]) { blockLink[i] = 1; continue; }
+    const gap = toMinutes(teachingTs[i + 1].startTime) - toMinutes(teachingTs[i].endTime);
+    blockLink[i] = gap >= 0 && gap <= BRIDGE_MAX_GAP ? 2 : 0;
+  }
+  const linkOk = (i) => blockLink[i] > 0;
   // Zichlashda ham ustoz/xona bandligi vaqt bandi bo'yicha tekshiriladi
   const { bucketOf: tsBucket, count: TB } = buildTimeBuckets(teachingTs);
   const DTB = D * TB;
@@ -3902,12 +3967,14 @@ export function compactSchedule(
   const coreSet = new Set();
   const hoursMap = new Map(); // `${cid}|${subjectId}` -> haftalik soat
   const doubleSet = new Set(); // 2 soat blok yoqilgan sinf+fan
+  const quadSet = new Set();   // 4 soat blok yoqilgan sinf+fan
   Object.entries(classSubjects || {}).forEach(([cid, list]) => {
     (Array.isArray(list) ? list : []).forEach((a) => {
       if (!a || !a.subjectId) return;
       if (a.spacedDays) spacedSet.add(`${cid}|${a.subjectId}`);
       if (a.isCore) coreSet.add(`${cid}|${a.subjectId}`);
       if (a.allowDouble) doubleSet.add(`${cid}|${a.subjectId}`);
+      if (a.allowQuad) quadSet.add(`${cid}|${a.subjectId}`);
       const k = `${cid}|${a.subjectId}`;
       hoursMap.set(k, (hoursMap.get(k) || 0) + Number(a.weeklyHours || 0));
       if (a.swapEnabled && a.swapSubjectId) {
@@ -3999,16 +4066,22 @@ export function compactSchedule(
       for (const [k, g] of perDay[d][i]) {
         const tag = `${d}|${i}|${k}`;
         if (consumed.has(tag)) continue;
+        // Blok (2 yoki 4 soat) BUTUN birlik bo'lib ko'chadi: blockIndex
+        // 0, 1, 2, … qismlari ketma-ket kataklardan yig'iladi. Uzunlik
+        // qat'iy emas — 4 soatlik blok ham shu yerda butun qoladi.
         const parts = [g];
         let len = 1;
-        if (g.bi === 0 && i + 1 < T && nextConsecutive[i]) {
-          for (const [k2, g2] of perDay[d][i + 1]) {
-            if (g2.base === g.base && g2.bi === 1) {
-              parts.push(g2);
-              consumed.add(`${d}|${i + 1}|${k2}`);
-              len = 2;
-              break;
+        if (g.bi === 0) {
+          while (i + len < T && linkOk(i + len - 1)) {
+            let next = null;
+            let nextKey = "";
+            for (const [k2, g2] of perDay[d][i + len]) {
+              if (g2.base === g.base && g2.bi === len) { next = g2; nextKey = k2; break; }
             }
+            if (!next) break;
+            parts.push(next);
+            consumed.add(`${d}|${i + len}|${nextKey}`);
+            len += 1;
           }
         }
         const entries = parts.flatMap((x) => x.entries);
@@ -4041,6 +4114,7 @@ export function compactSchedule(
         const capFor = (cid, ci, sid) => {
           let cap = len;
           if (doubleSet.has(`${cid}|${sid}`)) cap = Math.max(cap, 2);
+          if (quadSet.has(`${cid}|${sid}`)) cap = Math.max(cap, QUAD_SIZE);
           const h = hoursMap.get(`${cid}|${sid}`) || 0;
           const ud = Math.max(1, usableDays[ci] || 1);
           if (h > 0) cap = Math.max(cap, Math.ceil(h / ud));
@@ -4113,7 +4187,7 @@ export function compactSchedule(
       }
     }
     for (let o = 0; o < u.len; o++) {
-      if (o > 0 && !nextConsecutive[i + o - 1]) return false;
+      if (o > 0 && !linkOk(i + o - 1)) return false;
       const off = d * T + i + o;
       const toff = tbOff(d, i + o);
       for (const ci of u.cIdxs) if (blocked[ci * DT + off] || classGrid[ci * DT + off]) return false;
@@ -4132,7 +4206,7 @@ export function compactSchedule(
       for (let i = 0; i + u.len <= T; i++) {
         let ok = true;
         for (let o = 0; o < u.len && ok; o++) {
-          if (o > 0 && !nextConsecutive[i + o - 1]) ok = false;
+          if (o > 0 && !linkOk(i + o - 1)) ok = false;
           for (const ci of u.cIdxs) if (blocked[ci * DT + d * T + i + o]) { ok = false; break; }
           if (!ok) break;
           for (const id of u.tids) {
@@ -4353,7 +4427,7 @@ export function compactSchedule(
         if (k + u.len > T) continue;
         let ok = true;
         for (let o = 1; o < u.len; o++) {
-          if (!tset.has(k + o) || used.has(k + o) || !nextConsecutive[k + o - 1]) { ok = false; break; }
+          if (!tset.has(k + o) || used.has(k + o) || !linkOk(k + o - 1)) { ok = false; break; }
         }
         if (!ok) continue;
         if (!fits(u, d, k)) continue;
