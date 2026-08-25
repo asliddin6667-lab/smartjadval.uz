@@ -1144,18 +1144,35 @@ export default function SchedulePage({
       (classSubjects?.[cls.id] || []).forEach((a, idx) => {
         const h = Number(a.weeklyHours || 0);
         const lg = String(a.levelGroupKey || "").trim();
+        const gk = String(a.groupKey || "").trim();
+        // Haqiqiy bo'linish: 1- va 2-guruhga TURLI ustoz. Bir xil ustoz
+        // qo'yilgan bo'lsa generator buni oddiy dars deb joylaydi.
+        const realSplit = Boolean(a.splitEnabled && a.teacherId2 && a.teacherId2 !== a.teacherId);
         if (a.levelGroupEnabled && a.levelGroups?.length) {
-          // Daraja guruhlari: bir xil kalitli sinflar birga o'qiydi
-          a.levelGroups.forEach((g, gi) => add(g.teacherId, `LG|${lg}|${a.subjectId}|${gi}`, h, cls.id, a.subjectId));
+          // Daraja guruhlari: bir xil KALITLI sinflar birga, AYNI SOATDA
+          // o'qiydi (generator ularni bitta so'rovga qo'shadi). Shuning uchun
+          // kalitga guruh INDEKSI emas, USTOZ id'si kiradi — guruhlar tartibi
+          // sinflarda har xil bo'lsa ham soat ikkilanmaydi. Kalit bo'sh bo'lsa
+          // sinflar birga o'qimaydi: kalit sinfning O'ZIGA xos bo'ladi.
+          const base = lg ? `LG|${lg}|${a.subjectId}` : `LGC|${cls.id}|${idx}`;
+          a.levelGroups.forEach((g) => add(g.teacherId, `${base}|${g.teacherId}`, h, cls.id, a.subjectId));
         } else if (a.pairEnabled) {
           // Bir vaqtda bir nechta fan: kartadagi guruhlar AYNI SOATDA o'tadi va
           // parallel sinflar bitta kartani baham ko'radi — har ustoz kartada
           // BIR MARTA sanaladi (`add()` bir xil kalitda max oladi).
           const card = pairCardKey(a, cls.id);
           pairAllGroups(a).forEach((g) => add(g.teacherId, `${card}|${g.teacherId}`, h, cls.id, g.subjectId));
+        } else if (gk && !realSplit) {
+          // 🔁 PARALLEL DARS (`groupKey`): bir nechta sinf AYNI SOATDA, bitta
+          // ustozdan o'qiydi — generator ularni BITTA so'rovga birlashtiradi
+          // (scheduleGenerator `groupMap`, kalit: fan + ustoz + xona + guruh).
+          // Demak ustoz soati ham BIR MARTA sanalishi kerak; aks holda 2
+          // soatlik dars 5 sinfda 10 soat bo'lib ko'rinadi va «smenasiga
+          // sig'maydi» degan yolg'on ogohlantirish chiqadi.
+          add(a.teacherId, `G|${a.subjectId}|${a.teacherId}|${a.roomId || ""}|${gk}`, h, cls.id, a.subjectId);
         } else {
           add(a.teacherId, `C|${cls.id}|${idx}`, h, cls.id, a.subjectId);
-          if (a.splitEnabled && a.teacherId2) add(a.teacherId2, `C2|${cls.id}|${idx}`, h, cls.id, a.subjectId);
+          if (realSplit) add(a.teacherId2, `C2|${cls.id}|${idx}`, h, cls.id, a.subjectId);
         }
         if (a.swapEnabled && a.swapTeacherId) add(a.swapTeacherId, `SW|${cls.id}|${idx}`, h, cls.id, a.swapSubjectId);
         if (a.weekAltEnabled && a.weekAltTeacherId) add(a.weekAltTeacherId, `WA|${cls.id}|${idx}`, Number(a.weekAltHours || 1), cls.id, a.weekAltSubjectId);
@@ -1218,35 +1235,42 @@ export default function SchedulePage({
   }
 
   // Ustoz sig'imi bo'yicha ogohlantirishlar (matn ko'rinishida)
-  function teacherCapacityWarnings() {
+  // `scheduleComplete` — jadval ALLAQACHON to'liq chiqqan bo'lsa, "smenaga
+  // sig'maydi" degan BASHORAT amalda rad etilgan: uni ko'rsatish faqat
+  // chalg'itadi. «Maksimal haftalik soat» limiti esa jadvaldan qat'i nazar
+  // buzilgan bo'lishi mumkin — u har doim ko'rinadi.
+  function teacherCapacityWarnings(scheduleComplete = false) {
     return teacherLoadRows()
-      .filter((r) => r.overSlots || r.overLimit)
+      .filter((r) => (r.overSlots && !scheduleComplete) || r.overLimit)
       .slice(0, 6)
       .map((r) => {
         const where = r.classNames.slice(0, 5).join(", ") + (r.classNames.length > 5 ? "…" : "");
-        if (r.overSlots) {
+        if (r.overSlots && !scheduleComplete) {
           return `👤 ${r.name}: haftada ${r.hours} soat dars berishi kerak, lekin uning smenasida atigi ${r.avail} ta dars soati bor — ${r.hours - r.avail} soat HECH QANDAY jadvalga sig'maydi (${where}). Yechim: shu fanlarga ikkinchi ustoz qo'ying yoki soatni kamaytiring.`;
         }
         return `👤 ${r.name}: ${r.hours} soat yuklama, lekin «maksimal haftalik soat» ${r.max} qilib belgilangan (${where}). Limitni oshiring yoki yukni bo'ling.`;
       });
   }
 
-  function capacityWarnings() {
+  function capacityWarnings(scheduleComplete = false) {
     // Avval ustoz sig'imi: bu "soat tushmadi"ning eng ko'p uchraydigan sababi
-    const warns = [...teacherCapacityWarnings()];
-    classes.forEach((cls) => {
-      const perDay = sortedTimeslots.filter((ts) => isTeachingSlot(ts) && slotAllowsClass(ts, cls.id)).length;
-      const offDays = Array.isArray(cls.offDays) ? cls.offDays : [];
-      const avail = perDay * (DAYS.length - offDays.length);
-      let total = 0;
-      (classSubjects?.[cls.id] || []).forEach((a) => {
-        total += Number(a.weeklyHours || 0);
-        if (a.swapEnabled && a.swapSubjectId) total += Number(a.weeklyHours || 0);
+    const warns = [...teacherCapacityWarnings(scheduleComplete)];
+    // Sinf sig'imi ham BASHORAT — jadval to'liq chiqqan bo'lsa, u rad etilgan.
+    if (!scheduleComplete) {
+      classes.forEach((cls) => {
+        const perDay = sortedTimeslots.filter((ts) => isTeachingSlot(ts) && slotAllowsClass(ts, cls.id)).length;
+        const offDays = Array.isArray(cls.offDays) ? cls.offDays : [];
+        const avail = perDay * (DAYS.length - offDays.length);
+        let total = 0;
+        (classSubjects?.[cls.id] || []).forEach((a) => {
+          total += Number(a.weeklyHours || 0);
+          if (a.swapEnabled && a.swapSubjectId) total += Number(a.weeklyHours || 0);
+        });
+        if (total > avail) {
+          warns.push(`${cls.name}: jami ${total} soat kerak, lekin bo'sh joy ${avail} ta (${DAYS.length - offDays.length} kun × ${perDay} dars). ${total - avail} soat sig'maydi — dars/kun sonini oshiring yoki soatni kamaytiring.`);
+        }
       });
-      if (total > avail) {
-        warns.push(`${cls.name}: jami ${total} soat kerak, lekin bo'sh joy ${avail} ta (${DAYS.length - offDays.length} kun × ${perDay} dars). ${total - avail} soat sig'maydi — dars/kun sonini oshiring yoki soatni kamaytiring.`);
-      }
-    });
+    }
     // ——— «Kelajak soati» faqat DUSHANBA bo'ladi ———
     // Agar ustoz (yoki sinf) aynan dushanbada dam olsa, bu soat hech qanday
     // jadvalga tushmaydi. Sabab ko'rinmasa, foydalanuvchi generatsiyani
@@ -2047,55 +2071,68 @@ export default function SchedulePage({
             </div>
           )}
 
-          {setSchedule && (() => {
+          {setSchedule && visibleClasses.length > 0 && (() => {
             const gm = globalMissing();
-            const caps = capacityWarnings();
-            if (!gm.length && !caps.length) {
-              if (!visibleClasses.length) return null;
-              const anyLessons = DAYS.some((d) => sortedTimeslots.some((s) => (schedule?.[d]?.[s.id] || []).length));
-              if (!anyLessons) return null;
-              return (
-                <div style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 12, padding: "10px 14px", marginBottom: 14, color: "#065f46", fontWeight: 600 }}>
-                  ✅ Barcha fan soatlari to'liq joylashtirildi (100%).
-                </div>
-              );
-            }
             const totalMissing = gm.reduce((s, x) => s + x.total, 0);
+            const anyLessons = DAYS.some((d) => sortedTimeslots.some((s) => (schedule?.[d]?.[s.id] || []).length));
+            // Jadval chiqqan va birorta soat tushmay qolmagan — demak sig'im
+            // yetgan. Shunda «sig'maydi» degan BASHORATLAR ko'rsatilmaydi:
+            // ular amalda rad etilgan va faqat chalg'itadi.
+            const complete = anyLessons && totalMissing === 0;
+            const caps = capacityWarnings(complete);
+            if (!anyLessons && !gm.length && !caps.length) return null;
             return (
-              <div style={{ background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 12, padding: 16, marginBottom: 16 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 6 }}>
-                  <div style={{ fontWeight: 800, fontSize: 16, color: "#9a3412" }}>
-                    ⚠️ {totalMissing} soat to'liq joylashmadi — yechim tavsiyalari
-                  </div>
-                  <button type="button" className="btn btn-success" onClick={resolveAll}>
-                    🔧 Hammasini bir bosishda hal qilish
-                  </button>
-                </div>
+              <>
+                {/* 1) HAQIQATAN tushmagan soat — «joylashmadi» faqat shu yerda */}
+                {totalMissing > 0 && (
+                  <div style={{ background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 6 }}>
+                      <div style={{ fontWeight: 800, fontSize: 16, color: "#9a3412" }}>
+                        ⚠️ {totalMissing} soat to'liq joylashmadi — yechim tavsiyalari
+                      </div>
+                      <button type="button" className="btn btn-success" onClick={resolveAll}>
+                        🔧 Hammasini bir bosishda hal qilish
+                      </button>
+                    </div>
 
-                {caps.length > 0 && (
-                  <div style={{ background: "#fff", border: "1px solid #fecaca", borderRadius: 10, padding: 10, marginBottom: 10 }}>
-                    <div style={{ fontWeight: 700, color: "#b91c1c", marginBottom: 4 }}>Sig'im yetishmasligi:</div>
-                    {caps.map((w, i) => <div key={i} style={{ fontSize: 13, color: "#7f1d1d", marginTop: i ? 3 : 0 }}>• {w}</div>)}
+                    {gm.map((m) => (
+                      <div key={m.subjectId} style={{ background: "#fff", border: "1px solid #fed7aa", borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                        <div style={{ fontWeight: 700, color: "#9a3412" }}>
+                          {m.name}: {m.total} soat tushmadi <span style={{ fontWeight: 400, color: "#a16207" }}>({m.classes.slice(0, 6).join(", ")}{m.classes.length > 6 ? "…" : ""})</span>
+                        </div>
+                        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+                          {suggestionsFor(m.subjectId).map((s, i) => (
+                            <div key={i} style={{ fontSize: 13, color: "#7c2d12" }}>{s}</div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+
+                    <div style={{ fontSize: 12, color: "#9a3412", marginTop: 4 }}>
+                      Sozlagandan so'ng «⚡ Avtomatik jadval»ni qayta bosing. Yoki bo'sh katakdagi <b>＋</b> orqali qo'lda qo'shing.
+                    </div>
                   </div>
                 )}
 
-                {gm.map((m) => (
-                  <div key={m.subjectId} style={{ background: "#fff", border: "1px solid #fed7aa", borderRadius: 10, padding: 12, marginBottom: 8 }}>
-                    <div style={{ fontWeight: 700, color: "#9a3412" }}>
-                      {m.name}: {m.total} soat tushmadi <span style={{ fontWeight: 400, color: "#a16207" }}>({m.classes.slice(0, 6).join(", ")}{m.classes.length > 6 ? "…" : ""})</span>
-                    </div>
-                    <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
-                      {suggestionsFor(m.subjectId).map((s, i) => (
-                        <div key={i} style={{ fontSize: 13, color: "#7c2d12" }}>{s}</div>
-                      ))}
-                    </div>
+                {/* 2) Hammasi joylashgan — yashil xabar (ogohlantirish bo'lsa ham) */}
+                {complete && (
+                  <div style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 12, padding: "10px 14px", marginBottom: 14, color: "#065f46", fontWeight: 600 }}>
+                    ✅ Barcha fan soatlari to'liq joylashtirildi (100%).
                   </div>
-                ))}
+                )}
 
-                <div style={{ fontSize: 12, color: "#9a3412", marginTop: 4 }}>
-                  Sozlagandan so'ng «⚡ Avtomatik jadval»ni qayta bosing. Yoki bo'sh katakdagi <b>＋</b> orqali qo'lda qo'shing.
-                </div>
-              </div>
+                {/* 3) Sozlama ogohlantirishlari — ALOHIDA quti, tushmagan soatdan mustaqil */}
+                {caps.length > 0 && (
+                  <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 12, padding: 14, marginBottom: 16 }}>
+                    <div style={{ fontWeight: 800, color: "#92400e", marginBottom: 6 }}>
+                      {totalMissing > 0
+                        ? "Mumkin bo'lgan sabablar (sozlamalarda):"
+                        : "⚠️ Sozlamalarda e'tibor beradigan joylar — jadval baribir to'liq chiqdi:"}
+                    </div>
+                    {caps.map((w, i) => <div key={i} style={{ fontSize: 13, color: "#78350f", marginTop: i ? 4 : 0 }}>• {w}</div>)}
+                  </div>
+                )}
+              </>
             );
           })()}
 

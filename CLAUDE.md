@@ -251,6 +251,25 @@ tushib, `isValidRequest` butun kartani jimgina tashlab yuborardi. UI tomonda esa
 a'zo sinf guruhlari `pairAlignSlots(owner, member)` orqali ASOSIY sinf tuzilishi
 bo'yicha ko'rsatiladi.
 
+Xuddi shu qoida **birga o'qiydigan boshqa rejimlarga** ham tegishli — ular ham
+bir nechta sinfni BITTA darsga birlashtiradi, demak ustoz soati bir marta
+sanaladi:
+
+| Rejim | Dedup kaliti | Generatordagi manba |
+|---|---|---|
+| 🔁 Parallel dars | `groupKey` + fan + ustoz + xona | `groupMap` ([scheduleGenerator.js](src/utils/scheduleGenerator.js)) |
+| Daraja guruhlari | `levelGroupKey` + fan + **ustoz** (guruh indeksi EMAS — tartib sinflarda har xil bo'lishi mumkin) | `levelGroupMap` |
+| Parallel sinflar | `pairCardKey(a, classId)` + ustoz | `pairMap` |
+
+Kalit bo'sh bo'lsa sinflar birga o'qimaydi — u holda kalit sinfga xos bo'lishi
+kerak, aks holda aloqasiz sinflar noto'g'ri birlashib ketadi.
+
+**Buni unutish qimmatga tushadi:** Schedule `computeTeacherLoadRows` da
+`groupKey` hisobga olinmagani uchun 2 soatlik parallel dars 5 sinfda 10 soat
+bo'lib ko'rinardi. Natijada «ustozning smenasiga sig'maydi» degan yolg'on
+ogohlantirish chiqar, `hardBlocked` esa generatsiya vaqtini 30 s dan 10 s ga
+qisqartirib qo'yardi.
+
 **FAN esa TAKRORLANISHI MUMKIN** — masalan 1-guruh Fizika (Asilbek), 3-guruh ham
 Fizika (Bekzod). Shu sababli soat sanashda ehtiyot bo'ling: guruhlar AYNI SOATDA
 o'qiganidan, sinf setkasida har bir **TURLI** fan `weeklyHours` ta soat egallaydi
