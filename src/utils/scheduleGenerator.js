@@ -1027,9 +1027,17 @@ function attemptSchedule(
         if (a.weeklyHours <= 0) return;
       }
       const blocks = splitHoursToBlocks(a.weeklyHours, Boolean(a.allowDouble), Boolean(a.allowQuad));
-      if (a.levelGroupEnabled && a.levelGroupKey) {
-        if (!a.levelGroups.length) return;
-        const key = `${a.subjectId}__LEVEL__${a.levelGroupKey}`;
+      // ⚠️ Kalit (`levelGroupKey`) SHART EMAS — u faqat sinflarni birga
+      // o'qitish uchun kerak. Ilgari kalitsiz daraja guruhi butunlay
+      // e'tiborsiz qolar va dars oddiy (bitta ustozli) bo'lib joylanardi:
+      // ikkinchi daraja ustozi jimgina yo'qolardi. Boshqa hamma joy
+      // (`buildTeacherStreams`, `levelGroupInfo`, `fillTemplate`) kalitsiz
+      // guruhni ham hisobga oladi, shuning uchun generator ham shunday
+      // qiladi. Kalitsizda guruh faqat SHU sinfga tegishli bo'ladi.
+      if (a.levelGroupEnabled && a.levelGroups.length) {
+        const key = a.levelGroupKey
+          ? `${a.subjectId}__LEVEL__${a.levelGroupKey}`
+          : `${a.subjectId}__LEVEL__CLS__${cls.id}`;
         if (!levelGroupMap.has(key)) {
           levelGroupMap.set(key, {
             type: "levelGroup", subjectId: a.subjectId, levelGroupKey: a.levelGroupKey,

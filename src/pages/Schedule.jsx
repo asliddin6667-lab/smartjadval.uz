@@ -8,6 +8,7 @@ import { exportColoredSchedule } from "../utils/coloredScheduleExport";
 import {
   collectCardEntries, unitOf, resolveMove, applyActions, softWarnings, checkPlace,
   findAutoPartner, onlyBusyReasons, unitLabel, slotLabel, superviseMoveWarnings,
+  cellsAt, teacherIdsOf,
 } from "../utils/moveResolver";
 import { slotDisplayNumber } from "../utils/shiftSlots";
 import { pairSideGroups, pairAllGroups, pairCardKey } from "../utils/pairGroups";
@@ -100,6 +101,21 @@ function isBlockPart(lesson) {
   return Number(lesson?.blockSize || 1) > 1;
 }
 
+// Guruh sozlamasi topilmagan fan — oddiy dars, katakda bitta yozuv
+const PLAIN_PLAN = { kind: "free", need: 1, groups: [], row: null };
+
+// KARTA kaliti — [moveResolver.js](../utils/moveResolver.js) dagi `sameCard`
+// bilan AYNI qoida: «bir vaqtda bir nechta fan» guruhlarini `pairKey`
+// bog'laydi (ularning sinflari har xil bo'lishi mumkin, shuning uchun sinf
+// solishtirilmaydi), qolgan darslar esa fan + parallel kaliti + blok indeksi
+// + sinflar bo'yicha birlashadi. Ikki joyda ajralib ketmasin: ajralsa
+// guruhlar «boshqa karta» bo'lib ko'rinadi va yarim karta topilmay qoladi.
+function partCardKey(l) {
+  return l?.pairKey
+    ? `P|${l.pairKey}|${l.blockIndex ?? ""}`
+    : `${l?.subjectId || ""}|${l?.groupKey || ""}|${l?.blockIndex ?? ""}|${classIdsOf(l).slice().sort().join("~")}`;
+}
+
 export default function SchedulePage({
   classes = [],
   subjects = [],
@@ -158,6 +174,137 @@ export default function SchedulePage({
 
   function getName(map, id, fallback = "—") {
     return map.get(id)?.name || fallback;
+  }
+
+  // ═══════════ KARTA TO'LIQMI? — GURUH-HISOBLI SANOQ ═══════════
+  // ⚠️ Guruhli dars bitta katakda BIR NECHTA yozuv bo'lib turadi:
+  // «2 guruhga bo'lish» — ikki ustoz, daraja guruhlari — har daraja,
+  // «bir vaqtda bir nechta fan» — har guruh. Ilgari sanoq faqat
+  // «bu katakda shu fan bormi?» deb qarardi, shuning uchun 2-guruh yozuvi
+  // tushib qolsa ham foiz 100% ko'rinardi, ustozning soati esa JIMGINA
+  // yo'qolardi (3-V · Ingliz tili: 6 katak bor edi, lekin ikkitasida faqat
+  // 1-guruh turardi — 2-guruh ustozi 2 soatdan ayrilgan).
+  //
+  // Endi qoida bitta: YARIM KARTA — SOAT EMAS. Shu qoidaga
+  // `countPlacedUnits`, `placedHours`, `fillRemaining` va ekrandagi
+  // «🧩 yarim tushgan darslar» ro'yxati birdek tayanadi.
+  //
+  // Reja generatordagi TIKLANISH qoidalarini takrorlaydi: takroriy ustozli
+  // daraja tashlanadi (`cleanLevelGroups`), ikkala guruhga bir xil ustoz
+  // qo'yilgan «bo'linish» esa oddiy dars deb qaraladi.
+  const cardPlanIdx = useMemo(() => {
+    const idx = new Map();
+    classes.forEach((cls) => {
+      const bySubject = new Map();
+      const put = (sid, plan) => { if (sid && !bySubject.has(sid)) bySubject.set(sid, plan); };
+      (classSubjects?.[cls.id] || []).forEach((a) => {
+        if (!a) return;
+        if (a.pairEnabled) {
+          const groups = pairAllGroups(a)
+            .filter((g) => g.subjectId && g.teacherId)
+            .map((g) => ({ name: g.name, teacherId: g.teacherId, roomId: g.roomId || "", subjectId: g.subjectId, shared: g.shared }));
+          const plan = { kind: "pair", need: Math.max(1, groups.length), groups, row: a };
+          groups.forEach((g) => put(g.subjectId, plan));
+          return;
+        }
+        if (a.levelGroupEnabled && Array.isArray(a.levelGroups) && a.levelGroups.length) {
+          const seen = new Set();
+          const groups = [];
+          a.levelGroups.forEach((g, i) => {
+            if (!g?.teacherId || seen.has(g.teacherId)) return;
+            seen.add(g.teacherId);
+            groups.push({ name: g.name || `${i + 1}-guruh`, teacherId: g.teacherId, roomId: g.roomId || "", subjectId: a.subjectId });
+          });
+          put(a.subjectId, { kind: "level", need: Math.max(1, groups.length), groups, row: a });
+          return;
+        }
+        if (a.splitEnabled && a.teacherId2 && a.teacherId2 !== a.teacherId) {
+          put(a.subjectId, {
+            kind: "split", need: 2, row: a,
+            groups: [
+              { name: a.groupName1 || "1-guruh", teacherId: a.teacherId, roomId: a.roomId || "", subjectId: a.subjectId },
+              { name: a.groupName2 || "2-guruh", teacherId: a.teacherId2, roomId: a.roomId2 || "", subjectId: a.subjectId },
+            ],
+          });
+          return;
+        }
+        put(a.subjectId, {
+          kind: "plain", need: 1, row: a,
+          groups: [{ name: "", teacherId: a.teacherId || "", roomId: a.roomId || "", subjectId: a.subjectId }],
+        });
+      });
+      idx.set(cls.id, bySubject);
+    });
+    return idx;
+  }, [classes, classSubjects]);
+
+  function cardPlan(classId, subjectId) {
+    return cardPlanIdx.get(classId)?.get(subjectId) || PLAIN_PLAN;
+  }
+
+  // Katakdagi BITTA sinfning kartalari: kalit → yozuvlar ro'yxati
+  function cardsOfClass(cell, classId) {
+    const map = new Map();
+    (Array.isArray(cell) ? cell : []).forEach((l) => {
+      if (!l || !classIdsOf(l).includes(classId)) return;
+      const key = partCardKey(l);
+      const arr = map.get(key);
+      if (arr) arr.push(l);
+      else map.set(key, [l]);
+    });
+    return map;
+  }
+
+  // Kartada yetishmayotgan guruhlar. Bo'sh massiv — karta TO'LIQ.
+  // Guruhni USTOZ ajratadi: bir kartada bir ustoz ikki guruhda tura olmaydi
+  // (bu qoida generatorda ham, UI tekshiruvlarida ham bir xil).
+  function cardGaps(classId, parts) {
+    const plan = cardPlan(classId, parts?.[0]?.subjectId);
+    if (plan.need <= 1 || plan.groups.length <= 1) return [];
+    const have = new Set();
+    parts.forEach((p) => { if (p?.teacherId) have.add(p.teacherId); });
+    return plan.groups.filter((g) => g.teacherId && !have.has(g.teacherId));
+  }
+
+  // Katakda shu sinfning shu fani TO'LIQ turibdimi? (yarim karta — yo'q)
+  function cellHasFullSubject(cell, classId, subjectId) {
+    let ok = false;
+    cardsOfClass(cell, classId).forEach((parts) => {
+      if (ok || !parts.some((p) => p.subjectId === subjectId)) return;
+      if (!cardGaps(classId, parts).length) ok = true;
+    });
+    return ok;
+  }
+
+  // Jadvaldagi barcha YARIM kartalar. Bitta karta bir nechta sinfga tegishli
+  // bo'lsa (daraja guruhi, parallel sinflar) — ro'yxatga BIR MARTA tushadi.
+  function findPartialCards(sch = schedule) {
+    const out = [];
+    const seen = new Set();
+    DAYS.forEach((day) => sortedTimeslots.forEach((slot) => {
+      if (!isTeachingSlot(slot)) return;
+      const cell = sch?.[day]?.[slot.id] || [];
+      if (!cell.length) return;
+      const cids = new Set();
+      cell.forEach((l) => classIdsOf(l).forEach((c) => cids.add(c)));
+      cids.forEach((cid) => {
+        cardsOfClass(cell, cid).forEach((parts, key) => {
+          const gaps = cardGaps(cid, parts);
+          if (!gaps.length) return;
+          const uniq = `${day}|${slot.id}|${key}`;
+          if (seen.has(uniq)) return;
+          seen.add(uniq);
+          out.push({
+            day, slotId: slot.id, classId: cid, key, parts, gaps,
+            plan: cardPlan(cid, parts[0]?.subjectId),
+            className: classes.find((c) => c.id === cid)?.name || "Sinf",
+            subjectName: subjectMap.get(parts[0]?.subjectId)?.name || "Fan",
+            lessonNumber: slotDisplayNumber(slot) ?? "?",
+          });
+        });
+      });
+    }));
+    return out;
   }
 
   // Ustoz setkasida (teacher.blockedSlots) shu katak qulflanganmi?
@@ -678,16 +825,28 @@ export default function SchedulePage({
 
   // ═══════════ GENERATOR ═══════════
 
+  // Joylashgan soatlar. YARIM KARTA SANALMAYDI: guruh yozuvi yetishmayotgan
+  // katak «joylashgan soat» emas — aks holda 2-guruh ustozi tushib qolganda
+  // ham foiz 100% ko'rinar va soat jimgina yo'qolardi.
   function countPlacedUnits(sch) {
     let n = 0;
     DAYS.forEach((d) => sortedTimeslots.forEach((ts) => {
       if (!isTeachingSlot(ts)) return;
       const cell = sch?.[d]?.[ts.id] || [];
-      const seen = new Set();
-      cell.forEach((l) => classIdsOf(l).forEach((cid) => {
-        const k = `${cid}__${l.subjectId}`;
-        if (!seen.has(k)) { seen.add(k); n += 1; }
-      }));
+      if (!cell.length) return;
+      const cids = new Set();
+      cell.forEach((l) => classIdsOf(l).forEach((cid) => cids.add(cid)));
+      cids.forEach((cid) => {
+        const seen = new Set();
+        cardsOfClass(cell, cid).forEach((parts) => {
+          if (cardGaps(cid, parts).length) return;
+          parts.forEach((p) => {
+            if (!p.subjectId || seen.has(p.subjectId)) return;
+            seen.add(p.subjectId);
+            n += 1;
+          });
+        });
+      });
     }));
     return n;
   }
@@ -991,10 +1150,12 @@ export default function SchedulePage({
 
       let finalSch = best || {};
 
-      // Tushmagan soatlarni ko'chirish/almashtirish orqali to'ldirish
+      // Tushmagan soatlarni ko'chirish/almashtirish orqali to'ldirish.
+      // Bu bosqich qulflangan seeddan kelgan YARIM kartalarni ham
+      // to'g'rilaydi (guruh yozuvi yetishmayotgan katak — 0-bosqich).
       if (requiredTotal > 0 && bestPlaced < requiredTotal) {
         const res = fillRemaining(finalSch, false);
-        if (res.placed > 0) {
+        if (res.placed > 0 || res.repaired > 0 || res.moved > 0) {
           finalSch = res.schedule;
           bestPlaced = countPlacedUnits(finalSch);
         }
@@ -1040,14 +1201,15 @@ export default function SchedulePage({
     });
   }
 
+  // Shu sinfda shu fandan nechta soat TO'LIQ turibdi. Yarim karta (guruh
+  // yozuvi yetishmayotgan katak) sanalmaydi — u «tushmagan soat» hisoblanadi
+  // va «🧩 yarim tushgan darslar» ro'yxatiga chiqadi.
   function placedHours(classId, subjectId) {
     let count = 0;
     DAYS.forEach((day) => {
       sortedTimeslots.forEach((slot) => {
         const cell = schedule?.[day]?.[slot.id];
-        if (Array.isArray(cell) && cell.some((l) => l.subjectId === subjectId && classIdsOf(l).includes(classId))) {
-          count += 1;
-        }
+        if (Array.isArray(cell) && cell.length && cellHasFullSubject(cell, classId, subjectId)) count += 1;
       });
     });
     return count;
@@ -1112,12 +1274,171 @@ export default function SchedulePage({
     return result.sort((a, b) => b.missing - a.missing);
   }
 
+  // ═══ QO'LDA DARS QO'SHISH: BO'SH VAQT, BO'SH USTOZ ═══
+  // Bo'sh katakka bosilganda ochiladigan oyna shu yordamchilarga tayanadi.
+  // Qoida: fanlar — FAQAT shu sinfda yoqilganlari, ustozlar — FAQAT shu fanni
+  // beradiganlari va aynan SHU VAQTDA bo'sh bo'lganlari.
+
+  // (kun, slot) VAQTIDA band bo'lgan barcha darslar. Ikki smena bir xil soatda
+  // o'tishi mumkin (slot id boshqa, vaqti bir xil) — shuning uchun ustoz va
+  // xona bandligi slot emas, VAQT bo'yicha o'qiladi.
+  function cellAtTime(day, slotId) {
+    const slot = sortedTimeslots.find((s) => s.id === slotId);
+    if (!slot) return Array.isArray(schedule?.[day]?.[slotId]) ? schedule[day][slotId] : [];
+    return cellsAt(ctx, day, slot);
+  }
+
+  function whereOf(lesson) {
+    return classIdsOf(lesson)
+      .map((id) => classes.find((c) => c.id === id)?.name)
+      .filter(Boolean)
+      .join(", ");
+  }
+
+  // Ustoz shu vaqtda NEGA bo'sh emas? Bo'sh bo'lsa — bo'sh satr qaytadi.
+  function teacherBusyReason(teacherId, day, slotId) {
+    if (!teacherId) return "";
+    const t = teacherMap.get(teacherId);
+    if (!t) return "topilmadi";
+    if (Array.isArray(t.offDays) && t.offDays.includes(day)) return "dam olish kuni";
+    if (teacherBlockedAt(teacherId, day, slotId)) return "setkada qulflangan";
+    const busy = cellAtTime(day, slotId).find((l) => teacherIdsOf(l).includes(teacherId));
+    if (busy) {
+      const where = whereOf(busy);
+      const sname = subjectMap.get(busy.subjectId)?.name || "dars";
+      return where ? `${where} — ${sname}` : sname;
+    }
+    return "";
+  }
+
+  function roomBusyReason(roomId, day, slotId) {
+    if (!roomId) return "";
+    const busy = cellAtTime(day, slotId).find((l) => l.roomId === roomId);
+    return busy ? (whereOf(busy) || "band") : "";
+  }
+
+  // Shu fanni SHU SINFDA beradigan ustozlar — guruhlar va almashinuv bilan
+  // birga (bo'lingan guruh, daraja guruhi, «bir vaqtda bir nechta fan»).
+  function classTeacherIdsFor(classId, subjectId) {
+    const out = [];
+    const push = (id) => { if (id && !out.includes(id)) out.push(id); };
+    (classSubjects?.[classId] || []).forEach((a) => {
+      if (a.subjectId === subjectId) {
+        push(a.teacherId);
+        if (a.splitEnabled) push(a.teacherId2);
+        if (a.levelGroupEnabled) (a.levelGroups || []).forEach((g) => push(g.teacherId));
+      }
+      if (a.swapEnabled && a.swapSubjectId === subjectId) push(a.swapTeacherId);
+      if (a.weekAltEnabled && a.weekAltSubjectId === subjectId) push(a.weekAltTeacherId);
+      pairAllGroups(a).forEach((g) => { if (g.subjectId === subjectId) push(g.teacherId); });
+    });
+    return out;
+  }
+
+  // Fan uchun ustozlar ro'yxati. Uch to'plam qaytadi:
+  //   ownFree   — SHU SINFGA shu fanni beradigan va shu vaqtda BO'SH ustozlar,
+  //   otherFree — shu fandan boshqa bo'sh ustozlar (almashtirish uchun zaxira),
+  //   busy      — band bo'lgani uchun ro'yxatga CHIQMAYDIGANLAR (sababi bilan).
+  // Oynada avval faqat sinfning o'z ustozi ko'rsatiladi; u band bo'lsagina
+  // zaxira ro'yxati ochiladi — begona ustoz bekorga ko'rinmaydi.
+  function teacherChoices(classId, subjectId, day, slotId) {
+    if (!subjectId) return { ownFree: [], otherFree: [], free: [], busy: [], hasOwn: false };
+    const own = classTeacherIdsFor(classId, subjectId);
+    const ids = uniqBy([...own, ...teachersForSubject(subjectId).map((t) => t.id)], (id) => id);
+    const ownFree = [];
+    const otherFree = [];
+    const busy = [];
+    ids.forEach((id) => {
+      const t = teacherMap.get(id);
+      if (!t) return;
+      const reason = teacherBusyReason(id, day, slotId);
+      const row = { id, name: t.name, own: own.includes(id), reason };
+      if (reason) busy.push(row);
+      else if (row.own) ownFree.push(row);
+      else otherFree.push(row);
+    });
+    const byName = (a, b) => String(a.name).localeCompare(String(b.name), "uz");
+    ownFree.sort(byName);
+    otherFree.sort(byName);
+    busy.sort((a, b) => (Number(b.own) - Number(a.own)) || byName(a, b));
+    // Ko'rsatiladigan ro'yxat: o'z ustozi bo'sh bo'lsa — faqat u
+    const free = ownFree.length ? ownFree : otherFree;
+    return { ownFree, otherFree, free, busy, hasOwn: own.length > 0 };
+  }
+
+  // Shu vaqtda bo'sh xonalar (band bo'lgani ro'yxatga chiqmaydi)
+  function roomChoices(day, slotId) {
+    const free = [];
+    let busyCount = 0;
+    rooms.forEach((r) => {
+      if (roomBusyReason(r.id, day, slotId)) busyCount += 1;
+      else free.push(r);
+    });
+    return { free, busyCount };
+  }
+
+  // Fan shu kunda sinfda necha marta turibdi (kunlik me'yorni tekshirish uchun)
+  function subjectDayCount(classId, subjectId, day) {
+    let n = 0;
+    sortedTimeslots.forEach((slot) => {
+      const cell = schedule?.[day]?.[slot.id];
+      if (Array.isArray(cell) && cell.some((l) => l.subjectId === subjectId && classIdsOf(l).includes(classId))) n += 1;
+    });
+    return n;
+  }
+
+  // Sinfda YOQILGAN barcha fanlar. Soati to'liq qo'yilgan fan ham ro'yxatda
+  // qoladi — direktor ortiqcha dars (almashtirish, to'garak) qo'ya olishi
+  // kerak; ro'yxatda esa «soati to'liq» deb belgilanadi. Sinfda umuman
+  // yoqilmagan fan bu yerga TUSHMAYDI.
+  function classSubjectChoices(classId, day, slotId) {
+    const ids = [];
+    const push = (id) => { if (id && !ids.includes(id)) ids.push(id); };
+    (classSubjects?.[classId] || []).forEach((a) => {
+      push(a.subjectId);
+      if (a.swapEnabled) push(a.swapSubjectId);
+      if (a.weekAltEnabled) push(a.weekAltSubjectId);
+      pairAllGroups(a).forEach((g) => push(g.subjectId));
+    });
+    return ids
+      .map((sid) => {
+        const need = requiredHours(classId, sid);
+        const got = placedHours(classId, sid);
+        const { free, busy, ownFree } = teacherChoices(classId, sid, day, slotId);
+        return {
+          subjectId: sid,
+          name: subjectMap.get(sid)?.name || "Fan",
+          need,
+          got,
+          missing: Math.max(0, need - got),
+          freeCount: free.length,
+          ownFreeCount: ownFree.length,
+          busyCount: busy.length,
+        };
+      })
+      .sort((a, b) => (
+        (Number(b.missing > 0) - Number(a.missing > 0))
+        || (Number(b.freeCount > 0) - Number(a.freeCount > 0))
+        || (b.missing - a.missing)
+        || String(a.name).localeCompare(String(b.name), "uz")
+      ));
+  }
+
+  // Fan tanlanganda ustoz o'zi tanlanadi: avval sinfning o'z ustozi, u band
+  // bo'lsa — shu vaqtda bo'sh bo'lgan birinchi ustoz.
+  function pickFreeTeacher(classId, subjectId, day, slotId) {
+    if (!subjectId) return "";
+    const assigned = assignedTeacher(classId, subjectId);
+    if (assigned && !teacherBusyReason(assigned, day, slotId)) return assigned;
+    return teacherChoices(classId, subjectId, day, slotId).free[0]?.id || "";
+  }
+
   function conflictsAt(day, slotId, classId, teacherId, roomId) {
-    const cell = schedule?.[day]?.[slotId];
+    const cell = cellAtTime(day, slotId);        // ustoz/xona — VAQT bo'yicha
+    const own = schedule?.[day]?.[slotId] || []; // sinf — o'z katagi bo'yicha
     const warns = [];
-    if (!Array.isArray(cell)) return warns;
     if (teacherId) {
-      const tConf = cell.find((l) => l.teacherId === teacherId);
+      const tConf = cell.find((l) => teacherIdsOf(l).includes(teacherId));
       if (tConf) {
         const where = classIdsOf(tConf).map((id) => classes.find((c) => c.id === id)?.name).filter(Boolean).join(", ");
         warns.push(`⚠️ Ustoz bu vaqtda band (parallel): ${getName(teacherMap, teacherId)} → ${where || "boshqa sinf"}`);
@@ -1134,7 +1455,7 @@ export default function SchedulePage({
       const rConf = cell.find((l) => l.roomId === roomId);
       if (rConf) warns.push(`⚠️ Xona bu vaqtda band: ${getName(roomMap, roomId)}`);
     }
-    const classHas = cell.some((l) => classIdsOf(l).includes(classId));
+    const classHas = own.some((l) => classIdsOf(l).includes(classId));
     if (classHas) warns.push("ℹ️ Bu sinfda shu vaqtda dars bor (guruh sifatida qo'shilishi mumkin).");
     return warns;
   }
@@ -1160,22 +1481,65 @@ export default function SchedulePage({
     return { groups: a.levelGroups, classIds: participating.length ? participating : [classId] };
   }
 
+  // ——— QO'LDA QO'SHISHDA GURUHLI DARS ———
+  // ⚠️ Ilgari qo'lda qo'shilgan dars HAR DOIM bitta yozuv bo'lib tushardi.
+  // «2 guruhga bo'lish» yoqilgan fanda bu 2-guruh ustozining soatini
+  // jimgina yo'qotardi: katakda faqat 1-guruh turar, hisoblagich esa uni
+  // to'liq soat deb sanardi. Endi karta sozlamadagi HAMMA guruhi bilan
+  // birga qo'shiladi (daraja guruhlari, bo'linish va «bir vaqtda bir nechta
+  // fan» uchun bir xil).
+  function manualGroupInfo(classId, subjectId) {
+    if (!subjectId) return null;
+    const plan = cardPlan(classId, subjectId);
+    const a = plan.row;
+    if (!a || plan.need <= 1 || plan.groups.length <= 1) return null;
+
+    const matesBy = (pick) => classes
+      .filter((c) => (classSubjects?.[c.id] || []).some(pick))
+      .map((c) => c.id);
+
+    if (plan.kind === "level") {
+      const key = String(a.levelGroupKey || "").trim();
+      const mates = key
+        ? matesBy((x) => x.subjectId === subjectId && x.levelGroupEnabled && String(x.levelGroupKey || "").trim() === key)
+        : [];
+      return {
+        kind: "level", plan, groups: plan.groups, groupKey: key,
+        classIds: mates.length ? mates : [classId],
+      };
+    }
+    if (plan.kind === "split") {
+      return { kind: "split", plan, groups: plan.groups, classIds: [classId] };
+    }
+    // «Bir vaqtda bir nechta fan»: kalit generatordagi bilan AYNI shaklda
+    // yasaladi — aks holda karta bo'linib, guruhlar ajralib ketadi.
+    const pgKey = String(a.pairGroupKey || "").trim();
+    const mates = pgKey
+      ? matesBy((x) => x.pairEnabled && String(x.pairGroupKey || "").trim() === pgKey && x.subjectId === a.subjectId)
+      : [];
+    return {
+      kind: "pair", plan, groups: plan.groups,
+      classIds: mates.length ? mates : [classId],
+      pairKey: pgKey ? `PG__${pgKey}__${a.subjectId}` : `${classId}__${a.subjectId}__${a.pairSubjectId || ""}`,
+    };
+  }
+
   function openManual(day, slotId, classId, presetSubjectId = "") {
     setManualForm({
       subjectId: presetSubjectId,
-      teacherId: presetSubjectId ? assignedTeacher(classId, presetSubjectId) : "",
+      teacherId: presetSubjectId ? pickFreeTeacher(classId, presetSubjectId, day, slotId) : "",
       roomId: "", altEnabled: false, altSubjectId: "", altTeacherId: "", lock: false,
     });
     setManualCell({ day, slotId, classId });
   }
 
   function groupConflictsAt(day, slotId, classIds, groups) {
-    const cell = schedule?.[day]?.[slotId];
+    const cell = cellAtTime(day, slotId);
+    const own = schedule?.[day]?.[slotId] || [];
     const warns = [];
-    if (!Array.isArray(cell)) return warns;
     (groups || []).forEach((g) => {
       if (!g.teacherId) return;
-      const conf = cell.find((l) => l.teacherId === g.teacherId);
+      const conf = cell.find((l) => teacherIdsOf(l).includes(g.teacherId));
       if (conf) {
         const where = classIdsOf(conf).map((id) => classes.find((c) => c.id === id)?.name).filter(Boolean).join(", ");
         warns.push(`⚠️ ${getName(teacherMap, g.teacherId)} bu vaqtda band (parallel): ${where || "boshqa sinf"}`);
@@ -1188,7 +1552,7 @@ export default function SchedulePage({
         warns.push(`⚠️ ${getName(teacherMap, g.teacherId)}: bu soat Ustoz setkasida qulflangan`);
       }
     });
-    const classHas = (classIds || []).some((cid) => cell.some((l) => classIdsOf(l).includes(cid)));
+    const classHas = (classIds || []).some((cid) => own.some((l) => classIdsOf(l).includes(cid)));
     if (classHas) warns.push("ℹ️ Tanlangan sinf(lar)da shu vaqtda dars bor.");
     return warns;
   }
@@ -1470,6 +1834,55 @@ export default function SchedulePage({
     [classes, classSubjects, teachers, sortedTimeslots, lunchGroups, schedule],
   );
 
+  // ——— YARIM TUSHGAN DARSLAR ———
+  // Katakda guruhli darsning bir qismi yo'q (masalan 2-guruh ustozi).
+  // Bu soat endi «joylashgan» deb sanalmaydi, lekin foydalanuvchi AYNAN
+  // qaysi katak ekanini ko'rishi kerak — aks holda «tushmagan soat» qayerdan
+  // chiqqani tushunarsiz bo'ladi.
+  const partialCards = useMemo(
+    () => (setSchedule ? findPartialCards(schedule) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [schedule, classes, classSubjects, sortedTimeslots, setSchedule],
+  );
+
+  // ——— USTOZ SOATI: REJA ↔ SETKA ———
+  // «Sinf fanlari»da biriktirilgan soat bilan jadvalda HAQIQATAN turgan soat
+  // bir xil bo'lishi kerak. Farq chiqsa — soat yo'qolgan (yarim karta,
+  // qo'lda o'chirish, tushmagan blok) yoki ortiqcha dars qo'shilgan.
+  // Ustoz bir vaqtda faqat bitta joyda bo'la oladi, shuning uchun setkadagi
+  // soat = u band bo'lgan KATAKLAR soni (parallel dars, daraja guruhi va
+  // parallel sinflar shu sababli o'z-o'zidan bir marta sanaladi).
+  //
+  // «Fan almashinuvi» va «hafta almashinuvi» bu ro'yxatga kirmaydi: u yerda
+  // reja soati bilan katak soni ataylab boshqacha (guruhlar navbatlashadi).
+  const teacherHourRows = useMemo(() => {
+    const skip = new Set();
+    classes.forEach((cls) => (classSubjects?.[cls.id] || []).forEach((a) => {
+      if (!a) return;
+      if (a.swapEnabled) { [a.teacherId, a.teacherId2, a.swapTeacherId].forEach((t) => t && skip.add(t)); }
+      if (a.weekAltEnabled) { [a.teacherId, a.weekAltTeacherId].forEach((t) => t && skip.add(t)); }
+    }));
+    const cells = new Map();   // teacherId → band kataklar soni
+    DAYS.forEach((d) => sortedTimeslots.forEach((ts) => {
+      if (!isTeachingSlot(ts)) return;
+      const cell = schedule?.[d]?.[ts.id] || [];
+      if (!cell.length) return;
+      const here = new Set();
+      cell.forEach((l) => { if (l.teacherId) here.add(l.teacherId); });
+      here.forEach((tid) => cells.set(tid, (cells.get(tid) || 0) + 1));
+    }));
+    const rows = [];
+    buildTeacherStreams(classes, classSubjects).forEach((info, tid) => {
+      if (skip.has(tid)) return;
+      const planned = Number(info.total || 0);
+      const done = cells.get(tid) || 0;
+      if (planned === done) return;
+      rows.push({ id: tid, name: getName(teacherMap, tid), planned, done, diff: done - planned });
+    });
+    return rows.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [schedule, classes, classSubjects, teachers, sortedTimeslots]);
+
   function capacityWarnings(scheduleComplete = false) {
     // Avval ustoz sig'imi: bu "soat tushmadi"ning eng ko'p uchraydigan sababi
     const warns = [
@@ -1640,12 +2053,28 @@ export default function SchedulePage({
 
     const cls = classes.find((c) => c.id === classId);
     const classOff = new Set(Array.isArray(cls?.offDays) ? cls.offDays : []);
-    const teacherId = assignedTeacher(classId, subjectId);
-    const teacher = teachers.find((t) => t.id === teacherId);
-    if (!teacher || !teachersForSubject(subjectId).some((t) => t.id === teacherId)) {
+
+    // ⚠️ Bu yo'l ilgari HAR DOIM bitta yozuv qo'yardi — «2 guruhga bo'lish»
+    // yoqilgan fanda 2-guruh ustozi yo'qolib, katak YARIM tushardi (soat esa
+    // to'liq sanalardi). Endi karta sozlamadagi hamma guruhi bilan rejaga
+    // kiradi: joy HAR BIR guruh ustozi bo'sh bo'lgandagina tanlanadi.
+    // «Bir vaqtda bir nechta fan» va «fan almashinuvi» bu yerda ham
+    // chetlab o'tiladi (soat hisobi boshqacha).
+    const plan = cardPlan(classId, subjectId);
+    if (plan.row?.pairEnabled || plan.row?.swapEnabled) return { placements: [], moves: [] };
+    const groups = (plan.groups || []).filter((g) => g.teacherId);
+    const okSubjT = new Set(teachersForSubject(subjectId).map((t) => t.id));
+    if (!groups.length || groups.some((g) => !okSubjT.has(g.teacherId) || !teacherMap.get(g.teacherId))) {
       return { placements: [], moves: [] };
     }
-    const tOff = new Set(Array.isArray(teacher.offDays) ? teacher.offDays : []);
+    const gTeacherIds = groups.map((g) => g.teacherId);
+    const teacherId = gTeacherIds[0];
+    const tOff = new Set(gTeacherIds.flatMap((id) => {
+      const t = teacherMap.get(id);
+      return Array.isArray(t?.offDays) ? t.offDays : [];
+    }));
+    const lgi = plan.kind === "level" ? levelGroupInfo(classId, subjectId) : null;
+    const targetClassIds = lgi?.classIds?.length ? lgi.classIds : [classId];
     const cap = subjectDayCap(classId, subjectId);
 
     const slotUsable = (cid, day, ts) => isTeachingSlot(ts)
@@ -1689,11 +2118,32 @@ export default function SchedulePage({
     const placements = [];
     const moves = [];
 
+    // Kartaning HAMMA guruhi bitta katakka tushadi. Xona takrorlanmasin:
+    // guruhlar ayni soatda o'qiydi, bitta xona ikkinchisiga yetmaydi.
+    const buildEntries = (day, tsId) => {
+      const seenR = new Set((work[day][tsId] || []).map((l) => l.roomId).filter(Boolean));
+      return groups.map((g) => {
+        const roomFreeNow = Boolean(g.roomId) && !seenR.has(g.roomId);
+        if (roomFreeNow) seenR.add(g.roomId);
+        const e = {
+          subjectId, classId: targetClassIds[0], classIds: [...targetClassIds],
+          teacherId: g.teacherId, roomId: roomFreeNow ? g.roomId : "",
+          manual: true, locked: true,
+        };
+        if (groups.length > 1) e.groupPart = g.name || "";
+        if (plan.kind === "split") e.splitEnabled = true;
+        if (plan.kind === "level") {
+          e.levelGroupEnabled = true;
+          const key = String(plan.row?.levelGroupKey || "").trim();
+          if (key) e.groupKey = key;
+        }
+        return e;
+      });
+    };
     const doPlace = (day, tsId) => {
-      work[day][tsId] = [...(work[day][tsId] || []), {
-        subjectId, classId, classIds: [classId], teacherId, roomId: "", manual: true, locked: true,
-      }];
-      placements.push({ day, slotId: tsId, teacherId });
+      const entries = buildEntries(day, tsId);
+      work[day][tsId] = [...(work[day][tsId] || []), ...entries];
+      placements.push({ day, slotId: tsId, teacherId, teacherIds: [...gTeacherIds], entries });
     };
     const doMove = (l, fromDay, fromTsId, to) => {
       work[fromDay][fromTsId] = work[fromDay][fromTsId].filter((x) => x !== l);
@@ -1701,8 +2151,20 @@ export default function SchedulePage({
       moves.push({ lesson: l, fromDay, fromSlotId: fromTsId, toDay: to.day, toSlotId: to.tsId, label: lessonTitle(l) });
     };
 
+    // Karta bo'ylab tekshiruvlar: guruhlar ayni soatda o'qiydi, shuning
+    // uchun HAR BIR guruh ustozi (va xonasi) bo'sh bo'lishi shart.
+    const groupsFree = (day, tsId) => gTeacherIds.every((id) => teacherFree(id, day, tsId))
+      && groups.every((g) => roomFree(g.roomId, day, tsId));
+    const groupsBlocked = (day, tsId) => gTeacherIds.some((id) => teacherBlockedAt(id, day, tsId));
+    const groupsBusyHere = (day, tsId) => (work[day][tsId] || []).filter(
+      (l) => gTeacherIds.some((id) => l.teacherId === id || l.altTeacherId === id)
+    );
+    const loadFull = () => gTeacherIds.some((id) => (
+      teacherLoad(id) + 1 > Number(teacherMap.get(id)?.maxWeeklyHours || 40)
+    ));
+
     for (let n = 0; n < count; n++) {
-      if (teacherLoad(teacherId) + 1 > Number(teacher.maxWeeklyHours || 40)) break;
+      if (loadFull()) break;
       let done = false;
 
       // 1-bosqich — hech kimni bezovta qilmasdan
@@ -1713,8 +2175,8 @@ export default function SchedulePage({
         for (const ts of teachingSlots) {
           if (!slotUsable(classId, day, ts)) continue;
           if (!classFree(classId, day, ts.id)) continue;
-          if (!teacherFree(teacherId, day, ts.id)) continue;
-          if (teacherBlockedAt(teacherId, day, ts.id)) continue;
+          if (!groupsFree(day, ts.id)) continue;
+          if (groupsBlocked(day, ts.id)) continue;
           doPlace(day, ts.id);
           done = true;
           break;
@@ -1730,8 +2192,9 @@ export default function SchedulePage({
         for (const ts of teachingSlots) {
           if (!slotUsable(classId, day, ts)) continue;
           if (!classFree(classId, day, ts.id)) continue;
-          if (teacherBlockedAt(teacherId, day, ts.id)) continue;
-          const busy = (work[day][ts.id] || []).filter((l) => l.teacherId === teacherId || l.altTeacherId === teacherId);
+          if (groupsBlocked(day, ts.id)) continue;
+          if (!groups.every((g) => roomFree(g.roomId, day, ts.id))) continue;
+          const busy = groupsBusyHere(day, ts.id);
           if (busy.length !== 1 || !isMovableLesson(busy[0])) continue;
           const home = homeFor(busy[0], day, ts.id);
           if (!home) continue;
@@ -1750,8 +2213,8 @@ export default function SchedulePage({
         if (subjOnDay(classId, subjectId, day) >= cap) continue;
         for (const ts of teachingSlots) {
           if (!slotUsable(classId, day, ts)) continue;
-          if (!teacherFree(teacherId, day, ts.id)) continue;
-          if (teacherBlockedAt(teacherId, day, ts.id)) continue;
+          if (!groupsFree(day, ts.id)) continue;
+          if (groupsBlocked(day, ts.id)) continue;
           const here = (work[day][ts.id] || []).filter((l) => classIdsOf(l).includes(classId));
           if (here.length !== 1 || !isMovableLesson(here[0])) continue;
           const home = homeFor(here[0], day, ts.id);
@@ -1795,12 +2258,19 @@ export default function SchedulePage({
       next[m.toDay][m.toSlotId] = [...(next[m.toDay][m.toSlotId] || []), m.lesson];
     });
 
-    // 2) Keyin yangi darslar
-    placements.forEach(({ day, slotId, teacherId }) => {
-      next[day][slotId] = [...(next[day][slotId] || []), {
+    // 2) Keyin yangi darslar. Guruhli fanda karta HAMMA guruhi bilan
+    //    tushadi (`entries`) — yarim karta yaratilmaydi. Xona ko'chirishlardan
+    //    keyin band bo'lib qolgan bo'lishi mumkin, shuning uchun qayta
+    //    tekshiriladi: bandi olib tashlanadi, dars xonasiz joylanadi.
+    placements.forEach(({ day, slotId, teacherId, entries }) => {
+      const cell = next[day][slotId] || [];
+      const items = (entries?.length ? entries : [{
         subjectId, classId, classIds: [classId], teacherId: teacherId || "", roomId: "",
         manual: true, locked: true,
-      }];
+      }]).map((e) => (
+        e.roomId && cell.some((l) => l.roomId === e.roomId) ? { ...e, roomId: "" } : { ...e }
+      ));
+      next[day][slotId] = [...cell, ...items];
     });
 
     setSchedule(next);
@@ -1817,12 +2287,19 @@ export default function SchedulePage({
       sortedTimeslots.forEach((ts) => { next[d][ts.id] = [...((base?.[d]?.[ts.id]) || [])]; });
     });
     const tLoad = {};
-    DAYS.forEach((d) => teachingSlots.forEach((ts) => next[d][ts.id].forEach((l) => { if (l.teacherId) tLoad[l.teacherId] = (tLoad[l.teacherId] || 0) + 1; })));
+    const recountLoad = () => {
+      Object.keys(tLoad).forEach((k) => { delete tLoad[k]; });
+      DAYS.forEach((d) => teachingSlots.forEach((ts) => next[d][ts.id].forEach((l) => { if (l.teacherId) tLoad[l.teacherId] = (tLoad[l.teacherId] || 0) + 1; })));
+    };
+    recountLoad();
 
+    // Soat sanog'i TO'LIQ kartalar bo'yicha: guruh yozuvi yetishmayotgan
+    // katak «joylashgan» hisoblanmaydi (quyidagi to'g'rilash bosqichi uni
+    // yo yopadi, yo butun kartani boshqa soatga ko'chiradi).
     const countCS = (cid, sid) => {
       let n = 0;
       DAYS.forEach((d) => teachingSlots.forEach((ts) => {
-        if (next[d][ts.id].some((l) => l.subjectId === sid && classIdsOf(l).includes(cid))) n += 1;
+        if (cellHasFullSubject(next[d][ts.id], cid, sid)) n += 1;
       }));
       return n;
     };
@@ -2115,6 +2592,132 @@ export default function SchedulePage({
       return null;
     };
 
+    // ═══════════ 0-BOSQICH: YARIM KARTALARNI TO'G'RILASH ═══════════
+    // Guruh yozuvi yetishmayotgan karta — sinfning bir guruhi USTOZSIZ
+    // qolgani demakdir (3-V · Ingliz tili: katakda faqat 1-guruh turgan,
+    // 2-guruh ustozi yo'q). Uch qadam:
+    //   1) JOYIDA to'ldirish — yetishmagan guruh ustozi shu soatda bo'sh bo'lsa;
+    //   2) butun kartani (blok bo'laklari bilan birga) BOSHQA soatga ko'chirish;
+    //      yangi joy TOPILGANDAN keyingina eskisi bo'shatiladi — soat yo'qolmaydi;
+    //   3) iloji bo'lmasa — TEGILMAYDI: dars o'chirilmaydi, lekin soat
+    //      «tushmadi» bo'lib sanaladi va ekranda ro'yxatga chiqadi.
+    // «Bir vaqtda bir nechta fan» kartasi faqat 1-qadamda qatnashadi —
+    // u bir nechta sinfni bog'laydi, ko'chirish guruhdoshlarni qo'zg'atardi.
+    let repaired = 0;
+    let moved = 0;
+    let stuck = 0;
+    // To'g'rilab bo'lmagan yarim karta katakni BAND qilib turibdi. Uning
+    // fanini quyidagi to'ldirgich ham chetlab o'tadi — aks holda o'sha soat
+    // IKKINCHI marta, boshqa katakka qo'yilib, sinfda ortiqcha dars paydo
+    // bo'lardi. Dars o'chirilmaydi: qaysi birini yo'qotishni foydalanuvchi
+    // o'zi hal qiladi (kartadagi ✕ tugmasi butun kartani oladi).
+    const stuckKeys = new Set();
+
+    const repairInPlace = (pc) => {
+      const cell = next[pc.day][pc.slotId];
+      const base = pc.parts[0];
+      const pgKey = String(pc.plan.row?.pairGroupKey || "").trim();
+      const adds = [];
+      for (const g of pc.gaps) {
+        const t = teacherMap.get(g.teacherId);
+        if (!t) return false;
+        if (Array.isArray(t.offDays) && t.offDays.includes(pc.day)) return false;
+        if (teacherBlockedAt(g.teacherId, pc.day, pc.slotId)) return false;
+        if (cell.some((l) => l.teacherId === g.teacherId || l.altTeacherId === g.teacherId)) return false;
+        if (adds.some((x) => x.teacherId === g.teacherId)) return false;
+        // Parallel sinflardagi UMUMIY guruhni bu yerda tiklab bo'lmaydi —
+        // uning yozuvi guruhdagi barcha sinfga tegishli.
+        if (pc.plan.kind === "pair" && g.shared && pgKey) return false;
+        // Guruhlar ayni soatda o'qiydi: band xona ikkinchi guruhga yetmaydi
+        const roomFree = Boolean(g.roomId)
+          && !cell.some((l) => l.roomId === g.roomId || l.altRoomId === g.roomId)
+          && !adds.some((x) => x.roomId === g.roomId);
+        const e = {
+          subjectId: g.subjectId || base.subjectId,
+          classId: base.classId || pc.classId,
+          classIds: [...classIdsOf(base)],
+          teacherId: g.teacherId,
+          roomId: roomFree ? g.roomId : "",
+          groupPart: g.name || "",
+          manual: Boolean(base.manual),
+          locked: Boolean(base.locked),
+        };
+        if (base.lockManual) e.lockManual = true;
+        if (pc.plan.kind === "level") {
+          e.levelGroupEnabled = true;
+          if (base.groupKey) e.groupKey = base.groupKey;
+        }
+        if (pc.plan.kind === "split") e.splitEnabled = true;
+        if (pc.plan.kind === "pair") {
+          e.splitEnabled = true;
+          e.pairEnabled = true;
+          if (base.pairKey) e.pairKey = base.pairKey;
+          if (!g.shared) e.classIds = [pc.classId];
+        }
+        // Blok belgilari AYNAN ko'chiriladi. ⚠️ Faqat `blockSize > 1` da
+        // ko'chirish yetmaydi: generator oddiy darsga ham `blockSize: 1`,
+        // `blockIndex: 0` yozadi, karta kaliti esa (`partCardKey`) blok
+        // indeksini hisobga oladi — qiymatlar farq qilsa yangi yozuv
+        // AYRIM karta bo'lib qolar va katak baribir «yarim» ko'rinardi.
+        if (base.blockSize !== undefined) e.blockSize = base.blockSize;
+        if (base.blockIndex !== undefined) e.blockIndex = base.blockIndex;
+        adds.push(e);
+      }
+      if (!adds.length) return false;
+      next[pc.day][pc.slotId] = [...cell, ...adds];
+      return true;
+    };
+
+    // Karta va uning blok bo'laklari (ayni kunda) — hammasi birga ko'chadi
+    const cardFamily = (pc) => {
+      const base = pc.parts[0];
+      const size = Number(base.blockSize || 1);
+      if (size <= 1) return [{ slotId: pc.slotId, parts: pc.parts }];
+      const cidsKey = classIdsOf(base).slice().sort().join("~");
+      const fam = [];
+      teachingSlots.forEach((ts) => {
+        const parts = next[pc.day][ts.id].filter((l) => (
+          Number(l.blockSize || 1) === size
+          && (base.pairKey
+            ? l.pairKey === base.pairKey
+            : (l.subjectId === base.subjectId
+              && (l.groupKey || "") === (base.groupKey || "")
+              && classIdsOf(l).slice().sort().join("~") === cidsKey))
+        ));
+        if (parts.length) fam.push({ slotId: ts.id, parts });
+      });
+      return fam.length ? fam : [{ slotId: pc.slotId, parts: pc.parts }];
+    };
+
+    const relocateCard = (pc) => {
+      const base = pc.parts[0];
+      if (base.locked || pc.plan.kind === "pair") return false;
+      const cls = classes.find((c) => c.id === pc.classId);
+      const tpl = cls ? fillTemplate(cls, base.subjectId) : null;
+      if (!tpl) return false;
+      const fam = cardFamily(pc);
+      // Joy AVVAL topiladi: topilmasa eski dars o'z o'rnida qoladi
+      const spot = spotFor(tpl, fam.length);
+      if (!spot) return false;
+      fam.forEach((f) => {
+        next[pc.day][f.slotId] = next[pc.day][f.slotId].filter((l) => !f.parts.includes(l));
+      });
+      placeTemplate(tpl, spot, fam.length);
+      return true;
+    };
+
+    findPartialCards(next).forEach((pc) => {
+      // Ro'yxat tuzilgandan keyin katak o'zgargan bo'lishi mumkin — qayta tekshiramiz
+      const still = next[pc.day][pc.slotId].filter((l) => pc.parts.includes(l));
+      if (!still.length) return;
+      if (cardGaps(pc.classId, still).length === 0) return;
+      if (repairInPlace(pc)) { repaired += 1; return; }
+      if (relocateCard(pc)) { moved += 1; return; }
+      stuck += 1;
+      classIdsOf(pc.parts[0]).forEach((cid) => stuckKeys.add(`${cid}|${pc.parts[0].subjectId}`));
+    });
+    if (repaired || moved) recountLoad();
+
     let placed = 0;
     for (let pass = 0; pass < 4; pass++) {
       const before = placed;
@@ -2129,6 +2732,9 @@ export default function SchedulePage({
           if (a.subjectId) subjectIds.add(a.subjectId);
         });
         subjectIds.forEach((sid) => {
+          // To'g'rilanmagan yarim karta o'sha soatni band qilib turibdi —
+          // ustiga yana dars qo'ysak sinfda ortiqcha soat paydo bo'ladi.
+          if (stuckKeys.has(`${cls.id}|${sid}`)) return;
           let guard = 0;
           while (guard < 80) {
             guard += 1;
@@ -2189,21 +2795,28 @@ export default function SchedulePage({
       });
       if (placed === before) break;
     }
-    return { schedule: next, placed };
+    return { schedule: next, placed, repaired, moved, stuck };
   }
 
   function resolveAll() {
     if (!setSchedule) return;
-    const { schedule: filled, placed } = fillRemaining(schedule);
-    if (placed === 0) {
-      toast?.("Bo'sh ustoz yoki vaqt topilmadi — bu fanlarga yana ustoz qo'shing", "warning");
+    const { schedule: filled, placed, repaired, moved, stuck } = fillRemaining(schedule);
+    if (placed === 0 && repaired === 0 && moved === 0) {
+      toast?.(stuck > 0
+        ? `${stuck} ta yarim karta to'ldirilmadi — guruh ustozi o'sha soatda band. Darsni qo'lda ko'chiring yoki ustoz qo'shing`
+        : "Bo'sh ustoz yoki vaqt topilmadi — bu fanlarga yana ustoz qo'shing", "warning");
       return;
     }
     // To'ldirgandan keyin darhol zichlaymiz — oyna qolmasin
     setSchedule(compactUntilClean(filled, countPlacedUnits(filled), {
       hard: true, rounds: 3, budgetMs: 1400,
     }));
-    toast?.(`${placed} ta soat avtomatik joylashtirildi ✓`, "success");
+    const bits = [];
+    if (placed) bits.push(`${placed} ta soat joylashtirildi`);
+    if (repaired) bits.push(`${repaired} ta yarim karta to'ldirildi`);
+    if (moved) bits.push(`${moved} ta karta boshqa soatga ko'chirildi`);
+    const tail = stuck ? ` · ⚠️ ${stuck} tasiga guruh ustozi topilmadi` : "";
+    toast?.(`${bits.join(", ")} ✓${tail}`, stuck ? "warning" : "success");
   }
 
   // ——— «🧲 OYNANI YOPISH» — MAJBURIY, OYNA NOLGA TUSHGUNCHA ———
@@ -2281,11 +2894,9 @@ export default function SchedulePage({
     if (!setSchedule || !manualCell) return;
     const { day, slotId, classId } = manualCell;
     if (!manualForm.subjectId) { toast?.("Fan tanlang", "warning"); return; }
+    // Soati to'liq qo'yilgan fan ham qo'shilaveradi (almashtirish darsi,
+    // qo'shimcha mashg'ulot va h.k.) — faqat ortiqcha ekani xabar qilinadi.
     const remain = requiredHours(classId, manualForm.subjectId) - placedHours(classId, manualForm.subjectId);
-    if (remain <= 0) {
-      toast?.("Bu fan soatlari to'liq qo'yilgan — ortiqcha qo'shib bo'lmaydi", "warning");
-      return;
-    }
     if (isFixedMondaySubjectId(manualForm.subjectId)
       && (day !== "Dushanba" || slotId !== firstSlotIdOf(classId, day))) {
       toast?.("Kelajak soati faqat dushanbaning 1-darsiga qo'yiladi", "warning");
@@ -2296,19 +2907,37 @@ export default function SchedulePage({
     const cell = next[day][slotId] || [];
     const lock = Boolean(manualForm.lock);
 
-    const lgi = levelGroupInfo(classId, manualForm.subjectId);
-    if (lgi) {
-      const groupItems = lgi.groups.map((g) => ({
-        subjectId: manualForm.subjectId,
-        classId: lgi.classIds[0],
-        classIds: lgi.classIds,
-        teacherId: g.teacherId || "",
-        roomId: g.roomId || "",
-        groupPart: g.name,
-        levelGroupEnabled: true,
-        manual: true,
-        locked: lock,
-      }));
+    // Guruhli fan — HAMMA guruhi bilan birga (yarim karta tug'ilmasin)
+    const gi = manualGroupInfo(classId, manualForm.subjectId);
+    if (gi) {
+      // Guruhlar ayni soatda o'qiydi: bitta xona ikki guruhga yetmaydi
+      const seenRooms = new Set(cell.map((l) => l.roomId).filter(Boolean));
+      const groupItems = gi.groups.map((g) => {
+        const roomFree = Boolean(g.roomId) && !seenRooms.has(g.roomId);
+        if (roomFree) seenRooms.add(g.roomId);
+        const item = {
+          subjectId: g.subjectId || manualForm.subjectId,
+          classId: gi.classIds[0],
+          classIds: [...gi.classIds],
+          teacherId: g.teacherId || "",
+          roomId: roomFree ? g.roomId : "",
+          groupPart: g.name,
+          manual: true,
+          locked: lock,
+        };
+        if (gi.kind === "level") {
+          item.levelGroupEnabled = true;
+          if (gi.groupKey) item.groupKey = gi.groupKey;
+        }
+        if (gi.kind === "split") item.splitEnabled = true;
+        if (gi.kind === "pair") {
+          item.splitEnabled = true;
+          item.pairEnabled = true;
+          item.pairKey = gi.pairKey;
+          if (!g.shared) item.classIds = [classId];
+        }
+        return item;
+      });
       next[day][slotId] = [...cell, ...groupItems];
     } else {
       next[day][slotId] = [...cell, {
@@ -2328,18 +2957,28 @@ export default function SchedulePage({
     }
     setSchedule(next);
     setManualCell(null);
-    toast?.(lock ? "Dars qo'shildi va qulflandi 🔒" : "Dars qo'lda qo'shildi ✓", "success");
+    const gNote = gi ? ` · ${gi.groups.length} ta guruh birga` : "";
+    if (remain <= 0) {
+      const sname = subjectMap.get(manualForm.subjectId)?.name || "Fan";
+      toast?.(`${sname}: soati to'liq edi — ORTIQCHA dars qo'shildi${lock ? " 🔒" : ""}${gNote}`, "warning");
+    } else {
+      toast?.(`${lock ? "Dars qo'shildi va qulflandi 🔒" : "Dars qo'lda qo'shildi ✓"}${gNote}`, "success");
+    }
   }
 
+  // ⚠️ Kalitga ILGARI `teacherId` ham kirardi — shu sababli guruhli darsning
+  // faqat BITTA bo'lagi o'char, ikkinchi guruh katakda yolg'iz qolib ketardi
+  // (aynan shu «yarim karta» soatni jimgina yo'qotardi). Endi karta bo'laklari
+  // `collectCardEntries` bilan yig'iladi — qulflash ham shu qoidada.
   function removeLessonCard(day, slotId, classId, cardLesson) {
     if (!setSchedule) return;
     const cell = schedule?.[day]?.[slotId] || [];
-    const keyOf = (l) => [l.subjectId, l.groupKey || "", l.blockIndex ?? "", l.teacherId || ""].join("__");
-    const cardKey = keyOf(cardLesson);
+    const entries = collectCardEntries(cell, cardLesson, classId);
+    if (!entries.length) return;
     const next = { ...schedule, [day]: { ...(schedule?.[day] || {}) } };
-    next[day][slotId] = cell.filter((l) => !(keyOf(l) === cardKey && classIdsOf(l).includes(classId)));
+    next[day][slotId] = cell.filter((l) => !entries.includes(l));
     setSchedule(next);
-    toast?.("Dars o'chirildi", "error");
+    toast?.(entries.length > 1 ? `Dars o'chirildi (${entries.length} ta guruh)` : "Dars o'chirildi", "error");
   }
 
   function handleClear() {
@@ -2616,11 +3255,52 @@ export default function SchedulePage({
             // Jadval chiqqan va birorta soat tushmay qolmagan — demak sig'im
             // yetgan. Shunda «sig'maydi» degan BASHORATLAR ko'rsatilmaydi:
             // ular amalda rad etilgan va faqat chalg'itadi.
-            const complete = anyLessons && totalMissing === 0;
+            // Yarim karta qolgan bo'lsa jadval TO'LIQ emas — guruhning bir
+            // qismi ustozsiz turibdi, buni «100%» deb ko'rsatib bo'lmaydi.
+            const complete = anyLessons && totalMissing === 0 && partialCards.length === 0;
             const caps = capacityWarnings(complete);
-            if (!anyLessons && !gm.length && !caps.length && !superviseGaps.length) return null;
+            if (!anyLessons && !gm.length && !caps.length && !superviseGaps.length
+              && !partialCards.length && !teacherHourRows.length) return null;
             return (
               <>
+                {/* 0) YARIM TUSHGAN DARSLAR — guruh yozuvi yetishmayotgan katak.
+                    Bu soat «joylashgan» deb sanalmaydi (aks holda 2-guruh
+                    ustozi yo'qolganda ham foiz 100% ko'rinardi). */}
+                {partialCards.length > 0 && (
+                  <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 6 }}>
+                      <div style={{ fontWeight: 800, fontSize: 16, color: "#991b1b" }}>
+                        🧩 {partialCards.length} ta dars YARIM tushgan — guruh ustozi yo'q
+                      </div>
+                      <button type="button" className="btn btn-success" onClick={resolveAll}>
+                        🔧 To'g'rilash
+                      </button>
+                    </div>
+                    <div style={{ fontSize: 12.5, color: "#b91c1c", marginBottom: 8 }}>
+                      Bu kataklarda guruhli darsning bir qismi yo'q — ya'ni sinfning bir guruhi
+                      o'sha soatda <b>ustozsiz</b> qoladi. Shuning uchun ular to'liq soat deb
+                      sanalmaydi va «tushmagan soat» ro'yxatiga kiradi.
+                      «🔧 To'g'rilash» avval yetishmagan guruhni <b>joyida</b> to'ldiradi;
+                      ustoz o'sha soatda band bo'lsa — butun kartani boshqa soatga ko'chiradi.
+                    </div>
+                    {partialCards.slice(0, 10).map((pc, i) => (
+                      <div key={i} style={{ background: "#fff", border: "1px solid #fecaca", borderRadius: 10, padding: 10, marginBottom: 6 }}>
+                        <div style={{ fontWeight: 700, color: "#991b1b", fontSize: 13.5 }}>
+                          {pc.className} · {pc.subjectName} — {pc.day}, {pc.lessonNumber}-dars
+                        </div>
+                        <div style={{ fontSize: 12.5, color: "#7f1d1d", marginTop: 4 }}>
+                          Yetishmayapti: {pc.gaps.map((g) => `${g.name || "guruh"} — ${getName(teacherMap, g.teacherId, "ustoz tanlanmagan")}`).join(", ")}
+                          {pc.gaps.some((g) => g.teacherId && teacherBusyReason(g.teacherId, pc.day, pc.slotId))
+                            && ` · sabab: ${pc.gaps.map((g) => teacherBusyReason(g.teacherId, pc.day, pc.slotId)).filter(Boolean).join("; ")}`}
+                        </div>
+                      </div>
+                    ))}
+                    {partialCards.length > 10 && (
+                      <div style={{ fontSize: 12.5, color: "#991b1b" }}>… yana {partialCards.length - 10} ta</div>
+                    )}
+                  </div>
+                )}
+
                 {/* 1) HAQIQATAN tushmagan soat — «joylashmadi» faqat shu yerda */}
                 {totalMissing > 0 && (
                   <div style={{ background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 12, padding: 16, marginBottom: 16 }}>
@@ -2656,6 +3336,34 @@ export default function SchedulePage({
                 {complete && (
                   <div style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 12, padding: "10px 14px", marginBottom: 14, color: "#065f46", fontWeight: 600 }}>
                     ✅ Barcha fan soatlari to'liq joylashtirildi (100%).
+                    {teacherHourRows.length === 0 && " Har bir ustozning rejadagi soati setkada ham to'liq."}
+                  </div>
+                )}
+
+                {/* 2a) USTOZ SOATI: REJA ↔ SETKA
+                    Sinf bo'yicha hisob to'g'ri chiqib, ustozning soati kam
+                    bo'lib qolishi mumkin (yarim karta, qo'lda o'chirilgan
+                    guruh). Shuning uchun tekshiruv ustoz tomonidan ham
+                    takrorlanadi — soat jimgina yo'qolmasin. */}
+                {anyLessons && teacherHourRows.length > 0 && (
+                  <div style={{ background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 12, padding: 14, marginBottom: 16 }}>
+                    <div style={{ fontWeight: 800, color: "#9a3412", marginBottom: 4 }}>
+                      👤 {teacherHourRows.length} ta ustozda reja va setka mos kelmadi
+                    </div>
+                    <div style={{ fontSize: 12.5, color: "#b45309", marginBottom: 8 }}>
+                      «Sinf fanlari»da biriktirilgan soat bilan jadvalda haqiqatan turgan soat
+                      solishtirildi. Kam bo'lsa — o'sha soat tushmagan yoki guruh yozuvi
+                      yo'qolgan; ko'p bo'lsa — qo'lda ortiqcha dars qo'shilgan.
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {teacherHourRows.slice(0, 14).map((r) => (
+                        <span key={r.id} style={{ background: "#fff", border: "1px solid #fed7aa", borderRadius: 8, padding: "3px 8px", fontSize: 13, color: "#9a3412" }}>
+                          {r.name}: rejada <b>{r.planned}</b>, setkada <b>{r.done}</b>
+                          {" "}({r.diff > 0 ? `+${r.diff} ortiqcha` : `${-r.diff} soat tushmadi`})
+                        </span>
+                      ))}
+                      {teacherHourRows.length > 14 && <span style={{ fontSize: 13, color: "#9a3412" }}>… yana {teacherHourRows.length - 14} ta</span>}
+                    </div>
                   </div>
                 )}
 
@@ -2854,68 +3562,164 @@ export default function SchedulePage({
         const slot = sortedTimeslots.find((s) => s.id === slotId);
         const cls = classes.find((c) => c.id === classId);
         const warns = conflictsAt(day, slotId, classId, manualForm.teacherId, manualForm.roomId);
-        const subjTeachers = manualForm.subjectId ? teachersForSubject(manualForm.subjectId) : [];
-        const remainingSubjects = missingForClass(classId);
-        const lgi = manualForm.subjectId ? levelGroupInfo(classId, manualForm.subjectId) : null;
-        const effectiveWarns = lgi ? groupConflictsAt(day, slotId, lgi.classIds, lgi.groups) : warns;
+        // Fanlar — FAQAT shu sinfda yoqilganlari; ustozlar/xonalar — FAQAT
+        // aynan shu VAQTDA bo'sh bo'lganlari (bandlari ro'yxatga chiqmaydi).
+        const subjRows = classSubjectChoices(classId, day, slotId);
+        const pickedRow = subjRows.find((r) => r.subjectId === manualForm.subjectId) || null;
+        const tc = teacherChoices(classId, manualForm.subjectId, day, slotId);
+        const rc = roomChoices(day, slotId);
+        const altTc = teacherChoices(classId, manualForm.altSubjectId, day, slotId);
+        const freeNow = new Set();
+        subjRows.forEach((r) => {
+          const c = teacherChoices(classId, r.subjectId, day, slotId);
+          [...c.ownFree, ...c.otherFree].forEach((t) => freeNow.add(t.id));
+        });
+        // Guruhli fan bitta yozuv bo'lib tushmaydi — karta HAMMA guruhi bilan
+        // qo'shiladi, shuning uchun bandlik ham har guruh ustozi bo'yicha
+        // tekshiriladi.
+        const gi = manualForm.subjectId ? manualGroupInfo(classId, manualForm.subjectId) : null;
+        const effectiveWarns = gi ? groupConflictsAt(day, slotId, gi.classIds, gi.groups) : warns;
         const hasBlocker = effectiveWarns.some((w) => w.startsWith("⛔"));
         const hasParallel = effectiveWarns.some((w) => w.startsWith("⚠️"));
+        // Ma'lumot uchun eslatmalar — taqiqlamaydi, faqat ogohlantiradi
+        const notes = [];
+        if (pickedRow && pickedRow.missing === 0) {
+          notes.push(`ℹ️ ${pickedRow.name}: haftalik ${pickedRow.need} soat allaqachon to'liq qo'yilgan — bu dars ORTIQCHA bo'ladi.`);
+        }
+        if (manualForm.subjectId) {
+          const cap = subjectDayCap(classId, manualForm.subjectId);
+          const today = subjectDayCount(classId, manualForm.subjectId, day);
+          if (today >= cap) notes.push(`ℹ️ Bu fan ${day} kuni allaqachon ${today} soat turibdi (kunlik me'yor — ${cap}).`);
+          // «Fan almashinuvi» — YAGONA holat: dars bitta yozuv bo'lib tushadi
+          // (guruhlar keyingi soatda almashadi, buni qo'lda qurib bo'lmaydi).
+          // Qolgan guruhli sozlamalar endi to'liq karta bo'lib qo'shiladi.
+          const sw = (classSubjects?.[classId] || []).find((a) => (
+            a.swapEnabled && (a.subjectId === manualForm.subjectId || a.swapSubjectId === manualForm.subjectId)
+          ));
+          if (sw) {
+            notes.push("ℹ️ Bu fan sozlamasida «fan almashinuvi» yoqilgan — qo'lda qo'shilgan dars faqat BITTA guruh sifatida tushadi.");
+          }
+        }
+        const shownWarns = [...effectiveWarns, ...notes];
         return (
           <div onClick={() => setManualCell(null)}
             style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
             <div onClick={(e) => e.stopPropagation()}
               style={{ background: "var(--card-bg, #fff)", borderRadius: 14, padding: 20, width: "100%", maxWidth: 460, maxHeight: "88vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
               <h3 style={{ margin: "0 0 4px" }}>Qo'lda dars qo'shish</h3>
-              <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 14 }}>
+              <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 10 }}>
                 {cls?.name} · {day} · {slotDisplayNumber(slot)}-dars
+                {slot?.startTime && slot?.endTime ? ` · ${slot.startTime}–${slot.endTime}` : ""}
               </div>
 
-              {remainingSubjects.length === 0 ? (
-                <div style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 10, padding: 12, color: "#065f46", fontSize: 14 }}>
-                  ✓ Bu sinfning barcha fan soatlari to'liq qo'yilgan. Qo'shimcha dars qo'shish shart emas.
+              {subjRows.length === 0 ? (
+                <div style={{ background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 10, padding: 12, color: "#9a3412", fontSize: 14 }}>
+                  Bu sinfga hali fan biriktirilmagan — avval «Sinf fanlari» bo'limida fan qo'shing.
                 </div>
               ) : (
                 <>
-                  <label className="form-label">Fan (faqat tushmagan soatlar)</label>
+                  <div style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 10, padding: "8px 10px", color: "#065f46", fontSize: 13, fontWeight: 700, marginBottom: 12 }}>
+                    🟢 Bu vaqtda bo'sh: {freeNow.size} ta ustoz · {rc.free.length} ta xona
+                  </div>
+
+                  <label className="form-label">Fan — faqat shu sinfda yoqilganlari</label>
                   <select className="form-control" value={manualForm.subjectId}
-                    onChange={(e) => setManualForm({ ...manualForm, subjectId: e.target.value, teacherId: assignedTeacher(classId, e.target.value) })}>
+                    onChange={(e) => setManualForm({
+                      ...manualForm,
+                      subjectId: e.target.value,
+                      teacherId: pickFreeTeacher(classId, e.target.value, day, slotId),
+                    })}>
                     <option value="">— fan tanlang —</option>
-                    {remainingSubjects.map((m) => (
-                      <option key={m.subjectId} value={m.subjectId}>{m.name} — {m.missing} soat qoldi</option>
+                    {subjRows.map((m) => (
+                      <option key={m.subjectId} value={m.subjectId}>
+                        {m.name} — {m.missing > 0 ? `${m.missing} soat qoldi` : "soati to'liq"}
+                        {m.ownFreeCount > 0
+                          ? ` · ustozi bo'sh (${m.ownFreeCount})`
+                          : m.freeCount > 0
+                            ? ` · ustozi band, ${m.freeCount} ta almashtiruvchi bor`
+                            : " · bo'sh ustoz yo'q"}
+                      </option>
                     ))}
                   </select>
 
-                  {lgi ? (
+                  {gi ? (
                     <div style={{ marginTop: 12, background: "#eef2ff", border: "1px solid #c7d2fe", borderRadius: 10, padding: 12 }}>
                       <div style={{ fontSize: 13, fontWeight: 700, color: "#3730a3", marginBottom: 6 }}>
-                        🎯 Bu fan daraja guruhli — guruh ustozlari bilan qo'shiladi:
+                        {gi.kind === "level" ? "🎯 Bu fan daraja guruhli" : gi.kind === "split" ? "✂️ Bu fan 2 guruhga bo'lingan" : "🧩 Bu soatda bir nechta guruh o'qiydi"}
+                        {" "}— karta HAMMA guruhi bilan birga qo'shiladi:
                       </div>
                       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                        {lgi.groups.map((g, i) => (
-                          <div key={i} style={{ fontSize: 13 }}>
-                            <b>{g.name}</b>: {getName(teacherMap, g.teacherId, "ustoz tanlanmagan")}
-                          </div>
-                        ))}
+                        {gi.groups.map((g, i) => {
+                          const why = teacherBusyReason(g.teacherId, day, slotId);
+                          const gSubj = gi.kind === "pair" ? subjectMap.get(g.subjectId)?.name : "";
+                          return (
+                            <div key={i} style={{ fontSize: 13 }}>
+                              <b>{g.name}</b>{gSubj ? ` · ${gSubj}` : ""}: {getName(teacherMap, g.teacherId, "ustoz tanlanmagan")}
+                              {g.teacherId && (
+                                <span style={{ color: why ? "#b91c1c" : "#047857", fontWeight: 700 }}>
+                                  {why ? ` · band (${why})` : " · bo'sh ✓"}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                       <div style={{ fontSize: 12, color: "#4338ca", marginTop: 6 }}>
-                        Sinflar: {lgi.classIds.map((id) => classes.find((c) => c.id === id)?.name).filter(Boolean).join(", ")}
+                        Sinflar: {gi.classIds.map((id) => classes.find((c) => c.id === id)?.name).filter(Boolean).join(", ")}
+                      </div>
+                      <div style={{ fontSize: 12, color: "#4338ca", marginTop: 4 }}>
+                        Guruh ustozi band bo'lsa dars baribir qo'shiladi, lekin o'sha ustoz
+                        bir vaqtda ikki sinfda turib qoladi (yuqoridagi ⚠️ ogohlantirishlarga
+                        qarang) — avval uning vaqtini bo'shating.
                       </div>
                     </div>
                   ) : (
                     <>
-                      <label className="form-label" style={{ marginTop: 10, display: "block" }}>Ustoz</label>
+                      <label className="form-label" style={{ marginTop: 10, display: "block" }}>
+                        Ustoz — bu vaqtda bo'sh bo'lganlari
+                      </label>
                       <select className="form-control" value={manualForm.teacherId} disabled={!manualForm.subjectId}
                         onChange={(e) => setManualForm({ ...manualForm, teacherId: e.target.value })}>
-                        <option value="">— ustoz tanlang —</option>
-                        {subjTeachers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                        <option value="">{tc.free.length ? "— ustoz tanlang —" : "— ustozsiz —"}</option>
+                        {tc.ownFree.length > 0 ? (
+                          <optgroup label="Shu sinf ustozi">
+                            {tc.ownFree.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                          </optgroup>
+                        ) : tc.otherFree.length > 0 && (
+                          <optgroup label={tc.hasOwn ? "Almashtirish — sinf ustozi band" : "Shu fandan bo'sh ustozlar"}>
+                            {tc.otherFree.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                          </optgroup>
+                        )}
                       </select>
+                      {manualForm.subjectId && tc.ownFree.length === 0 && tc.otherFree.length > 0 && (
+                        <div style={{ fontSize: 12.5, color: "#b45309", marginTop: 6, lineHeight: 1.5 }}>
+                          ⚠️ Sinfning o'z ustozi bu vaqtda band — ro'yxatda shu fandan bo'sh boshqa ustozlar turibdi.
+                        </div>
+                      )}
+                      {manualForm.subjectId && tc.free.length === 0 && (
+                        <div style={{ fontSize: 12.5, color: "#b91c1c", marginTop: 6, lineHeight: 1.5 }}>
+                          ⛔ Bu fandan shu vaqtda bo'sh ustoz yo'q — hamma ustoz band yoki dam olmoqda.
+                        </div>
+                      )}
+                      {manualForm.subjectId && tc.busy.length > 0 && (
+                        <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 6, lineHeight: 1.5 }}>
+                          Band bo'lgani uchun ro'yxatga chiqmadi: {tc.busy.map((b) => `${b.name} (${b.reason})`).join(" · ")}
+                        </div>
+                      )}
 
-                      <label className="form-label" style={{ marginTop: 10, display: "block" }}>Xona (ixtiyoriy)</label>
+                      <label className="form-label" style={{ marginTop: 10, display: "block" }}>
+                        Xona (ixtiyoriy) — bu vaqtda bo'shlari
+                      </label>
                       <select className="form-control" value={manualForm.roomId}
                         onChange={(e) => setManualForm({ ...manualForm, roomId: e.target.value })}>
                         <option value="">Xonasiz</option>
-                        {rooms.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                        {rc.free.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
                       </select>
+                      {rc.busyCount > 0 && (
+                        <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 6 }}>
+                          {rc.busyCount} ta xona bu vaqtda band — ro'yxatda yo'q.
+                        </div>
+                      )}
 
                       <div style={{ marginTop: 14, padding: 12, background: "rgba(124,58,237,.06)", border: "1px solid rgba(124,58,237,.2)", borderRadius: 10 }}>
                         <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 14, fontWeight: 600, color: "#6d28d9" }}>
@@ -2927,18 +3731,28 @@ export default function SchedulePage({
                           <div style={{ marginTop: 10 }}>
                             <label className="form-label">Almashadigan fan</label>
                             <select className="form-control" value={manualForm.altSubjectId}
-                              onChange={(e) => setManualForm({ ...manualForm, altSubjectId: e.target.value, altTeacherId: assignedTeacher(classId, e.target.value) })}>
+                              onChange={(e) => setManualForm({
+                                ...manualForm,
+                                altSubjectId: e.target.value,
+                                altTeacherId: pickFreeTeacher(classId, e.target.value, day, slotId),
+                              })}>
                               <option value="">— fan tanlang —</option>
-                              {subjects.filter((s) => s.id !== manualForm.subjectId).map((s) => (
-                                <option key={s.id} value={s.id}>{s.name}</option>
+                              {subjRows.filter((m) => m.subjectId !== manualForm.subjectId).map((m) => (
+                                <option key={m.subjectId} value={m.subjectId}>
+                                  {m.name}{m.freeCount > 0 ? ` · ${m.freeCount} ta bo'sh ustoz` : " · bo'sh ustoz yo'q"}
+                                </option>
                               ))}
                             </select>
-                            <label className="form-label" style={{ marginTop: 8, display: "block" }}>Almashadigan fan ustozi</label>
+                            <label className="form-label" style={{ marginTop: 8, display: "block" }}>
+                              Almashadigan fan ustozi — bo'shlari
+                            </label>
                             <select className="form-control" value={manualForm.altTeacherId} disabled={!manualForm.altSubjectId}
                               onChange={(e) => setManualForm({ ...manualForm, altTeacherId: e.target.value })}>
-                              <option value="">— ustoz tanlang —</option>
-                              {(manualForm.altSubjectId ? teachersForSubject(manualForm.altSubjectId) : []).map((t) => (
-                                <option key={t.id} value={t.id}>{t.name}</option>
+                              <option value="">{altTc.free.length ? "— ustoz tanlang —" : "— ustozsiz —"}</option>
+                              {altTc.free.map((t) => (
+                                <option key={t.id} value={t.id}>
+                                  {t.name}{t.own ? "" : " · almashtirish"}
+                                </option>
                               ))}
                             </select>
                             {manualForm.altSubjectId && (
@@ -2958,9 +3772,14 @@ export default function SchedulePage({
                     🔒 Qulflab qo'yish — avtomatik jadval tuzilganda bu dars o'zgarmaydi
                   </label>
 
-                  {effectiveWarns.length > 0 && (
-                    <div style={{ marginTop: 12, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 10 }}>
-                      {effectiveWarns.map((w, i) => (
+                  {shownWarns.length > 0 && (
+                    <div style={{
+                      marginTop: 12,
+                      background: hasBlocker || hasParallel ? "#fef2f2" : "#fffbeb",
+                      border: `1px solid ${hasBlocker || hasParallel ? "#fecaca" : "#fde68a"}`,
+                      borderRadius: 10, padding: 10,
+                    }}>
+                      {shownWarns.map((w, i) => (
                         <div key={i} style={{ fontSize: 13, color: w.startsWith("ℹ️") ? "#92400e" : "#b91c1c", marginTop: i ? 4 : 0 }}>{w}</div>
                       ))}
                     </div>
@@ -2970,7 +3789,7 @@ export default function SchedulePage({
 
               <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 18 }}>
                 <button className="btn btn-secondary" type="button" onClick={() => setManualCell(null)}>Yopish</button>
-                {remainingSubjects.length > 0 && (
+                {subjRows.length > 0 && (
                   <button className="btn btn-primary" type="button" disabled={!manualForm.subjectId || hasBlocker} onClick={addManualLesson}>
                     {hasBlocker ? "Qo'yib bo'lmaydi" : (hasParallel ? "Baribir qo'shish" : "Qo'shish")}
                   </button>
@@ -3017,7 +3836,9 @@ export default function SchedulePage({
               <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
                 {resolveData.placements.map((p, i) => (
                   <div key={i} style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 8, padding: "8px 10px", fontSize: 13, color: "#065f46" }}>
-                    <b>{p.day}, {slotNumOf(p.slotId)}-dars</b> — {resolveData.name}, ustoz: {getName(teacherMap, p.teacherId)}
+                    <b>{p.day}, {slotNumOf(p.slotId)}-dars</b> — {resolveData.name}, ustoz:{" "}
+                    {(p.teacherIds?.length ? p.teacherIds : [p.teacherId]).map((id) => getName(teacherMap, id)).join(" + ")}
+                    {p.entries?.length > 1 ? ` (${p.entries.length} ta guruh birga)` : ""}
                   </div>
                 ))}
               </div>

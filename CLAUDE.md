@@ -540,6 +540,56 @@ Mexanizm faqat rahbarning tashqi soati bor sinflarda yoqiladi
 (teskari import bor) — `isTeachingSlot`, `slotAllowsClass`, `classHasLunchAt`
 va vaqt bandlari mantig'i u yerda ataylab takrorlangan.
 
+### YARIM KARTA — SOAT EMAS (guruh-hisobli sanoq)
+
+⚠️ **Eng qimmatga tushgan xato shu bo'lgan.** Guruhli dars bitta katakda BIR
+NECHTA yozuv bo'lib turadi (2 guruhga bo'lish — ikki ustoz, daraja guruhlari —
+har daraja, «bir vaqtda bir nechta fan» — har guruh). Sanoq esa faqat «bu
+katakda shu fan bormi?» deb qarardi. Natijada 2-guruh yozuvi tushmay qolsa ham
+ekranda **«✅ 100%»** turar, ustozning soati esa jimgina yo'qolardi
+(3-V · Ingliz tili: 6 katak bor edi, ikkitasida faqat 1-guruh — Baxorov
+Ulug'bekning 2 soati yo'q bo'lgan, hech qanday ogohlantirish chiqmagan).
+
+Endi qoida bitta: **guruh yozuvi yetishmayotgan katak joylashgan soat
+hisoblanmaydi.** Mexanizm [Schedule.jsx](src/pages/Schedule.jsx) da:
+
+| Qism | Vazifasi |
+|---|---|
+| `cardPlanIdx` (useMemo) | sinf+fan → sozlamaga ko'ra katakda NECHTA yozuv bo'lishi kerak (`need`, `groups`) |
+| `partCardKey` | karta kaliti — `moveResolver.sameCard` bilan **ayni qoida** |
+| `cardsOfClass` / `cardGaps` | katakdagi kartalar va yetishmayotgan guruhlar |
+| `countPlacedUnits`, `placedHours`, `fillRemaining.countCS` | yarim kartani SANAMAYDI |
+| `findPartialCards` | ekrandagi «🧩 N ta dars YARIM tushgan» ro'yxati |
+| `teacherHourRows` | ustoz bo'yicha ikkinchi tekshiruv: **rejada** (`buildTeacherStreams`) ↔ **setkada** (ustoz band bo'lgan kataklar) |
+
+Reja generatordagi TIKLANISH qoidalarini takrorlaydi (takroriy ustozli daraja
+tashlanadi, ikkala guruhga bir xil ustoz qo'yilgan «bo'linish» oddiy dars deb
+qaraladi) — aks holda generatorning O'Z natijasi «yarim» ko'rinardi.
+**Guruhni USTOZ ajratadi:** bir kartada bir ustoz ikki guruhda tura olmaydi.
+
+**Yarim kartani KIM tug'ardi** (hammasi tuzatilgan):
+
+| Manba | Ilgari | Endi |
+|---|---|---|
+| «＋ Qo'lda dars qo'shish» | HAR DOIM bitta yozuv | `manualGroupInfo()` — karta hamma guruhi bilan (bo'linish, daraja, juftlik) |
+| «🔧 Hal qilish» (`planResolutions`) | bitta yozuv, xonasiz | guruhlar bilan; joy HAR BIR guruh ustozi bo'sh bo'lgandagina tanlanadi |
+| Kartadagi ✕ (`removeLessonCard`) | kalitda `teacherId` bo'lgani uchun faqat BITTA guruhni o'chirardi | `collectCardEntries` — butun karta |
+| Generator: `levelGroupEnabled`, lekin `levelGroupKey` bo'sh | daraja guruhi butunlay e'tiborsiz, dars bitta ustoz bilan joylanardi | kalitsiz guruh ham ishlaydi (kalit faqat sinflarni birga o'qitish uchun) |
+
+**`fillRemaining` ning 0-BOSQICHI — yarim kartani to'g'rilash.** Uch qadam:
+1. **joyida to'ldirish** — yetishmagan guruh ustozi (va xonasi) shu soatda bo'sh bo'lsa;
+2. **butun kartani ko'chirish** — blok bo'laklari bilan birga; yangi joy
+   TOPILGANDAN keyingina eskisi bo'shatiladi (soat yo'qolmaydi);
+3. iloji bo'lmasa — **tegilmaydi**: dars o'chirilmaydi, soat «tushmadi» bo'lib
+   sanaladi va ekranga chiqadi. Bunday fan `stuckKeys` ga tushadi va quyidagi
+   to'ldirgich uni chetlab o'tadi — aks holda o'sha soat IKKINCHI marta, boshqa
+   katakka qo'yilib, sinfda ortiqcha dars paydo bo'lardi.
+
+⚠️ Yangi yozuv qo'shganda blok belgilari (`blockSize`/`blockIndex`) AYNAN
+ko'chiriladi: generator oddiy darsga ham `blockSize: 1, blockIndex: 0` yozadi,
+karta kaliti esa blok indeksini hisobga oladi — qiymat farq qilsa yozuv ayrim
+karta bo'lib qolar va katak baribir «yarim» ko'rinardi.
+
 ### Ma'lumot xatolaridan tiklanish
 
 Guruhlar AYNI VAQTDA o'qiydi, shuning uchun bitta ustoz yoki bitta xona ikki
@@ -551,6 +601,7 @@ soatlar **jimgina yo'qolardi**. Endi generator tiklanadi:
 | Daraja guruhlarida bir xil ustoz | takroriy daraja tashlanadi (`cleanLevelGroups`) |
 | Daraja/guruh/juftlikda bir xil xona | takroriy xona olib tashlanadi, dars xonasiz joylanadi (`dedupeRooms`) |
 | `splitEnabled`, lekin 1- va 2-guruhga bir xil ustoz | oddiy (bo'linmagan) dars sifatida joylanadi |
+| `levelGroupEnabled`, lekin kalit bo'sh | guruh SAQLANADI, faqat shu sinfga tegishli bo'ladi |
 
 Ma'lumotni baribir to'g'rilash kerak, shuning uchun
 [Schedule.jsx](src/pages/Schedule.jsx) `capacityWarnings()` bu holatlarni
@@ -674,6 +725,10 @@ bir necha MB — shu brauzerda IKKINCHI profil ochilsa kvota to'ladi.
 - **O'lik kod:** [deviceLock.js](src/services/deviceLock.js) va
   [DeviceLockNotice.jsx](src/components/DeviceLockNotice.jsx) hech qayerdan import
   qilinmaydi — qurilma cheklovi olib tashlangan. Ularga qarab xulosa chiqarmang.
+  `scheduleGenerator.js` dagi `validateScheduleData()` ham shunday: eksport
+  qilingan, lekin hech qayerdan chaqirilmaydi — u yozadigan «xato» xabarlari
+  ekranga CHIQMAYDI. Sozlamadagi ziddiyatni foydalanuvchiga ko'rsatish kerak
+  bo'lsa — [Schedule.jsx](src/pages/Schedule.jsx) `capacityWarnings()` ga yozing.
 - **Ildizdagi `README_*.md` fayllari** — eski versiya eslatmalari (port 5173, demo
   parollari va h.k. eskirgan). Haqiqat manbai — kod va shu fayl.
 - Fayllar katta (`scheduleGenerator.js` 3.7k qator, `Schedule.jsx` ~2k). Tahrirlashdan
