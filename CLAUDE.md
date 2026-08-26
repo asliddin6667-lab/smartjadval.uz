@@ -301,6 +301,41 @@ Ustoz yuklamasi esa aksincha — har guruh ustozi ALOHIDA sanaladi.
   yagona dvigateli**. Sinf setkasi ([Schedule.jsx](src/pages/Schedule.jsx)) va ustoz
   setkasi ([TeacherGrid.jsx](src/components/TeacherGrid.jsx)) ikkalasi ham shundan
   foydalanadi — ko'chirish qoidasi o'zgarsa, faqat shu faylga tegiladi.
+- `fillRemaining()` ([Schedule.jsx](src/pages/Schedule.jsx)) — **zaxira to'ldirgich**.
+  Generator tushira olmagan soatlarni joylashtiradi: avtomatik (generatsiya oxirida,
+  `markManual = false`) va «🔧 Hammasini bir bosishda hal qilish» tugmasi orqali
+  (`resolveAll`, `markManual = true`).
+
+**ZAXIRA TO'LDIRGICH SOZLAMANI TAKRORLASHI SHART.**
+⚠️ Ilgari u darsni «shundoq» qo'yardi — `{ subjectId, teacherId, roomId: "" }`.
+Natijada 2 guruhga bo'lingan fan yolg'iz, XONASIZ va BLOKSIZ tushib qolardi:
+ekranda «Ingliz tili — 1-guruh ustozi • Xonasiz», 2-guruh ustozi esa umuman
+yo'qolardi (`assignedTeacher()` faqat `a.teacherId` ni qaytaradi). «2 soat blok»
+ham buzilib, ikki soat ikki xil kunga tarqalib ketardi.
+
+Endi `fillTemplate(cls, sid)` sinf fanidagi sozlamadan **shablon** yasaydi va
+`placeTemplate()` uni aynan generatordagi `buildEntries()` kabi yozadi:
+
+| Sozlama | Shablon |
+|---|---|
+| Daraja guruhlari | har guruh — alohida yozuv, `levelGroupEnabled` + `groupKey = levelGroupKey`, sinflar `levelGroupInfo()` dan |
+| 2 guruhga bo'lish (`splitEnabled`) | ikki yozuv BITTA katakda: `teacherId`/`roomId` va `teacherId2`/`roomId2`, `groupPart`, `splitEnabled` |
+| Hafta almashinuvi | bitta yozuv + `alternating`/`altSubjectId`/`altTeacherId`/`altRoomId`, blok qilinmaydi |
+| Parallel dars (`groupKey`) | bitta yozuv, `classIds` — guruhdagi HAMMA sinf, `groupKey` yoziladi |
+| Oddiy dars | bitta yozuv, endi **xonasi bilan** |
+
+`allowQuad`/`allowDouble` bo'lsa blok uzunligi 4 → 2 → 1 tartibida sinaladi
+(`blockSize`/`blockIndex` yoziladi, aks holda zichlash blokni ikkiga bo'lardi).
+Bo'laklar `blockLinkOk()` bilan bog'lanadi — obed ustidan o'tishga ruxsat, lekin
+60 daqiqadan uzun uzilish (smena almashinuvi) orqali emas.
+
+`spotFor()` joy qidirishda HAR BIR guruh ustozi va HAR BIR xonani tekshiradi
+(ilgari xona umuman tekshirilmasdi, chunki hech qachon yozilmasdi).
+
+**`pairEnabled` va `swapEnabled` — TEGILMAYDI.** Sinf guruhlarga bo'lingan yoki
+soat hisobi boshqacha; yolg'iz dars qo'yish jadvalni buzadi, shuning uchun ular
+«tushmadi» ro'yxatida rostgo'y qolib ketadi. **Yangi guruh turini qo'shsangiz —
+`fillTemplate` ga ham shox qo'shing, aks holda u yerda jimgina buzilib chiqadi.**
 
 Hard cheklovlar (ikkala dvigatelda ham): ustoz/sinf dam kuni, obed guruhlari, smena
 (`timeslot.classIds`), ustoz/sinf/xona bandligi.

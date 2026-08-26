@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { DAYS, typeOfGroup } from "../utils/constants";
 import {
   generateSchedule, budgetFor, isTeachingSlot, classHasLunchAt, classesHaveLunchAt, compactSchedule,
-  isFixedMondaySubject,
+  isFixedMondaySubject, QUAD_SIZE,
 } from "../utils/scheduleGenerator";
 import { exportColoredSchedule } from "../utils/coloredScheduleExport";
 import {
@@ -1831,29 +1831,199 @@ export default function SchedulePage({
       next[day][ts.id].some((l) => l.subjectId === sid && classIdsOf(l).includes(cid)) ? n + 1 : n
     ), 0);
 
-    const freeSlot = (cid, sid, teacherList, classOff) => {
+    // ═══════════ DARS SHABLONI ═══════════
+    // ⚠️ Ilgari bu funksiya darsni «shundoq» qo'yardi:
+    //     { subjectId, classId, teacherId, roomId: "" }
+    // Natijada 2 guruhga bo'lingan fan yolg'iz, XONASIZ va BLOKSIZ tushib,
+    // ekranda «Ingliz tili — 1-guruh ustozi • Xonasiz» bo'lib qolardi
+    // (2-guruh ustozi butunlay yo'qolardi). Endi dars sinf fanidagi
+    // sozlama qanday bo'lsa shunday tug'iladi: har guruhning O'Z ustozi
+    // va xonasi, parallel sinflar va blok uzunligi bilan.
+    //
+    // Qaytadi: { a, sid, classIds, parts[], plain?, noBlock? }
+    //   `parts` — BITTA katakka tushadigan yozuvlar (guruhlar ayni soatda).
+    const dedupeRooms = (parts) => {
+      // Guruhlar bir vaqtda o'qiydi — bitta xona ikki guruhga yetmaydi.
+      // Takroriysi xonasiz qoladi (generatordagi `dedupeRooms` bilan bir xil).
+      const seen = new Set();
+      parts.forEach((p) => {
+        if (!p.roomId || seen.has(p.roomId)) p.roomId = "";
+        else seen.add(p.roomId);
+      });
+      return parts;
+    };
+    const fillTemplate = (cls, sid) => {
+      const a = (classSubjects?.[cls.id] || []).find((x) => x.subjectId === sid);
+      if (!a) return null;
+      // Bu ikkisiga TEGILMAYDI: «bir vaqtda bir nechta fan»da sinf guruhlarga
+      // bo'lingan, «fan almashinuvi»da esa soat hisobi boshqacha — yolg'iz
+      // dars qo'yish jadvalni buzadi. Ular «tushmadi» ro'yxatida qoladi.
+      if (a.pairEnabled || a.swapEnabled) return null;
+
+      // 1) DARAJA GURUHLARI — har guruh o'z ustozi bilan, ayni soatda
+      if (a.levelGroupEnabled) {
+        const info = levelGroupInfo(cls.id, sid);
+        const seenT = new Set();
+        const parts = [];
+        (info?.groups || []).forEach((g, i) => {
+          if (!g?.teacherId || seenT.has(g.teacherId)) return;
+          seenT.add(g.teacherId);
+          parts.push({
+            teacherId: g.teacherId, roomId: g.roomId || "",
+            groupPart: g.name || `${i + 1}-guruh`,
+            levelGroupEnabled: true, groupKey: String(a.levelGroupKey || "").trim(),
+          });
+        });
+        if (!parts.length) return null;
+        return { a, sid, classIds: [...(info?.classIds || [cls.id])], parts: dedupeRooms(parts) };
+      }
+
+      // 2) 2 GURUHGA BO'LISH — ikki ustoz, ikki xona, BITTA katakda
+      if (a.splitEnabled && a.teacherId2 && a.teacherId2 !== a.teacherId) {
+        return {
+          a, sid, classIds: [cls.id],
+          parts: dedupeRooms([
+            { teacherId: a.teacherId, roomId: a.roomId || "", groupPart: a.groupName1 || "1-guruh", splitEnabled: true },
+            { teacherId: a.teacherId2, roomId: a.roomId2 || "", groupPart: a.groupName2 || "2-guruh", splitEnabled: true },
+          ]),
+        };
+      }
+
+      // 3) HAFTA ALMASHINUVI (juft/toq) — bitta yozuv, ichida ikkinchi fan.
+      //    Blok qilinmaydi: almashinuv haftalik, bloklash ma'nosiz.
+      if (a.weekAltEnabled && a.weekAltSubjectId && a.weekAltTeacherId) {
+        if (!a.teacherId) return null;
+        return {
+          a, sid, classIds: [cls.id], noBlock: true,
+          parts: [{
+            teacherId: a.teacherId, roomId: a.roomId || "",
+            alternating: true, altSubjectId: a.weekAltSubjectId,
+            altTeacherId: a.weekAltTeacherId, altRoomId: a.weekAltRoomId || "",
+          }],
+        };
+      }
+
+      if (!a.teacherId) return null;
+
+      // 4) PARALLEL DARS — guruhdagi sinflar BITTA darsni baham ko'radi.
+      //    `groupKey` yozilishi SHART: ustoz soati aks holda har sinfda
+      //    qayta sanaladi (CLAUDE.md — «USTOZ SOATI KARTADA BIR MARTA»).
+      const gk = String(a.groupKey || "").trim();
+      if (gk) {
+        const mates = classes.filter((c) => {
+          const aa = (classSubjects?.[c.id] || []).find((x) => x.subjectId === sid);
+          return aa && String(aa.groupKey || "").trim() === gk
+            && aa.teacherId === a.teacherId && (aa.roomId || "") === (a.roomId || "");
+        }).map((c) => c.id);
+        return {
+          a, sid, classIds: mates.length ? mates : [cls.id],
+          parts: [{ teacherId: a.teacherId, roomId: a.roomId || "", groupKey: gk }],
+        };
+      }
+
+      // 5) ODDIY DARS — endi XONASI bilan
+      return { a, sid, classIds: [cls.id], plain: true, parts: [{ teacherId: a.teacherId, roomId: a.roomId || "" }] };
+    };
+
+    // Blok bo'laklarini bog'lash mumkinmi. Ikki dars ketma-ket bo'lsa —
+    // ha; orada obed/tanaffus bo'lsa ham ha (generatordagi `blockLink`
+    // bilan bir xil qoida). Lekin uzilish 60 daqiqadan uzun bo'lsa —
+    // YO'Q: smena almashinuvidagi katta tanaffus blokni ikkiga cho'zib
+    // yuborardi.
+    const toMin = (v) => {
+      const [h, m] = String(v || "").split(":");
+      const n = Number(h) * 60 + Number(m);
+      return Number.isFinite(n) ? n : NaN;
+    };
+    const blockLinkOk = (prev, cur) => {
+      if (Number(cur.lessonNumber) === Number(prev.lessonNumber) + 1) return true;
+      const gap = toMin(cur.startTime) - toMin(prev.endTime);
+      return Number.isFinite(gap) && gap >= 0 && gap <= 60;
+    };
+
+    // Shablon uchun joy: blok bo'lsa KETMA-KET kataklar, guruhli bo'lsa
+    // HAR BIR ustoz va HAR BIR xona bo'sh bo'lishi shart.
+    const spotFor = (tpl, size) => {
+      const { sid } = tpl;
       const ksFix = isFixedMondaySubjectId(sid);
-      for (const day of daysByLoad(next, cid)) {
-        if (classOff.has(day)) continue;
+      if (ksFix && size > 1) return null;
+      const cids = tpl.classIds;
+      if (!cids.length) return null;
+      const allT = [...new Set(tpl.parts.flatMap((p) => [p.teacherId, p.altTeacherId]).filter(Boolean))];
+      const rids = [...new Set(tpl.parts.flatMap((p) => [p.roomId, p.altRoomId]).filter(Boolean))];
+      const offOf = new Map();
+      for (const id of allT) {
+        const tt = teacherMap.get(id);
+        if (!tt) return null;
+        if ((tLoad[id] || 0) + size > Number(tt.maxWeeklyHours || 40)) return null;
+        offOf.set(id, new Set(Array.isArray(tt.offDays) ? tt.offDays : []));
+      }
+      const classOffs = cids.map((cid) => new Set(classes.find((c) => c.id === cid)?.offDays || []));
+
+      for (const day of daysByLoad(next, cids[0])) {
         if (ksFix && day !== "Dushanba") continue;
-        if (subjOnDay(cid, sid, day) >= subjectDayCap(cid, sid)) continue;
-        for (const ts of teachingSlots) {
-          if (ksFix && ts.id !== firstSlotIdOf(cid, day)) continue;
-          if (!slotAllowsClass(ts, cid)) continue;
-          if (classesHaveLunchAt(ts, [cid], lunchGroups, day)) continue;
-          const cell = next[day][ts.id];
-          if (cell.some((l) => classIdsOf(l).includes(cid))) continue;
-          for (const t of teacherList) {
-            const tOff = new Set(Array.isArray(t.offDays) ? t.offDays : []);
-            if (tOff.has(day)) continue;
-            if (teacherBlockedAt(t.id, day, ts.id)) continue;
-            if (cell.some((l) => l.teacherId === t.id)) continue;
-            if ((tLoad[t.id] || 0) + 1 > Number(t.maxWeeklyHours || 40)) continue;
-            return { day, tsId: ts.id, teacherId: t.id };
+        if (classOffs.some((s) => s.has(day))) continue;
+        if (allT.some((id) => offOf.get(id).has(day))) continue;
+        // Kunlik fan limiti — blok butunligicha sig'ishi kerak
+        if (cids.some((cid) => subjOnDay(cid, sid, day) + size > subjectDayCap(cid, sid))) continue;
+        for (let i = 0; i + size <= teachingSlots.length; i++) {
+          let ok = true;
+          for (let o = 0; o < size && ok; o++) {
+            const ts = teachingSlots[i + o];
+            if (o > 0 && !blockLinkOk(teachingSlots[i + o - 1], ts)) { ok = false; break; }
+            if (ksFix && ts.id !== firstSlotIdOf(cids[0], day)) { ok = false; break; }
+            const cell = next[day][ts.id];
+            for (const cid of cids) {
+              if (!slotAllowsClass(ts, cid)
+                || classesHaveLunchAt(ts, [cid], lunchGroups, day)
+                || cell.some((l) => classIdsOf(l).includes(cid))) { ok = false; break; }
+            }
+            if (!ok) break;
+            for (const id of allT) {
+              if (teacherBlockedAt(id, day, ts.id)
+                || cell.some((l) => l.teacherId === id || l.altTeacherId === id)) { ok = false; break; }
+            }
+            if (!ok) break;
+            for (const rid of rids) {
+              if (cell.some((l) => l.roomId === rid || l.altRoomId === rid)) { ok = false; break; }
+            }
           }
+          if (ok) return { day, slotIds: Array.from({ length: size }, (_, o) => teachingSlots[i + o].id) };
         }
       }
       return null;
+    };
+
+    // Shablonni jadvalga yozish. Blok bo'lsa `blockSize`/`blockIndex`
+    // qo'yiladi — busiz zichlash uni ikkiga bo'lib yuborardi.
+    const placeTemplate = (tpl, spot, size) => {
+      spot.slotIds.forEach((slotId, o) => {
+        tpl.parts.forEach((p) => {
+          const lesson = {
+            subjectId: tpl.sid, classId: tpl.classIds[0], classIds: [...tpl.classIds],
+            teacherId: p.teacherId, roomId: p.roomId || "", manual: markManual,
+          };
+          if (p.groupPart) lesson.groupPart = p.groupPart;
+          if (p.splitEnabled) lesson.splitEnabled = true;
+          if (p.levelGroupEnabled) lesson.levelGroupEnabled = true;
+          if (p.groupKey) lesson.groupKey = p.groupKey;
+          if (p.alternating) {
+            lesson.alternating = true;
+            lesson.altSubjectId = p.altSubjectId;
+            lesson.altTeacherId = p.altTeacherId;
+            lesson.altRoomId = p.altRoomId || "";
+          }
+          if (size > 1) { lesson.blockSize = size; lesson.blockIndex = o; }
+          next[spot.day][slotId].push(lesson);
+        });
+      });
+      // Ustoz yuklamasi: kartada har ustoz BIR MARTA sanaladi
+      const counted = new Set();
+      tpl.parts.forEach((p) => {
+        if (!p.teacherId || counted.has(p.teacherId)) return;
+        counted.add(p.teacherId);
+        tLoad[p.teacherId] = (tLoad[p.teacherId] || 0) + size;
+      });
     };
 
     // Qulflangan, qo'lda qo'yilgan, guruhli va BLOK darslar HECH QACHON ko'chirilmaydi
@@ -1952,30 +2122,68 @@ export default function SchedulePage({
         const classOff = new Set(Array.isArray(cls.offDays) ? cls.offDays : []);
         const subjectIds = new Set();
         (classSubjects?.[cls.id] || []).forEach((a) => {
-          // "Bir vaqtda 2 fan" darslari qo'lda to'ldirilmaydi: sinf ikkiga
-          // bo'lingan, yolg'iz dars qo'yish jadvalni buzadi.
-          if (a.pairEnabled) return;
+          // «Bir vaqtda bir nechta fan» va «fan almashinuvi» darslari qo'lda
+          // to'ldirilmaydi — sinf guruhlarga bo'lingan, yolg'iz dars
+          // qo'yish jadvalni buzadi. Ular «tushmadi» ro'yxatida qoladi.
+          if (a.pairEnabled || a.swapEnabled) return;
           if (a.subjectId) subjectIds.add(a.subjectId);
-          if (a.swapEnabled && a.swapSubjectId) subjectIds.add(a.swapSubjectId);
         });
         subjectIds.forEach((sid) => {
-          const need = requiredHours(cls.id, sid);
-          let have = countCS(cls.id, sid);
-          if (have >= need) return;
-          const assigned = assignedTeacher(cls.id, sid);
-          const t = assigned ? teachers.find((x) => x.id === assigned) : null;
-          if (!t || !teachersForSubject(sid).some((x) => x.id === assigned)) return;
-          const teacherList = [t];
           let guard = 0;
-          while (have < need && guard < 80) {
+          while (guard < 80) {
             guard += 1;
-            let spot = freeSlot(cls.id, sid, teacherList, classOff);
-            if (!spot) spot = rearrangePlace(cls.id, sid, t, classOff);
-            if (!spot) break;
-            next[spot.day][spot.tsId].push({ subjectId: sid, classId: cls.id, classIds: [cls.id], teacherId: spot.teacherId, roomId: "", manual: markManual });
-            tLoad[spot.teacherId] = (tLoad[spot.teacherId] || 0) + 1;
-            have += 1;
-            placed += 1;
+            if (countCS(cls.id, sid) >= requiredHours(cls.id, sid)) break;
+            const tpl = fillTemplate(cls, sid);
+            if (!tpl) break;
+            // Faqat soati HAQIQATAN kam sinflar uchun joylanadi — parallel
+            // darsda guruhdoshlarning bir qismi to'liq bo'lishi mumkin.
+            tpl.classIds = tpl.classIds.filter((cid) => countCS(cid, sid) < requiredHours(cid, sid));
+            if (!tpl.classIds.includes(cls.id)) break;
+            // Har bir guruh ustozi shu fanga biriktirilganmi
+            const okT = new Set(teachersForSubject(sid).map((x) => x.id));
+            if (tpl.parts.some((p) => !p.teacherId || !okT.has(p.teacherId))) break;
+
+            // Blok uzunligi: 4 → 2 → 1. Butun blok sig'masa kichrayadi —
+            // guruhlar va xonalar HAR HOLDA saqlanadi (ilgari ikkalasi ham
+            // yo'qolardi).
+            const rem = requiredHours(cls.id, sid) - countCS(cls.id, sid);
+            const sizes = [];
+            if (!tpl.noBlock) {
+              if (tpl.a.allowQuad && rem >= QUAD_SIZE) sizes.push(QUAD_SIZE);
+              if (tpl.a.allowDouble && rem >= 2) sizes.push(2);
+            }
+            sizes.push(1);
+
+            let put = 0;
+            for (const size of sizes) {
+              const spot = spotFor(tpl, size);
+              if (!spot) continue;
+              placeTemplate(tpl, spot, size);
+              put = size;
+              break;
+            }
+
+            // Oddiy (guruhsiz, bloksiz) dars uchun eski zaxira yo'l:
+            // to'sib turgan darsni boshqa katakka surib joy ochamiz.
+            if (!put && tpl.plain) {
+              const t = teachers.find((x) => x.id === tpl.parts[0].teacherId);
+              const spot = t ? rearrangePlace(cls.id, sid, t, classOff) : null;
+              if (spot) {
+                const rid = tpl.parts[0].roomId;
+                const cell = next[spot.day][spot.tsId];
+                next[spot.day][spot.tsId].push({
+                  subjectId: sid, classId: cls.id, classIds: [cls.id],
+                  teacherId: spot.teacherId,
+                  roomId: rid && !cell.some((l) => l.roomId === rid) ? rid : "",
+                  manual: markManual,
+                });
+                tLoad[spot.teacherId] = (tLoad[spot.teacherId] || 0) + 1;
+                put = 1;
+              }
+            }
+
+            if (!put) break;
+            placed += put;
           }
         });
       });
