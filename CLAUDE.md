@@ -297,6 +297,22 @@ Ustoz yuklamasi esa aksincha — har guruh ustozi ALOHIDA sanaladi.
   faqat qolgan soatga tuziladi. Qulflangan darsni seedan chiqarib tashlash
   (avval guruhli darslar shunday edi) — dars boshqa soatga ko‘chib ketishi
   demakdir.
+
+**USTOZ HECH QACHON AVTOMATIK ALMASHTIRILMAYDI.** Dars joylashmasa u
+«tushmadi» bo'lib qoladi — soat «Sinf fanlari»da kim biriktirilgan bo'lsa,
+o'shanda qoladi. ⚠️ Ilgari generatorda `tryTeacherSwap()` «oxirgi chora» bor
+edi: joylashmagan darsni SHU FANNING boshqa bo'sh ustoziga jimgina berib
+yuborardi. Natijada foiz «chiroyli» ko'rinar, lekin o'z ustozi soatsiz qolar,
+begona ustozda esa ortiqcha soat paydo bo'lardi — ekrandagi «rejada 25,
+setkada 24» / «rejada 25, setkada 26» juftligi aynan shundan chiqardi.
+Endi uning o'rnida `noteTeacherAlternatives()` faqat TAVSIYA yozadi
+(`report.teacherHints`) va HAR DOIM `false` qaytaradi. Xuddi shu sababdan
+[Schedule.jsx](src/pages/Schedule.jsx) `pickFreeTeacher()` ham begona ustozni
+avtomatik tanlamaydi — «＋ Qo'lda dars qo'shish» oynasida zaxira ro'yxati
+ko'rinadi, lekin tanlovni foydalanuvchi ONGLI qiladi.
+**Yangi «zaxira yo'l» qo'shsangiz ustozni o'zgartirmang** — tushmagan soat
+rostgo'y qolib, ekranda ko'rinishi kerak.
+
 - [moveResolver.js](src/utils/moveResolver.js) — **qo'lda ko'chirish/almashtirishning
   yagona dvigateli**. Sinf setkasi ([Schedule.jsx](src/pages/Schedule.jsx)) va ustoz
   setkasi ([TeacherGrid.jsx](src/components/TeacherGrid.jsx)) ikkalasi ham shundan

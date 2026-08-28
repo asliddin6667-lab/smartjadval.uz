@@ -1802,7 +1802,6 @@ function attemptSchedule(
       teacherId: req.teacherId, roomId: req.roomId || "", groupKey: req.groupKey || "",
       blockSize: req.blockSize, blockIndex,
     };
-    if (req.swappedFrom) one.teacherSwapped = true;
     return [one];
   }
   function applyCounters(req, d, sign) {
@@ -2318,46 +2317,35 @@ function attemptSchedule(
     }
   }
 
-  // ——— USTOZ ALMASHTIRISH (oxirgi chora + tavsiya) ———
-  // Dars hech qanday katakka tushmasa, shu fanning boshqa ustozi bilan
-  // joylashtiriladi va tavsiya ro'yxatiga yoziladi.
-  const teacherSwaps = [];
+  // ——— USTOZ ALMASHTIRISH — TAQIQLANGAN (faqat tavsiya) ———
+  // ⚠️ Ilgari bu yer dars hech qanday katakka tushmasa uni SHU FANNING
+  // BOSHQA ustoziga berib yuborardi. Natijada soat "joylashgan" bo'lib
+  // ko'rinar, lekin sinfning O'Z ustozi soatsiz qolar, begona ustozda esa
+  // ortiqcha soat paydo bo'lardi — «rejada 25, setkada 24» / «rejada 25,
+  // setkada 26» juftligi aynan shundan chiqardi. Almashtirish JIMGINA
+  // bo'lgani uchun direktor buni umuman ko'rmasdi.
+  //
+  // ENDI QOIDA: ustoz hech qachon o'zgartirilmaydi. Dars joylashmasa —
+  // joylashmagan bo'lib qoladi («tushmadi» ro'yxatiga chiqadi), soat esa
+  // «Sinf fanlari»da kim biriktirilgan bo'lsa, o'shanda qoladi.
+  // Kimga o'tkazish mumkinligi faqat TAVSIYA sifatida yoziladi —
+  // qarorni foydalanuvchi qo'lda qabul qiladi.
   const teacherHints = [];
   function classNameOf(cid) { return classes.find((c) => c.id === cid)?.name || cid; }
   function altTeachersFor(subjectId, excludeIds) {
     return teachers.filter((t) => !excludeIds.includes(t.id) && teacherSubjSet.get(t.id)?.has(subjectId));
   }
-  function tryTeacherSwap(req) {
-    if (req.type !== "single" && req.type !== "group") return false;
+  // Joylashmagan dars uchun tavsiya yozadi. HECH NARSA joylashtirmaydi va
+  // HAR DOIM false qaytaradi — chaqiruvchi darsni «tushmadi»ga qo'shadi.
+  function noteTeacherAlternatives(req) {
     const subjName = subjectById.get(req.subjectId)?.name || "";
     const fromName = teacherById.get(req.teacherId)?.name || "";
-    const clsName = req.classIds.map(classNameOf).join(" + ");
-    const alts = altTeachersFor(req.subjectId, req.tids);
-    for (const t of alts) {
-      const ti = tIdxOf.get(t.id);
-      if (ti === undefined) continue;
-      if (teacherLoadArr[ti] + req.blockSize > teacherMaxArr[ti]) continue;
-      const clone = {
-        ...req,
-        teacherId: t.id, teacherIds: undefined, tids: [t.id], tIdxs: [ti],
-        placedRef: null, failed: false, done: true, dirty: true,
-        swappedFrom: req.teacherId, spacedRelax: Math.max(1, req.spacedRelax || 0),
-        balRelax: Math.max(1, req.balRelax || 0),
-        // KELAJAK SOATI: boshqa ustoz bilan ham faqat dushanbaga tushadi
-        fixedRelax: req.fixedFirst ? 1 : req.fixedRelax,
-      };
-      clone.domain = buildDomain(clone);
-      if (!clone.domain.length) continue;
-      let cand = null;
-      for (const c of clone.domain) { if (fitsAt(clone, c.d, c.i)) { cand = c; break; } }
-      if (cand) place(clone, cand.d, cand.i);
-      else if (!ejectAndPlace(clone, EJECT_INTENSE)) continue;
-      teacherSwaps.push({
-        className: clsName, subjectName: subjName,
-        fromTeacher: fromName, toTeacher: t.name, hours: req.blockSize,
-      });
-      return true;
-    }
+    const clsName = (req.classIds || []).map(classNameOf).join(" + ");
+    // Zaxira ro'yxati faqat bitta ustozli oddiy darsda ma'noli bo'ladi;
+    // guruhli kartada (bo'linish, daraja, juftlik) bir nechta ustoz turadi.
+    const alts = (req.type === "single" || req.type === "group")
+      ? altTeachersFor(req.subjectId, req.tids || [])
+      : [];
     teacherHints.push({
       className: clsName, subjectName: subjName, fromTeacher: fromName,
       hours: req.blockSize, alternatives: alts.map((t) => t.name),
@@ -2415,8 +2403,12 @@ function attemptSchedule(
       if (ejectAndPlace(req, EJECT_INTENSE)) continue;
       // 2-chora: 2 soatlik blok uchun yo'lni chuqur zanjir bilan tozalash
       if (forceBlockPlace(req)) continue;
-      // 3-chora: shu fanning boshqa ustoziga o'tkazish
-      if (!tryTeacherSwap(req)) still.push(req);
+      // Boshqa yo'l yo'q: dars JOYLASHMAGAN bo'lib qoladi. USTOZ
+      // ALMASHTIRILMAYDI - soat «Sinf fanlari»dagi o'z ustozida qoladi va
+      // «tushmadi» ro'yxatiga chiqadi. Kimga o'tkazish mumkinligi faqat
+      // tavsiya sifatida yoziladi.
+      noteTeacherAlternatives(req);
+      still.push(req);
     }
     deferred.length = 0;
     deferred.push(...still);
@@ -3879,7 +3871,6 @@ function attemptSchedule(
   });
   report.gaps = gaps;
   report.imbalance = imbalance;
-  report.teacherSwaps = teacherSwaps;
   report.teacherHints = teacherHints;
   report.roomDupFixes = roomDupFixes;
   return { schedule, placed: placedHours, attempted: attemptedHours, soft, gaps, imbalance, report };

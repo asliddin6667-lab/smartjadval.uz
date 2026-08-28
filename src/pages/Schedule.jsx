@@ -1424,13 +1424,16 @@ export default function SchedulePage({
       ));
   }
 
-  // Fan tanlanganda ustoz o'zi tanlanadi: avval sinfning o'z ustozi, u band
-  // bo'lsa — shu vaqtda bo'sh bo'lgan birinchi ustoz.
+  // Fan tanlanganda ustoz o'zi tanlanadi — FAQAT sinfning O'Z ustozi.
+  // ⚠️ Ilgari o'z ustozi band bo'lsa shu fandan bo'sh BOSHQA ustoz avtomatik
+  // qo'yilardi: direktor darsni bilmagan holda begona ustozga yozib yuborardi.
+  // Endi bunday holatda maydon BO'SH qoladi — zaxira ustozlar ro'yxati oynada
+  // ko'rinadi, lekin tanlash ONGLI bo'ladi.
   function pickFreeTeacher(classId, subjectId, day, slotId) {
     if (!subjectId) return "";
     const assigned = assignedTeacher(classId, subjectId);
     if (assigned && !teacherBusyReason(assigned, day, slotId)) return assigned;
-    return teacherChoices(classId, subjectId, day, slotId).free[0]?.id || "";
+    return teacherChoices(classId, subjectId, day, slotId).ownFree[0]?.id || "";
   }
 
   function conflictsAt(day, slotId, classId, teacherId, roomId) {
