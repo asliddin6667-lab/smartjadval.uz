@@ -17,12 +17,21 @@ npm run dev       # Vite dev server — port 5175, strictPort, brauzer avtomatik
 npm run build     # dist/ ga production build
 npm run lint      # eslint . (flat config, dist/ e'tiborsiz)
 npm run preview   # build natijasini ko'rish
+
+node scripts/blobRoundtrip.mjs   # bulut formati yo'qotishsizmi? (pastga qarang)
 ```
 
 Windows PowerShell'da `npm.ps1` execution-policy xatosi chiqsa — `npm.cmd run dev`.
 
 Test to'plami yo'q (test runner ham o'rnatilmagan). Tekshirish = `npm run lint` +
 `npm run build` + brauzerda qo'lda sinash.
+
+**Bitta istisno bor:** [scripts/blobRoundtrip.mjs](scripts/blobRoundtrip.mjs) —
+bulutga yoziladigan blob formatining YO'QOTISHSIZLIGINI tekshiradi
+(siqilgan/siqilmagan, idempotentlik, buzilgan yozuv, CAS maydonlari).
+Format xatosi ekranda ko'rinmaydi — ma'lumot jimgina buziladi, shuning
+uchun [schoolBlob.js](src/services/schoolBlob.js) ga tegilsa shu skript
+MAJBURIY qayta ishga tushiriladi.
 
 ## Arxitektura
 
@@ -97,7 +106,13 @@ tarixi, [Backups.jsx](src/pages/Backups.jsx) — "Zaxira nusxalar" sahifasi,
   (v4 da aynan shu ma'lumot yo'qolishiga sabab bo'lgan).
 - Avtosaqlash: `schedulePush()` debounce (0.7s kutish, 2.5s maksimal) →
   `pushWithRetry()` (4 urinish) → `startAutoSync()` "qorovul"i har 10 soniyada
-  yuborilmagan o'zgarishni jo'natadi yoki bulutni tekshiradi (oyna faol bo'lganda)
+  yuborilmagan o'zgarishni jo'natadi yoki bulutni tekshiradi (oyna faol bo'lganda).
+  **Tekshirish oralig'i moslashuvchan** (`remoteCheckGap()`): oxirgi tahrirdan
+  2 daqiqa ichida 8 s, jimjitlikda esa har "o'zgarish yo'q" javobidan keyin
+  bir pog'ona kengayib 60 s gacha boradi. Oynaga qaytilganda (`onWake`)
+  hisoblagich nolga tushadi va tekshiruv DARHOL bajariladi, shuning uchun
+  kechikish foydalanuvchiga sezilmaydi. Ilgari qat'iy 8 s edi va egress
+  kvotasining katta qismi bekorga ketardi
   → `flushPush()` sahifa yopilishida/chiqishda → `beforeunload` ogohlantirishi.
 - `pushToCloud()` `updated_at` ni **qo'lda yozadi**. `schools` jadvalida UPDATE uchun
   trigger yo'q — busiz u INSERT vaqtida qotib qolardi va boshqa qurilma "bulut
@@ -115,6 +130,29 @@ tarixi, [Backups.jsx](src/pages/Backups.jsx) — "Zaxira nusxalar" sahifasi,
 - `SYNC_KEYS` ga yangi kalit qo'shsangiz — hozirgi ro'yxatni `LEGACY_KEY_SETS` ga
   ko'chiring (ikkalasi ham schoolBlob.js da). Aks holda `lastHash` barcha
   qurilmalarda mos kelmay qoladi.
+- **GZIP KONTEYNER (`_v = 4`)** — `packBlob()`/`unpackBlob()`
+  ([schoolBlob.js](src/services/schoolBlob.js)). Blobning og'ir qismi
+  `base64(gzip(JSON))` bo'lib `_z` ga tushadi, `_rev`/`_ts`/`_dev` esa
+  **tashqarida** qoladi — CAS so'rovi (`data->>'_rev'`) va `readCloudHead()`
+  shularni o'qiydi, ularni ichkariga yashirsangiz sinxronizatsiya buziladi.
+  **Yozish `WRITE_COMPRESSED` bayrog'i bilan boshqariladi va ATAYLAB
+  `false` — yoqmang.** Ishlab turgan bazada o'lchandi (30.08.2026):
+  Postgres `jsonb` ni pglz bilan allaqachon **7.1×** siqadi (xom 294 KB
+  → diskda 41 KB), gzip esa xom JSON ga nisbatan 12.5×. Ya'ni diskdagi
+  qo'shimcha yutuq atigi **~1.7×**. Buning evaziga eski ilova siqilganni
+  o'qiy olmay qoladi (ikki bosqichli deploy, ochiq tab xavfi) — arzimaydi.
+  Joy muammosi zaxiralarning pog'onali tozalanishi bilan hal qilindi
+  (137 MB → ~50 MB). O'qish tomoni yoqilgan holda qoladi: kelajakda
+  `school_backups` 250 MB dan oshsa, avval o'lchovni takrorlab, keyin
+  bayroqni yoqish mumkin.
+- `unpackBlob()` xatoda **`null` qaytaradi, bo'sh obyekt emas**. Bu ataylab:
+  ilgari tanilmagan format "bo'sh maktab" deb qabul qilinar va mahalliy
+  nusxani bosib yuborardi. Endi `fetchCloudBlob` `unreadable` qaytaradi,
+  ilova esa **faqat o'qish** rejimiga o'tadi — hech narsa ustidan yozilmaydi.
+  **Yangi o'qish yo'li qo'shsangiz shu qoidani takrorlang.**
+- `restoreBlob()` **bo'sh blobni tiklashni RAD ETADI** (`empty-blob`).
+  Tiklash `overwrite: true` bilan ketadi, ya'ni CAS himoyasi ishlamaydi —
+  bo'sh nusxa butun maktabni o'chirib yuborardi.
 - `classSubjects` "sim uchun" siqiladi (`encodeBlob`/`decodeBlob`, `WIRE_VERSION = 3`):
   `CS_DEFAULTS` dagi default qiymatlar tashlanadi, qaytarishda tiklanadi.
   **`classSubjects` yozuviga yangi maydon qo'shsangiz — `CS_DEFAULTS` ni ham yangilang**,
@@ -129,17 +167,30 @@ tarixi, [Backups.jsx](src/pages/Backups.jsx) — "Zaxira nusxalar" sahifasi,
 holatning to'liq nusxasi `school_backups` jadvaliga tushadi
 ([versionService.js](src/services/versionService.js)):
 
-- avtomatik zaxira — har 4 daqiqada bir martadan ko'p emas (`AUTO_GAP`);
+- avtomatik zaxira — har **10 daqiqada** bir martadan ko'p emas (`AUTO_GAP`)
+  va faqat ma'lumot **haqiqatan o'zgargan** bo'lsa (`version_sig_<userId>`
+  kontent imzosi); bo'sh blob umuman arxivlanmaydi;
 - **majburiy** zaxira — konfliktda yutqazgan nusxa, tiklashdan oldingi holat,
-  "💾 Hozirgi holatni zaxiraga olish" tugmasi;
-- server trigger har foydalanuvchida oxirgi **40** tasini qoldiradi;
+  "💾 Hozirgi holatni zaxiraga olish" tugmasi (bularga imzo tekshiruvi
+  qo'llanmaydi — doim yoziladi);
+- server trigger **POG'ONALI** tozalaydi (`prune_school_backups_for`):
+  so'nggi 5 ta + oxirgi 12 soatda har soatdan 1 ta + oxirgi 14 kunda har
+  kundan 1 ta + majburiy nusxalar (60 kun, 15 ta). Ilgari oddiy "oxirgi 40
+  ta" edi — u tarixni atigi ~7 soatga yetkazar, joyning esa 97% ini yeb
+  qo'yardi. Endi ~23 yozuv **~29 kunni** qamraydi;
 - "Zaxira nusxalar" sahifasi ro'yxatni ko'rsatadi va `restoreBlob()` orqali
   tiklaydi (tiklashdan oldingi holat ham avtomatik arxivlanadi — orqaga qaytish
   mumkin). Shu qurilmada qolgan `conflict_<userId>` zaxirasi ham shu sahifada
   ko'rinadi.
 
+⚠️ `prune_school_backups_for(uuid)` — `security definer`, ya'ni RLS ni chetlab
+o'tadi. SQL faylda undan `execute` huquqi `public`/`anon`/`authenticated` dan
+**olib tashlangan**. Funksiyani qayta yaratsangiz `revoke` qatorlarini ham
+takrorlang, aks holda har kim boshqa maktabning zaxirasini o'chira oladi.
+
 SQL: [school_backups_setup.sql](school_backups_setup.sql) — Supabase SQL Editor'da
-bir marta ishga tushiriladi. Jadval bo'lmasa versiya tarixi jimgina o'chadi
+ishga tushiriladi (idempotent, qayta ishga tushirsa bo'ladi; ichida mavjud
+ma'lumotni tozalaydigan bir martalik `prune` + `vacuum full` ham bor). Jadval bo'lmasa versiya tarixi jimgina o'chadi
 (sinxronizatsiya baribir ishlayveradi), sahifada esa ogohlantirish chiqadi.
 
 **LOKAL REJIM** ([devMode.js](src/services/devMode.js)): `npm run dev` da

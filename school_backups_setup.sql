@@ -10,10 +10,22 @@
 --  "Zaxira nusxalar" sahifasi shundan o'qiydi va istalgan versiyani
 --  qaytara oladi.
 --
---  QANCHA SAQLANADI
---  Har bir foydalanuvchi uchun ENG OXIRGI 40 ta versiya. Undan
---  eskilari yangi versiya qo'shilganda avtomatik o'chiriladi
---  (trigger: prune_school_backups).
+--  QANCHA SAQLANADI — POG'ONALI ("thinning") TOZALASH
+--  Ilgari oddiy qoida bor edi: oxirgi 40 ta nusxa. Amalda bu YOMON
+--  ishlardi — ilova har 10 daqiqada nusxa oladi, ya'ni 40 ta yozuv
+--  atigi ~7 SOATni qamrab olardi. Kechagi holatga qaytish IMKONSIZ
+--  edi, joy esa behuda ketardi (bazaning ~97% i shu jadval).
+--
+--  Endi nusxalar YAQINDA zich, UZOQDA siyrak saqlanadi:
+--
+--     • eng so'nggi 5 ta nusxa                     — har doim
+--     • oxirgi 12 soat: har SOATdan bittadan
+--     • oxirgi 14 kun:  har KUNdan bittadan
+--     • MAJBURIY nusxalar (konflikt / tiklashdan oldingi holat /
+--       qo'lda olingan) — 60 kungacha, 15 tagacha
+--
+--  Natija: yozuvlar soni ~40 dan ~18 gacha tushadi (joy ~2 barobar
+--  kam), tarix chuqurligi esa 7 soatdan 14 KUNga chiqadi.
 --
 --  XAVFSIZLIK
 --  RLS: foydalanuvchi faqat O'ZINING nusxalarini ko'radi va yozadi.
@@ -74,7 +86,71 @@ begin
   end if;
 end $$;
 
--- 3) ESKILARINI TOZALASH — har bir foydalanuvchida oxirgi 40 tasi qoladi
+-- 3) POG'ONALI TOZALASH
+--
+--  Bitta foydalanuvchining nusxalarini tartibga soladi. Trigger ham,
+--  quyidagi bir martalik tozalash ham SHU funksiyani chaqiradi —
+--  qoida ikki joyda ajralib ketmasin.
+create or replace function public.prune_school_backups_for(uid uuid)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  removed integer;
+  now_ts  timestamptz := now();
+begin
+  delete from public.school_backups b
+  where b.owner_id = uid
+    and b.id not in (
+
+      -- (a) MAJBURIY nusxalar: konflikt, tiklashdan oldingi holat,
+      --     qo'lda olingan zaxira. Bular eng qimmatlisi.
+      select id from (
+        select id from public.school_backups
+        where owner_id = uid
+          and note <> ''
+          and created_at > now_ts - interval '60 days'
+        order by created_at desc, id desc
+        limit 15
+      ) forced
+
+      union
+      -- (b) eng so'nggi 5 ta — nima bo'lganda ham qoladi
+      select id from (
+        select id from public.school_backups
+        where owner_id = uid
+        order by created_at desc, id desc
+        limit 5
+      ) recent
+
+      union
+      -- (c) oxirgi 12 soat — har soatning ENG YANGI nusxasi
+      select id from (
+        select distinct on (date_trunc('hour', created_at)) id
+        from public.school_backups
+        where owner_id = uid
+          and created_at > now_ts - interval '12 hours'
+        order by date_trunc('hour', created_at) desc, created_at desc, id desc
+      ) hourly
+
+      union
+      -- (d) oxirgi 14 kun — har kunning ENG YANGI nusxasi
+      select id from (
+        select distinct on (date_trunc('day', created_at)) id
+        from public.school_backups
+        where owner_id = uid
+          and created_at > now_ts - interval '14 days'
+        order by date_trunc('day', created_at) desc, created_at desc, id desc
+      ) daily
+    );
+
+  get diagnostics removed = row_count;
+  return removed;
+end;
+$$;
+
 create or replace function public.prune_school_backups()
 returns trigger
 language plpgsql
@@ -82,14 +158,7 @@ security definer
 set search_path = public
 as $$
 begin
-  delete from public.school_backups b
-  where b.owner_id = new.owner_id
-    and b.id not in (
-      select id from public.school_backups
-      where owner_id = new.owner_id
-      order by created_at desc, id desc
-      limit 40
-    );
+  perform public.prune_school_backups_for(new.owner_id);
   return null;
 end;
 $$;
@@ -99,10 +168,62 @@ create trigger school_backups_prune
   after insert on public.school_backups
   for each row execute function public.prune_school_backups();
 
+-- ⚠️ XAVFSIZLIK: `prune_school_backups_for` — `security definer`, ya'ni
+-- RLS ni chetlab o'tadi. Postgres'da funksiyalarga `execute` huquqi
+-- sukut bo'yicha HAMMAGA beriladi. Usiz istalgan foydalanuvchi
+-- `select prune_school_backups_for('<begona-uuid>')` deb BOSHQA
+-- maktabning zaxiralarini o'chirib yuborardi. Shuning uchun huquqni
+-- olib tashlaymiz — funksiya faqat trigger ichidan chaqiriladi.
+revoke all on function public.prune_school_backups_for(uuid) from public;
+revoke all on function public.prune_school_backups_for(uuid) from anon;
+revoke all on function public.prune_school_backups_for(uuid) from authenticated;
+
+
 -- =====================================================================
---  4) TEKSHIRISH
+--  3b) BIR MARTALIK TOZALASH — MAVJUD ma'lumotga yangi qoidani qo'llash
+--
+--  Triggersiz bu faqat foydalanuvchi yangi nusxa yozganda ishlardi.
+--  Quyidagi ikki qator hozirning o'zida hamma foydalanuvchini tozalaydi.
+--
+--  Bu qadam eski qatorlarni O'CHIRADI, lekin Supabase paneldagi
+--  "Database size" DARHOL kamaymaydi — buning uchun quyidagi 5-qadam
+--  (VACUUM FULL) kerak.
+-- =====================================================================
+select coalesce(sum(public.prune_school_backups_for(owner_id)), 0) as ochirilgan
+from (select distinct owner_id from public.school_backups) t;
+
+
+-- =====================================================================
+--  5) JOYNI DISKKA QAYTARISH — ⚠️ ALOHIDA SO'ROV QILIB ISHGA TUSHIRING
+--
+--  VACUUM tranzaksiya ichida ishlamaydi, Supabase SQL Editor esa butun
+--  skriptni BITTA tranzaksiyada bajaradi. Shuning uchun quyidagi qator
+--  SHU FAYLGA QO'SHILMAYDI — aks holda "VACUUM cannot run inside a
+--  transaction block" xatosi chiqib, YUQORIDAGI HAMMA NARSA orqaga
+--  qaytariladi (funksiya ham, trigger ham yozilmay qoladi).
+--
+--  Yuqoridagi skript muvaffaqiyatli o'tgach: "New query" oching va
+--  FAQAT shu bitta qatorni yozib ishga tushiring —
+--
+--      vacuum full public.school_backups;
+--
+--  Usiz Postgres o'chirilgan qatorlar o'rnini ichida "bo'sh joy" qilib
+--  ushlab turadi va panelda hajm kamaymaydi. Jadval kichik, shuning
+--  uchun bir necha soniya davom etadi (qisqa vaqt jadval bloklanadi).
+-- =====================================================================
+
+
+-- =====================================================================
+--  6) TEKSHIRISH
 --  Quyidagi so'rov xatosiz ishlasa — hammasi joyida:
 --     select count(*) from public.school_backups;
+--
+--  Har bir foydalanuvchida nechta nusxa qolganini va qancha joy
+--  egallaganini ko'rish:
+--     select owner_id, count(*) as nusxa,
+--            pg_size_pretty(sum(pg_column_size(data))::bigint) as hajm,
+--            min(created_at) as eng_eski
+--     from public.school_backups group by 1 order by 3 desc;
 --
 --  Ilovada: "Zaxira nusxalar" sahifasini oching. Bir necha o'zgarish
 --  kiritganingizdan keyin ro'yxatda versiyalar paydo bo'ladi.

@@ -279,3 +279,167 @@ export function countRoomAssignments(schedule) {
   });
   return n;
 }
+
+// =====================================================================
+//  SIQISH (gzip) — "KONTEYNER" FORMATI  `_v = 4`
+//
+//  NIMA UCHUN: bulutdagi joyning ~97% i zaxira nusxalarga ketadi
+//  (`school_backups` da har foydalanuvchida o'nlab TO'LIQ nusxa).
+//  O'lchov: 30 sinflik maktabning `schedule` kaliti 192 KB, gzip'dan
+//  keyin 10 KB — 19 barobar. Base64 bilan birga ham ~14 barobar.
+//
+//  FORMAT: tashqi qobiq JSONB bo'lib qoladi, faqat og'ir qismi
+//  base64(gzip(JSON)) ko'rinishida `_z` ga tushadi:
+//
+//      { "_v": 4, "_z": "H4sIA...", "_rev": 12, "_ts": 17..., "_dev": "d1a.." }
+//
+//  ⚠️ `_rev`/`_ts`/`_dev` TASHQARIDA qoladi — CAS so'rovi
+//  (`data->>'_rev'`) va `readCloudHead()` shularni o'qiydi. Ularni
+//  ichkariga yashirish sinxronizatsiyani buzadi.
+//
+//  ⚠️ ESKI ILOVA YANGI FORMATNI O'QIY OLMAYDI. Shuning uchun yozish
+//  IKKI BOSQICHDA yoqiladi — pastdagi WRITE_COMPRESSED izohiga qarang.
+// =====================================================================
+
+// Siqilgan konteyner versiyasi (ichkaridagi blob esa WIRE_VERSION = 3)
+export const ZIP_VERSION = 4;
+
+// ---------------------------------------------------------------------
+//  ⚠️⚠️  IKKI BOSQICHLI YOQISH — DIQQAT BILAN O'QING  ⚠️⚠️
+//
+//  `false` (hozirgi holat):
+//      • siqilgan nusxani O'QIY oladi;
+//      • lekin O'ZI hamon eski (siqilmagan) formatda yozadi.
+//    Ya'ni bu versiya HAR QANDAY eski ilova bilan to'liq mos.
+//
+//  `true` (2-bosqich):
+//      • yangi ma'lumot siqib yoziladi (~3-4 barobar kam joy).
+//    Buni FAQAT yuqoridagi versiya kamida 1-2 hafta saytda turgandan
+//    keyin yoqing. Sabab: o'sha vaqt ichida hamma qurilma yangi kodni
+//    yuklab oladi. Aks holda ochiq qolgan ESKI ilova siqilgan blobni
+//    "bo'sh" deb o'qib, ekranni bo'shatib qo'yishi mumkin.
+//
+//  ⚠️⚠️ 2026-08-30 DAGI O'LCHOV — HOZIRCHA YOQMANG ⚠️⚠️
+//
+//  Ishlab turgan bazada o'lchandi: Postgres `jsonb` ni TOAST/pglz bilan
+//  ALLAQACHON 7.1 barobar siqib saqlayotgan ekan (xom 294 KB -> diskda
+//  41 KB). Bu yerdagi gzip esa xom JSON ga nisbatan 12.5 barobar beradi.
+//  Demak DISKDAGI haqiqiy qo'shimcha yutuq — atigi 12.5 / 7.1 ≈ 1.7x.
+//
+//  1.7x uchun formatni o'zgartirish arzimaydi: eski ilova siqilganni
+//  o'qiy olmaydi, ya'ni ikki bosqichli deploy va ochiq qolgan tab xavfi
+//  paydo bo'ladi. Joy muammosi esa `school_backups` ning POG'ONALI
+//  tozalanishi bilan hal qilindi (137 MB -> ~50 MB, school_backups_setup.sql).
+//
+//  QACHON QAYTA O'YLASH KERAK: maktablar soni 5-10 barobar o'sib,
+//  `school_backups` 250 MB dan oshsa. O'shanda avval yuqoridagi
+//  o'lchovni takrorlang (pglz nisbati o'zgargan bo'lishi mumkin).
+//
+//  Yoqish = shu yerdagi `false` ni `true` ga o'zgartirib, qayta deploy —
+//  lekin faqat bu kod 1-2 hafta saytda turgandan keyin.
+//  Orqaga qaytarish xavfsiz: `true` -> `false` qilinsa, ilova siqilgan
+//  eski yozuvlarni baribir o'qiyveradi.
+// ---------------------------------------------------------------------
+export const WRITE_COMPRESSED = false;
+
+// Brauzer gzip'ni qo'llab-quvvatlaydimi? (Chrome 80+, Safari 16.4+, FF 113+)
+export function canCompress() {
+  return typeof CompressionStream !== "undefined"
+    && typeof Blob !== "undefined"
+    && typeof Response !== "undefined";
+}
+
+function canDecompress() {
+  return typeof DecompressionStream !== "undefined"
+    && typeof Blob !== "undefined"
+    && typeof Response !== "undefined";
+}
+
+// Uint8Array -> base64. `btoa` ga butun massivni bir yo'la bersak
+// (`String.fromCharCode(...bytes)`) katta blobda stek to'lib ketadi,
+// shuning uchun bo'lak-bo'lak o'giriladi.
+function bytesToBase64(bytes) {
+  const CHUNK = 0x8000;
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function gzipString(str) {
+  const stream = new Blob([new TextEncoder().encode(str)])
+    .stream()
+    .pipeThrough(new CompressionStream("gzip"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function gunzipToString(bytes) {
+  const stream = new Blob([bytes])
+    .stream()
+    .pipeThrough(new DecompressionStream("gzip"));
+  return new TextDecoder().decode(await new Response(stream).arrayBuffer());
+}
+
+// ---------------------------------------------------------------------
+//  BULUTGA YOZISH UCHUN TAYYORLASH
+//  Siqib bo'lmasa — eski format qaytadi (ma'lumot hech qachon
+//  yo'qolmaydi, faqat joy ko'proq ketadi).
+// ---------------------------------------------------------------------
+// `compress` — sinov skripti uchun bekor qilish imkoni
+// (scripts/blobRoundtrip.mjs). Odatda WRITE_COMPRESSED ishlatiladi.
+export async function packBlob(blob, stamp = {}, { compress = WRITE_COMPRESSED } = {}) {
+  const inner = encodeBlob(blob, stamp);
+  if (!compress || !canCompress()) return inner;
+
+  try {
+    const z = bytesToBase64(await gzipString(JSON.stringify(inner)));
+    if (!z) return inner;
+    return {
+      _v: ZIP_VERSION,
+      _z: z,
+      _rev: inner._rev,
+      _ts: inner._ts,
+      _dev: inner._dev,
+    };
+  } catch (e) {
+    console.warn("⚠️ Siqib bo'lmadi, oddiy formatda yoziladi:", e);
+    return inner;
+  }
+}
+
+// ---------------------------------------------------------------------
+//  BULUTDAN KELGANINI OCHISH
+//
+//  ⚠️ QAYTARISH QIYMATI: xato bo'lsa `null` (BO'SH OBYEKT EMAS).
+//  Chaqiruvchi `null` ni "o'qib bo'lmadi" deb tushunishi va HECH
+//  NARSANI ustidan yozmasligi SHART. Eski kodning eng xavfli joyi
+//  aynan shu edi: tanimagan formatni "bo'sh ma'lumot" deb qabul qilib,
+//  mahalliy nusxani o'chirib yuborardi.
+// ---------------------------------------------------------------------
+export async function unpackBlob(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  if (typeof raw._z !== "string") return decodeBlob(raw);
+
+  if (!canDecompress()) {
+    console.warn("⚠️ Brauzer gzip'ni qo'llab-quvvatlamaydi — nusxani ochib bo'lmadi");
+    return null;
+  }
+
+  try {
+    const json = await gunzipToString(base64ToBytes(raw._z));
+    const inner = JSON.parse(json);
+    if (!inner || typeof inner !== "object") return null;
+    return decodeBlob(inner);
+  } catch (e) {
+    console.warn("⚠️ Siqilgan nusxani ochib bo'lmadi:", e);
+    return null;
+  }
+}

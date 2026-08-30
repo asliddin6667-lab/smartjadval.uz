@@ -24,13 +24,20 @@ import { supabase } from "./supabaseClient";
 import { loadData, saveData } from "./storageService";
 import { isLocalOnly } from "./devMode";
 import {
-  encodeBlob, decodeBlob, fillBlob, blobCounts, countRoomAssignments,
+  packBlob, unpackBlob, fillBlob, blobCounts, countRoomAssignments,
+  isEmptyBlob, quickHash,
 } from "./schoolBlob";
 
 const TABLE = "school_backups";
 
-// Avtomatik zaxira oralig'i — bundan tez-tez yozilmaydi
-const AUTO_GAP = 4 * 60 * 1000;
+// Avtomatik zaxira oralig'i — bundan tez-tez yozilmaydi.
+//
+// ⚠️ NIMA UCHUN 10 DAQIQA (ilgari 4 edi): server har foydalanuvchida
+// cheklangan sonda nusxa qoldiradi. 4 daqiqada bir yozilsa butun tarix
+// atigi ~2.5 SOATni qamrab olardi — kechagi holatga qaytib bo'lmasdi.
+// 10 daqiqa + pog'onali tozalash (school_backups_setup.sql) tarixni
+// 2 HAFTAga cho'zadi va shu bilan birga joyni ham kamaytiradi.
+const AUTO_GAP = 10 * 60 * 1000;
 
 // Ro'yxatda ko'rsatiladigan maksimal versiya
 export const MAX_LIST = 50;
@@ -48,6 +55,13 @@ function lastAutoKey(userId) {
   return `version_last_${userId}`;
 }
 
+// Oxirgi arxivlangan nusxaning kontent imzosi — AYNAN o'sha holat
+// ikkinchi marta yozilmasin. Kirish/chiqishdagi majburiy yuborishlar
+// bir xil nusxani qayta-qayta arxivlab, tarix chuqurligini yeb qo'yardi.
+function lastSigKey(userId) {
+  return `version_sig_${userId}`;
+}
+
 // ---------------------------------------------------------------------
 //  YOZISH
 //  note bo'sh bo'lsa — avtomatik zaxira (oraliq tekshiriladi).
@@ -59,12 +73,21 @@ export async function archiveVersion(userId, blob, { rev = 0, note = "", device 
   if (tableMissing) return { ok: false, reason: "no-table" };
 
   const auto = !note;
+  const full = fillBlob(blob);
+
+  // Bo'sh holatni arxivlash faqat zarar: joy egallaydi va keyinchalik
+  // "bo'sh nusxaga tiklash" xavfini tug'diradi.
+  if (auto && isEmptyBlob(full)) return { ok: false, reason: "empty" };
+
+  const sig = quickHash(JSON.stringify(full));
+
   if (auto) {
     const last = Number(loadData(lastAutoKey(userId), 0)) || 0;
     if (Date.now() - last < AUTO_GAP) return { ok: false, reason: "throttled" };
+    // Hech narsa o'zgarmagan bo'lsa — takror nusxa yozilmaydi
+    if (loadData(lastSigKey(userId), "") === sig) return { ok: false, reason: "same" };
   }
 
-  const full = fillBlob(blob);
   const counts = blobCounts(full);
   counts.roomAssignments = countRoomAssignments(full.schedule);
 
@@ -74,7 +97,9 @@ export async function archiveVersion(userId, blob, { rev = 0, note = "", device 
     device: String(device || "").slice(0, 60),
     note: String(note || "").slice(0, 120),
     counts,
-    data: encodeBlob(full, { rev, ts: Date.now(), dev: device }),
+    // `packBlob` — WRITE_COMPRESSED yoqilgan bo'lsa gzip, aks holda
+    // avvalgi (siqilmagan) format. Ikkalasini ham `unpackBlob` o'qiydi.
+    data: await packBlob(full, { rev, ts: Date.now(), dev: device }),
   });
 
   if (error) {
@@ -89,6 +114,7 @@ export async function archiveVersion(userId, blob, { rev = 0, note = "", device 
   }
 
   if (auto) saveData(lastAutoKey(userId), Date.now());
+  saveData(lastSigKey(userId), sig);
   return { ok: true };
 }
 
@@ -133,13 +159,25 @@ export async function fetchVersion(userId, id) {
   if (error) return { ok: false, reason: "error", message: error.message };
   if (!data) return { ok: false, reason: "empty" };
 
+  // ⚠️ `unpackBlob` xato bo'lsa `null` qaytaradi — BO'SH OBYEKT EMAS.
+  // Buni "bo'sh maktab" deb qabul qilib tiklab yuborsak, foydalanuvchining
+  // butun ishi o'chib ketardi. Shuning uchun ochib bo'lmasa — RAD ETAMIZ.
+  const raw = await unpackBlob(data.data || {});
+  if (raw === null) {
+    return {
+      ok: false,
+      reason: "unreadable",
+      message: "Bu nusxa shu ilovada ochilmadi. Sahifani yangilang (Ctrl+Shift+R) va qayta urinib ko'ring.",
+    };
+  }
+
   return {
     ok: true,
     meta: {
       id: data.id, rev: data.rev, device: data.device,
       note: data.note, counts: data.counts, created_at: data.created_at,
     },
-    blob: fillBlob(decodeBlob(data.data || {})),
+    blob: fillBlob(raw),
   };
 }
 

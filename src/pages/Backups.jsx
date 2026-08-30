@@ -118,7 +118,9 @@ export default function BackupsPage({ currentUser, toast, onRestore }) {
     const got = await fetchVersion(userId, id);
     if (!got.ok) {
       setBusyId(null);
-      toast?.("Versiyani o'qib bo'lmadi", "error");
+      // Nusxa ochilmagan bo'lsa sababini AYTAMIZ (masalan ilova eskirgan).
+      // Jim turib "tiklandi" deyishdan ko'ra ochiq xato yaxshiroq.
+      toast?.(got.message || "Versiyani o'qib bo'lmadi", "error");
       return;
     }
     const res = await restoreBlob(userId, got.blob, { label: fmtDate(got.meta.created_at) });

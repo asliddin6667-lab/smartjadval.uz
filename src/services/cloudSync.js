@@ -58,7 +58,7 @@ import { isLocalOnly } from "./devMode";
 import { archiveVersion } from "./versionService";
 import {
   SYNC_KEYS, LEGACY_KEY_SETS, EMPTY, KEY_TITLES,
-  encodeBlob, decodeBlob, fillBlob,
+  packBlob, unpackBlob, fillBlob,
   quickHash, keyHash, hashKeysOf, isEmptyBlob,
 } from "./schoolBlob";
 
@@ -77,8 +77,21 @@ const PUSH_MAX_WAIT = 2500;
 // "Qorovul" — yuborilmagan o'zgarish qolib ketmasin
 const WATCHDOG_INTERVAL = 10000;
 
-// Bulutni tekshirish oralig'i (oyna ochiq va faol bo'lganda)
-const REMOTE_CHECK_INTERVAL = 8000;
+// Bulutni tekshirish oralig'i — MOSLASHUVCHAN.
+//
+// Ilgari qat'iy 8 soniya edi: oyna ochiq turgan har bir soatda ~450 ta
+// so'rov ketardi, foydalanuvchi hech narsa qilmasa ham. Bu Supabase
+// egress kvotasining katta qismini bekorga yeb qo'yardi.
+//
+// Endi: yaqinda o'zgarish bo'lgan bo'lsa TEZ tekshiriladi (boshqa
+// qurilmadagi tahrir darhol ko'rinsin), jimjitlik cho'zilgan sari
+// oraliq asta-sekin kengayadi. Oynaga qaytilganda (`onWake`) esa
+// oraliqqa qaramay DARHOL tekshiriladi — ya'ni ma'lumot kechikmaydi.
+const REMOTE_CHECK_MIN = 8000;
+const REMOTE_CHECK_MAX = 60000;
+
+// Oxirgi mahalliy o'zgarishdan keyin "faol" hisoblanadigan oyna
+const ACTIVE_WINDOW = 2 * 60 * 1000;
 
 export { SYNC_KEYS, EMPTY };
 
@@ -330,9 +343,23 @@ async function fetchCloudBlob(userId) {
   if (!data) return { ok: false, reason: "empty" };
 
   const raw = data.data || {};
+
+  // ⚠️ ENG XAVFLI JOY. `unpackBlob` tanimagan formatda `null` qaytaradi
+  // (masalan ilova eskirgan bo'lsa). Ilgari bunday holat "bo'sh maktab"
+  // deb qabul qilinar va `pullFromCloud` mahalliy nusxani BO'SHATIB
+  // yuborardi. Endi: o'qib bo'lmasa — hech narsaga TEGILMAYDI.
+  const blob = await unpackBlob(raw);
+  if (blob === null) {
+    return {
+      ok: false,
+      reason: "unreadable",
+      message: "Bulutdagi ma'lumot bu ilova versiyasida ochilmadi. Sahifani yangilang (Ctrl+Shift+R).",
+    };
+  }
+
   return {
     ok: true,
-    blob: fillBlob(decodeBlob(raw)),
+    blob: fillBlob(blob),
     rev: Number(raw._rev) || 0,
     ts: Number(raw._ts) || 0,
     dev: raw._dev || "",
@@ -455,7 +482,7 @@ export async function pushToCloud(userId, { force = false, overwrite = false } =
 
   // `updated_at` QO'LDA yoziladi — `schools` da UPDATE trigger yo'q.
   const payload = {
-    data: encodeBlob(blob, { rev, ts: localTs, dev: deviceId() }),
+    data: await packBlob(blob, { rev, ts: localTs, dev: deviceId() }),
     updated_at: new Date().toISOString(),
   };
 
@@ -655,6 +682,10 @@ let pendingUserId = null;
 let pendingSince = 0;
 let inFlight = null;
 
+// Oxirgi mahalliy tahrir vaqti — bulutni qanchalik tez-tez
+// tekshirishni shu belgilaydi (remoteCheckGap).
+let lastLocalChange = 0;
+
 function firePush() {
   pushTimer = null;
   pendingSince = 0;
@@ -693,6 +724,11 @@ function firePush() {
 export function schedulePush(userId, delay = PUSH_DELAY) {
   if (!userId) return;
   if (isLocalOnly()) return;
+
+  // Foydalanuvchi ish qilyapti — bulutni yana tez-tez tekshiramiz
+  // (boshqa qurilmadagi o'zgarish kechikmasin).
+  lastLocalChange = Date.now();
+  idleChecks = 0;
 
   pendingUserId = userId;
   if (!pendingSince) pendingSince = Date.now();
@@ -755,6 +791,8 @@ export function hasPendingPush() {
 //      muvaffaqiyatsiz tekshiruvdayoq "faqat o'qish"ga tushardi.
 // ---------------------------------------------------------------------
 function resetSessionState(userId) {
+  idleChecks = 0;
+  lastLocalChange = Date.now();
   if (pendingUserId && pendingUserId !== userId) {
     if (pushTimer) { clearTimeout(pushTimer); pushTimer = null; }
     pendingUserId = null;
@@ -865,16 +903,28 @@ export async function syncOnLogin(user) {
 let lastRemoteCheck = 0;
 let remoteChecking = false;
 
+// Ketma-ket "bulutda o'zgarish yo'q" javoblari — tekshiruv oralig'i
+// shu hisobga qarab kengayadi (0 ga qaytarilsa yana tez tekshiriladi).
+let idleChecks = 0;
+
 // Bir martalik uzilish tufayli ilova "faqat o'qish"ga o'tib qolmasin —
 // ketma-ket IKKI marta javob kelmagandagina qulflanadi.
 let headFailures = 0;
+
+// Keyingi tekshiruvgacha qancha kutiladi?
+// Faol ish paytida — eng qisqa oraliq. Jimjitlikda esa har bir
+// "o'zgarish yo'q" javobidan keyin oraliq bir pog'ona kengayadi.
+function remoteCheckGap() {
+  if (Date.now() - lastLocalChange < ACTIVE_WINDOW) return REMOTE_CHECK_MIN;
+  return Math.min(REMOTE_CHECK_MAX, REMOTE_CHECK_MIN * (1 + idleChecks));
+}
 
 export async function checkRemote(userId, { force = false } = {}) {
   if (!userId || isLocalOnly()) return { action: "skip" };
   if (remoteChecking) return { action: "busy" };
 
   const now = Date.now();
-  if (!force && now - lastRemoteCheck < REMOTE_CHECK_INTERVAL) {
+  if (!force && now - lastRemoteCheck < remoteCheckGap()) {
     return { action: "throttled" };
   }
   lastRemoteCheck = now;
@@ -900,11 +950,20 @@ export async function checkRemote(userId, { force = false } = {}) {
     const stampDiffers = !!head.updatedAt && head.updatedAt !== meta.cloudUpdatedAt;
     if (!cloudAhead && !stampDiffers) {
       if (syncState.state === "offline" || syncState.state === "error") emitState("saved");
+      idleChecks++;               // jimjitlik — keyingi tekshiruv kechroq
       return { action: "fresh" };
     }
 
+    idleChecks = 0;               // bulutda harakat bor — yana tez tekshiramiz
+
     const pulled = await pullFromCloud(userId);
-    if (!pulled.ok) return { action: "skip" };
+    if (!pulled.ok) {
+      // Bulutni O'QIB BO'LMADI (format tanilmadi). Tahrirlashga ruxsat
+      // bersak, keyin shu o'qilmagan ma'lumot ustidan yozib yuborardik.
+      // Shuning uchun ilova FAQAT O'QISH rejimiga o'tadi (App.jsx).
+      if (pulled.reason === "unreadable") emitState("error", pulled.message);
+      return { action: "skip" };
+    }
     if (pulled.empty) return { action: "skip" };
 
     emitState("saved");
@@ -959,6 +1018,11 @@ async function autoTick() {
 
 function onWake() {
   if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+  // Oynaga qaytildi — kengaygan oraliqni kutmasdan DARHOL tekshiramiz.
+  // Shu sabab jimjitlikdagi siyrak tekshiruv foydalanuvchiga sezilmaydi:
+  // boshqa qurilmadagi o'zgarish oyna ochilishi bilan tushadi.
+  idleChecks = 0;
+  lastRemoteCheck = 0;
   autoTick();
 }
 
@@ -1048,6 +1112,21 @@ export function unbindOnlineRetry() {
 export async function restoreBlob(userId, blob, { label = "tiklash" } = {}) {
   if (!userId || !blob) return { ok: false, reason: "empty" };
 
+  // ⚠️ XAVFSIZLIK TO'SIG'I — QO'YIB YUBORMANG.
+  // Tiklash bulutga MAJBURAN (overwrite) yoziladi, ya'ni CAS himoyasi
+  // ishlamaydi. Agar nusxa biror sababga ko'ra bo'sh bo'lib chiqsa
+  // (format tanilmadi, yozuv buzilgan, yarim yuklangan), bu amal
+  // foydalanuvchining BUTUN ishini o'chirib yuborardi. Bo'sh holatga
+  // ataylab qaytishning ma'nosi yo'q — shuning uchun rad etamiz.
+  if (isEmptyBlob(blob)) {
+    return {
+      ok: false,
+      reason: "empty-blob",
+      message: "Bu nusxa bo'sh ko'rindi — xavfsizlik uchun tiklanmadi. " +
+               "Sahifani yangilang (Ctrl+Shift+R) va boshqa nusxani tanlang.",
+    };
+  }
+
   const current = collectLocal(userId);
   await archiveVersion(userId, current, {
     rev: getMeta(userId).baseRev || 0,
@@ -1103,9 +1182,12 @@ export async function fetchSchoolData(ownerId) {
   if (error) return { ok: false, reason: "error", message: error.message };
   if (!data) return { ok: false, reason: "empty" };
 
+  const blob = await unpackBlob(data.data || {});
+  if (blob === null) return { ok: false, reason: "unreadable" };
+
   return {
     ok: true,
-    data: decodeBlob(data.data || {}),
+    data: blob,
     updatedAt: data.updated_at || "",
   };
 }
