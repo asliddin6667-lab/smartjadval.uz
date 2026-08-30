@@ -438,6 +438,30 @@ Shuning uchun u tushmagan soatni ko'paytira olmaydi. Uchta joyda:
 | Generator ichidagi zichlash | `parallelCostAt()` → `baseCost`/`c`, `trySwap`, `tryEvict` | `PARALLEL_W` |
 | `compactSchedule` | `parallelAt()` → move pass | `PARALLEL_C_W = 200` |
 
+⚠️ **MOSLIK HECH QACHON OYNA EVAZIGA OLINMAYDI.** Birinchi versiyada mukofot
+oddiy og'irlik edi va foydalanuvchining jadvalida **oyna paydo bo'ldi**.
+Sabab: mukofot darsni kunlik kvotadan oshgan kunga tortadi, natijada narigi
+kun kam to'ladi va o'sha yerda oyna ochiladi — oynasizlik kafolati aynan
+kvotaga tayanadi (`balanceOk` + `quotaRankOk`). Endi uchta QATTIQ to'siq bor,
+ular og'irlik masalasi EMAS:
+
+1. `parallelDayOk()` — mukofot **kunlik kvotadan oshgan kunga berilmaydi**
+   (`classDayCount + blockSize > balHi` → 0). Zichlashdagi `parallelCostAt`
+   va `parallelAt` da ham xuddi shu tekshiruv, faqat u yerda blok qo'shilmaydi
+   (`markBits`/`setBits` `classDayCount` ni allaqachon yangilagan).
+2. `scoreCandidate` da mukofot **oyna ochadigan nomzodga umuman berilmaydi**
+   (`compactPenalty > 0` → 0).
+3. So'rovlar TARTIBIGA aralashilmaydi. Ilgari `betterPick` ga «parallel
+   hamrohi joylashgan so'rov oldinroq» degan oxirgi mezon qo'shilgandi —
+   sinovda moslikka **hech qanday** foyda bermadi, lekin joylashtirish
+   tartibini o'zgartirib oyna tug'dirardi. Olib tashlandi.
+
+Bundan tashqari **oyna qolsa moslikdan voz kechiladi**
+([Schedule.jsx](src/pages/Schedule.jsx)): generatsiya oxirida oyna > 0 bo'lsa
+`compactUntilClean(..., { parallel: false })` bilan moslik BUTUNLAY o'chirib
+qayta zichlanadi (natija yaxshilansagina qabul qilinadi), «🧲 Oynani yopish»
+tugmasi esa 3-urinishdan boshlab moslikni o'chiradi.
+
 Hisoblagich `gradeDaySubj[(g * D + d) * S + si]` — darajada shu kuni shu fanni
 oladigan **sinflar** soni (soat emas). U `classDailySubj` ning 0↔1 o'tishlariga
 ulangan, shuning uchun **`classDailySubj` ni faqat `bumpDaySubj()` orqali
@@ -447,20 +471,29 @@ yolg'on joyga beriladi. `compactSchedule` da xuddi shu rol `bumpSubj` da.
 Tanlov tartibi: `betterResult()` va Schedule.jsx `betterThan()` da moslik
 (`align` = `parallelMismatch`) **tushmagan soat → joylangan → oyna → kunlik
 notekislik** dan KEYIN turadi — moslik uchun oyna ham, notekis yuk ham qabul
-qilinmaydi. `betterPick` da esa u eng oxirgi mezon (hamma narsa teng bo'lganda).
+qilinmaydi.
 
 Zaxira to'ldirgichda kun tanlash: `daysByLoad(work, classId, subjectId)`
-([Schedule.jsx](src/pages/Schedule.jsx)) parallel sinfda ayni fan turgan kunni
-1.5 dars yengilroq sanaydi — yuk tengligi baribir ustun.
+([Schedule.jsx](src/pages/Schedule.jsx)) — moslik faqat **teng yukli** kunlar
+orasida hal qiladi. Ilgari mos kun 1.5 dars «yengilroq» sanalardi va yangi
+dars to'laroq kunga tushib oyna ochilardi.
 
 Ekranda 🔗 ko'k quti: `parallelReport()` — «kunlar N% mos» va mos kelmagan
 fanlar. Foiz `matched / slots` (kun-yozuvlari), «to'liq mos fan» soni emas:
 5 soatlik fanda bitta kun mos kelmasa ham qolgan kunlar foydali.
 
-O'lchov (demo maktab, 35 sinf va to'liq yechiladigan 11 sinflik kesim):
-moslik 47% → 65%, to'liq mos fanlar 2 → 43 (147 dan); tushmagan soat, oyna va
-kunlik notekislik o'zgarmadi. **Og'irlikni oshirishning ma'nosi yo'q** — 30 dan
-3000 gacha natija bir xil qoldi, cheklovchi omil ustoz/xona bandligi.
+O'lchov (demo maktab, 6 seed, yoqilgan/o'chirilgan juftlab):
+
+| Ma'lumot | Moslik | To'liq mos fan | Tushmadi | Oyna |
+|---|---|---|---|---|
+| 35 sinf, o'chirilgan | 49.2% | 5 / 145 | 76 | 7.2 |
+| 35 sinf, **yoqilgan** | **60.0%** | **26 / 145** | 76 | **7.2** |
+| 11 sinf (100% yechiladi), o'chirilgan | 42.9% | 1 / 54 | 0 | 0 |
+| 11 sinf, **yoqilgan** | **52.6%** | **5 / 54** | 0 | **0** |
+
+Ya'ni oyna, tushmagan soat va kunlik notekislik **o'zgarmaydi**.
+**Og'irlikni oshirishning ma'nosi yo'q** — 30 dan 3000 gacha natija bir xil
+qoldi, cheklovchi omil ustoz/xona bandligi.
 
 **ZICHLASH — «🧲 Oynani yopish» (`compactSchedule`, 9-parametr `options`).**
 Funksiya ikki rejimda ishlaydi:

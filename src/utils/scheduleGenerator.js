@@ -808,8 +808,6 @@ function attemptSchedule(
   // gradeDaySubj[(g * D + d) * S + si] — darajada shu kuni shu fanni
   // oladigan SINFLAR soni (soat emas: bir sinf kuniga 2 soat qo'ysa ham 1).
   const gradeDaySubj = parOn ? new Int16Array(PG * D * S) : null;
-  // gradeSubjAny[g * S + si] — fan haftada nechta KUNGA tushgan (tartib uchun)
-  const gradeSubjAny = parOn ? new Int16Array(PG * S) : null;
   // classDailySubj ni O'ZGARTIRADIGAN YAGONA yo'l — parallel hisoblagich
   // shu yerda 0↔1 o'tishlari bo'yicha yangilanadi.
   function bumpDaySubj(ci, d, si, delta) {
@@ -822,13 +820,8 @@ function attemptSchedule(
     const g = gradeIdx[ci];
     if (g < 0) return;
     const go = (g * D + d) * S + si;
-    if (before <= 0 && after > 0) {
-      gradeDaySubj[go] += 1;
-      if (gradeDaySubj[go] === 1) gradeSubjAny[g * S + si] += 1;
-    } else if (before > 0 && after <= 0) {
-      gradeDaySubj[go] -= 1;
-      if (gradeDaySubj[go] === 0) gradeSubjAny[g * S + si] -= 1;
-    }
+    if (before <= 0 && after > 0) gradeDaySubj[go] += 1;
+    else if (before > 0 && after <= 0) gradeDaySubj[go] -= 1;
   }
   const placedKeyCount = new Map();
   function bumpKeyIdx(ci, si, delta) {
@@ -2180,6 +2173,17 @@ function attemptSchedule(
   // mexanizm birorta joyni "yomonlashtira" olmaydi va tushmagan soatni
   // ko'paytirmaydi. Sinf shu kuni bu fanni allaqachon olayotgan bo'lsa
   // mukofot yo'q — aks holda takror dars rag'batlantirilgan bo'lardi.
+  //
+  // ⚠️ MUKOFOT KUNLIK KVOTADAN OSHGAN KUNGA BERILMAYDI. Oynasizlik
+  // kafolati aynan kvotaga tayanadi (`balanceOk` + `quotaRankOk`): sinfning
+  // soatlari kunlarga TENG bo'linsa, har kun boshidan ketma-ket to'ladi va
+  // oyna matematik jihatdan paydo bo'lmaydi. Kvotadan oshgan kunga tortish
+  // esa boshqa kunni kam to'ldiradi — o'sha yerda oyna ochiladi. Shuning
+  // uchun `parallelDayOk` — QATTIQ shart, og'irlik masalasi emas.
+  function parallelDayOk(req, ci, d) {
+    const n = classDayCount[ci * D + d] + req.blockSize;
+    return n <= balHi[ci * D + d];
+  }
   function parallelBonus(req, d) {
     if (!parOn || req.sIdx < 0) return 0;
     let bonus = 0;
@@ -2187,6 +2191,7 @@ function attemptSchedule(
       const g = gradeIdx[ci];
       if (g < 0) continue;
       if (classDailySubj[(ci * D + d) * S + req.sIdx] > 0) continue;
+      if (!parallelDayOk(req, ci, d)) continue;
       const mates = gradeDaySubj[(g * D + d) * S + req.sIdx];
       if (mates > 0) bonus -= Math.min(mates, gradeSize[g] - 1) * PARALLEL_W;
     }
@@ -2252,7 +2257,11 @@ function attemptSchedule(
     }
     const spacedPen = spacedPenalty(req, d);
     const supervisePen = supervisePenalty(req, d, i);
-    const parallelPen = parallelBonus(req, d);
+    // Parallel mukofoti FAQAT oyna OCHMAYDIGAN nomzodga beriladi.
+    // `compactPenalty > 0` — bu katakdan oldin sinfda bo'sh soat qoladi,
+    // ya'ni oyna. Bunday joyga moslik uchun ham tortilmaydi: oyna
+    // mosllikdan MUHIMROQ (foydalanuvchi talabi — oyna umuman bo'lmasin).
+    const parallelPen = compactPenalty > 0 ? 0 : parallelBonus(req, d);
     const randomPenalty = rng() * RAND_W;
     return compactPenalty + repeatPenalty + classLoadPenalty + teacherPenalty + spreadPenalty + corePenalty + adjacencyPenalty + bridgePenalty + dayCapPenalty + spacedPen + supervisePen + parallelPen + fixedPen + randomPenalty;
   }
@@ -2368,24 +2377,11 @@ function attemptSchedule(
   const deferred = [];
   // MRV — lekin avval 0-navbat (sozlamali darslar), keyin oddiylari.
   // Tanlash tartibi strategiyaga qarab o'zgaradi — har urinish boshqa yechim beradi.
-  // Parallel hamrohi ALLAQACHON joylashgan so'rov navbatda oldinroq tursin —
-  // shunda `parallelBonus` unga ta'sir qila oladi (birinchi joylangan sinf
-  // kunni belgilaydi, qolganlari unga ergashadi). Bu ENG OXIRGI mezon:
-  // MRV, degree, diff va priority teng bo'lgandagina ishlaydi, shuning uchun
-  // qidiruv tartibini buzmaydi.
-  function parPlaced(r) {
-    if (r.sIdx < 0) return false;
-    for (const ci of r.cIdxs) {
-      const g = gradeIdx[ci];
-      if (g >= 0 && gradeSubjAny[g * S + r.sIdx] > 0) return true;
-    }
-    return false;
-  }
-  function parBetter(r, sel) {
-    if (!parOn) return false;
-    const a = parPlaced(r);
-    return a !== parPlaced(sel) ? a : false;
-  }
+  // ⚠️ Parallel moslik SO'ROVLAR TARTIBIGA aralashmaydi. Sinovda undan
+  // hech qanday foyda chiqmadi (moslik o'zgarmadi), lekin joylashtirish
+  // tartibi o'zgargani uchun natijada OYNA paydo bo'lardi. Moslik faqat
+  // `parallelBonus`/`parallelCostAt` orqali — ular esa oyna ochadigan yoki
+  // kvotadan oshiradigan nomzodga umuman berilmaydi.
   function betterPick(r, sel) {
     if (!sel) return true;
     if (r.tier !== sel.tier) return r.tier < sel.tier;
@@ -2393,28 +2389,24 @@ function attemptSchedule(
       if (r.degree !== sel.degree) return r.degree > sel.degree;
       if (r.feasCount !== sel.feasCount) return r.feasCount < sel.feasCount;
       if (r.diff !== sel.diff) return r.diff > sel.diff;
-      if (r.priority !== sel.priority) return r.priority > sel.priority;
-      return parBetter(r, sel);
+      return r.priority > sel.priority;
     }
     if (strategy === 2) {
       if (r.diff !== sel.diff) return r.diff > sel.diff;
       if (r.feasCount !== sel.feasCount) return r.feasCount < sel.feasCount;
       if (r.degree !== sel.degree) return r.degree > sel.degree;
-      if (r.priority !== sel.priority) return r.priority > sel.priority;
-      return parBetter(r, sel);
+      return r.priority > sel.priority;
     }
     if (strategy === 4) {
       if (r.feasCount !== sel.feasCount) return r.feasCount < sel.feasCount;
       if (r.priority !== sel.priority) return r.priority > sel.priority;
       if (r.degree !== sel.degree) return r.degree > sel.degree;
-      if (r.diff !== sel.diff) return r.diff > sel.diff;
-      return parBetter(r, sel);
+      return r.diff > sel.diff;
     }
     if (r.feasCount !== sel.feasCount) return r.feasCount < sel.feasCount;
     if (r.degree !== sel.degree) return r.degree > sel.degree;
     if (r.diff !== sel.diff) return r.diff > sel.diff;
-    if (r.priority !== sel.priority) return r.priority > sel.priority;
-    return parBetter(r, sel);
+    return r.priority > sel.priority;
   }
   function pickMRV() {
     for (let iter = 0; iter < 5; iter++) {
@@ -2835,6 +2827,10 @@ function attemptSchedule(
     for (const ci of req.cIdxs) {
       const g = gradeIdx[ci];
       if (g < 0) continue;
+      // Kvotadan oshgan kunga tortmaymiz — narigi kunda oyna ochiladi.
+      // `markBits` allaqachon `classDayCount` ni yangilagan, shuning uchun
+      // bu yerda blok qo'shilmaydi.
+      if (classDayCount[ci * D + dd] > balHi[ci * D + dd]) continue;
       const cur = classDailySubj[(ci * D + dd) * S + req.sIdx];
       const own = dd === oldD ? cur - req.blockSize : cur;
       if (own > 0) continue;   // sinf shu kuni bu fanni allaqachon oladi
@@ -4788,6 +4784,9 @@ export function compactSchedule(
     for (const ci of u.cIdxs) {
       const g = cGradeIdx[ci];
       if (g < 0) continue;
+      // Kvotadan oshgan kunga tortmaymiz — narigi kunda oyna ochiladi
+      // (`setBits` `classDayCount` ni allaqachon yangilagan).
+      if (classDayCount[ci * D + dd] > balHi[ci * D + dd]) continue;
       const cur = subjDay.get(`${ci}|${dd}|${u.subjectId}`) || 0;
       const own = dd === oldD ? cur - u.len : cur;
       if (own > 0) continue;   // sinf shu kuni bu fanni allaqachon oladi

@@ -15,7 +15,7 @@ import { pairSideGroups, pairAllGroups, pairCardKey } from "../utils/pairGroups"
 import { swapTeacherIds, swapTeachersOfSubject, swapRoomIds } from "../utils/swapGroups";
 import { buildTeacherStreams, supervisionRows, findSupervisionGaps } from "../utils/homeroom";
 import { buildSubjectConflicts } from "../utils/subjectConflicts";
-import { parallelDaysOn, buildParallelIndex, parallelReport, parallelMismatch } from "../utils/parallelDays";
+import { parallelDaysOn, buildParallelIndex, parallelMismatch } from "../utils/parallelDays";
 import MoveResolveModal from "../components/MoveResolveModal";
 import SaveScheduleModal from "../components/SaveScheduleModal";
 import TeacherGrid from "../components/TeacherGrid";
@@ -189,12 +189,6 @@ export default function SchedulePage({
     });
     return m;
   }, [parIndex]);
-  // Ekrandagi ko'rsatkich — jadval o'zgarganda qayta hisoblanadi
-  const parStats = useMemo(
-    () => parallelReport(schedule, classes, subjects, parOn),
-    [schedule, classes, subjects, parOn],
-  );
-
   // moveResolver uchun umumiy kontekst
   const ctx = { schedule, classes, subjects, teachers, rooms, timeslots: sortedTimeslots, lunchGroups, classSubjects };
 
@@ -986,10 +980,13 @@ export default function SchedulePage({
   // natijani qaytarmaydi. Oddiy (hard bo'lmagan) rejim avvalgidek —
   // birinchi yaxshilanmagan urinishda to'xtaydi, chunki u generatsiya
   // sikli ichida chaqiriladi va vaqtni ushlab qolmasligi kerak.
+  // `opts.parallel === false` — parallel moslikni BUTUNLAY o'chirib zichlash.
+  // Oyna moslikdan MUHIMROQ: oyna qolib ketsa, moslikdan voz kechiladi.
   function compactUntilClean(startSch, minPlaced, opts = {}) {
     const hard = Boolean(opts.hard);
     const rounds = opts.rounds ?? (hard ? 8 : 4);
     const budgetMs = opts.budgetMs ?? 2500;
+    const par = opts.parallel === false ? false : parOn;
     let best = startSch;
     let bestGaps = countGaps(best);
     let bestOver = countOverCap(best);
@@ -1003,7 +1000,7 @@ export default function SchedulePage({
       try {
         next = compactSchedule(
           classes, timeslots, lunchGroups, best, classSubjects, teachers, subjects, rooms,
-          hard ? { hard: true, spin: k, budgetMs, parallelDays: parOn } : { parallelDays: parOn },
+          hard ? { hard: true, spin: k, budgetMs, parallelDays: par } : { parallelDays: par },
         );
       } catch {
         break;
@@ -1203,6 +1200,18 @@ export default function SchedulePage({
       // Oyna allaqachon 0 bo'lsa — bitta yengil urinish bilan cheklanadi,
       // ya'ni tayyor jadval uchun vaqt behuda sarflanmaydi.
       finalSch = compactUntilClean(finalSch, bestPlaced, { hard: true, rounds: 4, budgetMs: 1500 });
+
+      // ⚠️ OYNA — MOSLIKDAN MUHIMROQ. Oyna baribir qolgan bo'lsa, parallel
+      // moslikni BUTUNLAY o'chirib qayta zichlaymiz: moslik mukofoti
+      // zichlashni mahalliy "cho'qqi"da ushlab qolgan bo'lishi mumkin.
+      // Natija yaxshilansagina qabul qilinadi, ya'ni bu bosqich hech narsani
+      // yomonlashtira olmaydi.
+      if (parOn && countGaps(finalSch) > 0) {
+        const plain = compactUntilClean(
+          finalSch, bestPlaced, { hard: true, rounds: 6, budgetMs: 2200, parallel: false },
+        );
+        if (countGaps(plain) < countGaps(finalSch)) finalSch = plain;
+      }
 
       setSchedule(finalSch);
 
@@ -2161,16 +2170,20 @@ export default function SchedulePage({
   }
 
   // Kunlar kam yuklanganidan boshlab tartiblanadi — yangi soatlar bir kunga
-  // to'planib qolmasin. `subjectId` berilsa parallel sinfda AYNI fan turgan
-  // kun bir dars yengilroq sanaladi: teng holatda o'sha kun tanlanadi, lekin
-  // yuk tengligi baribir ustun (moslik uchun kun ortiqcha to'ldirilmaydi).
+  // to'planib qolmasin.
+  //
+  // ⚠️ `subjectId` berilsa parallel sinfdagi moslik faqat TENG YUKLI kunlar
+  // orasida hal qiladi. Ilgari mos kun 1.5 dars "yengilroq" sanalardi va
+  // shu sababli yangi dars TO'LAROQ kunga tushib, oyna ochilardi. Kun yuki
+  // — oynasizlikning kafolati, moslik esa undan past turadi.
   function daysByLoad(work, classId, subjectId = "") {
-    const keyed = DAYS.map((day) => [
+    const keyed = DAYS.map((day) => ({
       day,
-      dayLoadOf(work, classId, day) - (parMatchOn(work, classId, subjectId, day) ? 1.5 : 0),
-    ]);
-    keyed.sort((a, b) => a[1] - b[1]);
-    return keyed.map(([day]) => day);
+      load: dayLoadOf(work, classId, day),
+      par: parMatchOn(work, classId, subjectId, day) ? 0 : 1,
+    }));
+    keyed.sort((a, b) => (a.load - b.load) || (a.par - b.par));
+    return keyed.map((x) => x.day);
   }
 
   function planResolutions(classId, subjectId, count) {
@@ -2988,7 +3001,10 @@ export default function SchedulePage({
         try {
           next = compactSchedule(
             classes, timeslots, lunchGroups, best, classSubjects, teachers, subjects, rooms,
-            { hard: true, spin: k, budgetMs: 900 + k * 500, parallelDays: parOn },
+            // Tugmaning VAZIFASI — oynani yopish. Dastlabki ikki urinish
+            // parallel moslikni saqlashga harakat qiladi, keyingilarida esa
+            // u BUTUNLAY o'chadi: oyna moslikdan muhimroq.
+            { hard: true, spin: k, budgetMs: 900 + k * 500, parallelDays: parOn && k < 2 },
           );
         } catch {
           break;
@@ -3582,37 +3598,6 @@ export default function SchedulePage({
               </>
             );
           })()}
-
-          {/* PARALLEL SINFLAR — bir kunda bir xil fan (ogohlantirish emas, ma'lumot) */}
-          {parStats.total > 0 && (
-            <div style={{ background: "#eef2ff", border: "1px solid #c7d2fe", borderRadius: 12, padding: 14, marginBottom: 16 }}>
-              <div style={{ fontWeight: 800, color: "#3730a3", fontSize: 15 }}>
-                🔗 Parallel sinflar: kunlar {parStats.slots ? Math.round((parStats.matched / parStats.slots) * 100) : 100}% mos
-                {" "}<span style={{ fontWeight: 500 }}>({parStats.aligned}/{parStats.total} fan to'liq bir kunga tushgan)</span>
-              </div>
-              <div style={{ fontSize: 12.5, color: "#4338ca", marginTop: 6 }}>
-                Bir darajaning sinflari (10-A, 10-B…) imkon qadar bir kunda bir xil fanlarni
-                o'qiydi. <b>Bir kun</b> — bir soat emas: ikkala sinfga ayni ustoz kirsa, ular
-                bir soatda o'qiy olmaydi. Quyidagi fanlarning kunlari to'liq mos kelmadi —
-                ko'pincha ustoz yoki xona bandligi sabab. Buni Sozlamalardan o'chirsa bo'ladi.
-              </div>
-              {parStats.groups.filter((g) => g.bad.length).map((g) => (
-                <div key={g.grade} style={{ marginTop: 8 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 700, color: "#3730a3", marginBottom: 4 }}>
-                    {g.grade}-sinflar ({g.size} ta) · {g.slots ? Math.round((g.matched / g.slots) * 100) : 100}% mos
-                  </div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                    {g.bad.slice(0, 12).map((b) => (
-                      <span key={b.subjectId} style={{ background: "#e0e7ff", borderRadius: 6, padding: "3px 7px", fontSize: 12.5, color: "#312e81" }}>
-                        {b.name} · {b.miss}
-                      </span>
-                    ))}
-                    {g.bad.length > 12 && <span style={{ fontSize: 12.5, color: "#4338ca" }}>… yana {g.bad.length - 12} ta</span>}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
 
           {setSchedule && gapTotal > 0 && (() => {
             const tight = tightTeachers();
