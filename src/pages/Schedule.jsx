@@ -12,7 +12,10 @@ import {
 } from "../utils/moveResolver";
 import { slotDisplayNumber } from "../utils/shiftSlots";
 import { pairSideGroups, pairAllGroups, pairCardKey } from "../utils/pairGroups";
+import { swapTeacherIds, swapTeachersOfSubject, swapRoomIds } from "../utils/swapGroups";
 import { buildTeacherStreams, supervisionRows, findSupervisionGaps } from "../utils/homeroom";
+import { buildSubjectConflicts } from "../utils/subjectConflicts";
+import { parallelDaysOn, buildParallelIndex, parallelReport, parallelMismatch } from "../utils/parallelDays";
 import MoveResolveModal from "../components/MoveResolveModal";
 import SaveScheduleModal from "../components/SaveScheduleModal";
 import TeacherGrid from "../components/TeacherGrid";
@@ -156,6 +159,9 @@ export default function SchedulePage({
   const subjectMap = useMemo(() => new Map(subjects.map((s, i) => [s.id, { ...s, _colorIndex: i }])), [subjects]);
   const teacherMap = useMemo(() => new Map(teachers.map((t) => [t.id, t])), [teachers]);
   const roomMap = useMemo(() => new Map(rooms.map((r) => [r.id, r])), [rooms]);
+  // Bir kunga tushmaydigan fanlar (Algebra ↔ Geometriya) — ro'yxat
+  // [subjectConflicts.js](../utils/subjectConflicts.js) da.
+  const conflictOf = useMemo(() => buildSubjectConflicts(subjects), [subjects]);
 
   const sortedClasses = useMemo(() => [...classes].sort((a, b) => (
     String(a.name).localeCompare(String(b.name), "uz", { numeric: true })
@@ -168,6 +174,26 @@ export default function SchedulePage({
   const visibleClasses = selectedClass === "all"
     ? sortedClasses
     : sortedClasses.filter((c) => c.id === selectedClass);
+
+  // ═══════════ PARALLEL SINFLAR — BIR KUNDA BIR XIL FAN ═══════════
+  // 10-A, 10-B, 10-V bir darajaning sinflari: imkon qadar bir kunda bir
+  // xil fanlarni o'qishsin. Qoida YUMSHOQ — joy topilmasa dars boshqa
+  // kunga tushaveradi, hech narsa taqiqlanmaydi.
+  const parOn = parallelDaysOn(settings);
+  const parIndex = useMemo(() => buildParallelIndex(classes, parOn), [classes, parOn]);
+  // sinf id → parallel hamrohlari (o'zidan tashqari)
+  const parMates = useMemo(() => {
+    const m = new Map();
+    parIndex.classIds.forEach((ids) => {
+      ids.forEach((cid) => m.set(cid, ids.filter((x) => x !== cid)));
+    });
+    return m;
+  }, [parIndex]);
+  // Ekrandagi ko'rsatkich — jadval o'zgarganda qayta hisoblanadi
+  const parStats = useMemo(
+    () => parallelReport(schedule, classes, subjects, parOn),
+    [schedule, classes, subjects, parOn],
+  );
 
   // moveResolver uchun umumiy kontekst
   const ctx = { schedule, classes, subjects, teachers, rooms, timeslots: sortedTimeslots, lunchGroups, classSubjects };
@@ -977,7 +1003,7 @@ export default function SchedulePage({
       try {
         next = compactSchedule(
           classes, timeslots, lunchGroups, best, classSubjects, teachers, subjects, rooms,
-          hard ? { hard: true, spin: k, budgetMs } : undefined,
+          hard ? { hard: true, spin: k, budgetMs, parallelDays: parOn } : { parallelDays: parOn },
         );
       } catch {
         break;
@@ -1062,13 +1088,18 @@ export default function SchedulePage({
       let bestOver = Infinity;
       let bestGaps = Infinity;
       let bestBal = Infinity;
+      let bestAlign = Infinity;
       let bestStrategy = 0;
       let stall = 0;
 
-      const betterThan = (placed, over, gaps, bal) => {
+      // Parallel moslik — sifat mezonlaridan KEYIN: moslik uchun oyna ham,
+      // notekis yuk ham qabul qilinmaydi (generatordagi `betterResult` bilan
+      // ayni tartib).
+      const betterThan = (placed, over, gaps, bal, align) => {
         if (placed !== bestPlaced) return placed > bestPlaced;
         if (gaps !== bestGaps) return gaps < bestGaps;
         if (bal !== bestBal) return bal < bestBal;
+        if (align !== bestAlign) return align < bestAlign;
         return over < bestOver;
       };
 
@@ -1092,14 +1123,14 @@ export default function SchedulePage({
           : (r % 3 === 2 ? (bestStrategy + 1 + Math.floor(r / 3)) % 6 : bestStrategy);
         const raw = generateSchedule(
           classes, subjects, teachers, rooms, timeslots, classSubjects, lunchGroups, seed,
-          { solveMs: b.solveMs, compactMs: b.compactMs, polishMs: b.polishMs, strategy, quiet: true }
+          { solveMs: b.solveMs, compactMs: b.compactMs, polishMs: b.polishMs, strategy, quiet: true, parallelDays: parOn }
         );
         // Har bir nomzod darhol zichlanadi: oyna kamaysa — aynan shu variant
         // saqlanadi. Zichlash ~0.1 s turadi, lekin tanlov sifati sezilarli oshadi
         // (sinovda eng yaxshi natijadagi oynalar 13 tadan 9 taga tushdi).
         let cand = raw;
         try {
-          const packed = compactSchedule(classes, timeslots, lunchGroups, raw, classSubjects, teachers, subjects, rooms);
+          const packed = compactSchedule(classes, timeslots, lunchGroups, raw, classSubjects, teachers, subjects, rooms, { parallelDays: parOn });
           if (packed && countPlacedUnits(packed) >= countPlacedUnits(raw)) {
             const gp = countGaps(packed);
             const gr = countGaps(raw);
@@ -1111,12 +1142,14 @@ export default function SchedulePage({
         const over = countOverCap(cand);
         const gaps = countGaps(cand);
         const bal = countImbalance(cand);
+        const align = parallelMismatch(cand, classes, subjects, parOn);
 
-        if (betterThan(placed, over, gaps, bal)) {
+        if (betterThan(placed, over, gaps, bal, align)) {
           bestPlaced = placed;
           bestOver = over;
           bestGaps = gaps;
           bestBal = bal;
+          bestAlign = align;
           bestStrategy = strategy;
           best = cand;
           stall = 0;
@@ -1130,8 +1163,11 @@ export default function SchedulePage({
         if (requiredTotal === 0) break;
         const elapsed = Date.now() - start;
         const full = bestPlaced >= requiredTotal;
-        // Mukammal natija — darhol to'xtaymiz
-        if (full && bestGaps === 0 && bestBal === 0) break;
+        // Mukammal natija — darhol to'xtaymiz. Parallel moslik hali to'liq
+        // emas bo'lsa yana ikki urinish beriladi (ko'pi bilan), chunki u
+        // ko'pincha obyektiv sabablarga ko'ra 100% bo'la olmaydi —
+        // vaqtni cheksiz sarflash noto'g'ri bo'lardi.
+        if (full && bestGaps === 0 && bestBal === 0 && (bestAlign === 0 || stall >= 2)) break;
         // Hammasi joylashdi va oyna yo'q, LEKIN kunlik yuk hali notekis
         // (bir kun 3 soat, boshqa kun 6 soat). Teng taqsimot ham majburiy
         // talab, shuning uchun bu yerda to'xtamaymiz — yaxshilanish uzoq
@@ -1255,6 +1291,20 @@ export default function SchedulePage({
     return Math.max(base, Math.ceil(need / usableDaysOf(classId)) || 1);
   }
 
+  // ——— BIR KUNGA TUSHMAYDIGAN FANLAR ———
+  // Algebra va Geometriya bitta sinfda BIR KUNDA o'qitilmaydi. Shu kunda
+  // `subjectId` bilan ziddiyatli fan turgan bo'lsa `true` qaytadi.
+  // `work` — tekshirilayotgan jadval, `skip` — hisobga olinmaydigan yozuvlar
+  // (ko'chirilayotgan darsning o'zi).
+  function dayHasConflict(work, classId, subjectId, day, skip = null) {
+    const foes = conflictOf.get(subjectId);
+    if (!foes || !foes.size) return false;
+    return sortedTimeslots.some((ts) => (work?.[day]?.[ts.id] || []).some((l) => (
+      l && (foes.has(l.subjectId) || (l.alternating && foes.has(l.altSubjectId)))
+      && classIdsOf(l).includes(classId) && !(skip && skip.has(l))
+    )));
+  }
+
   function missingForClass(classId) {
     const list = classSubjects?.[classId] || [];
     const subjectIds = new Set();
@@ -1328,7 +1378,9 @@ export default function SchedulePage({
         if (a.splitEnabled) push(a.teacherId2);
         if (a.levelGroupEnabled) (a.levelGroups || []).forEach((g) => push(g.teacherId));
       }
-      if (a.swapEnabled && a.swapSubjectId === subjectId) push(a.swapTeacherId);
+      // Almashinuvda 2-soat ustozi boshqa bo'lishi mumkin — ikkalasi ham
+      // shu fanni SHU SINFDA beradi.
+      if (a.swapEnabled && a.swapSubjectId) swapTeachersOfSubject(a, subjectId).forEach(push);
       if (a.weekAltEnabled && a.weekAltSubjectId === subjectId) push(a.weekAltTeacherId);
       pairAllGroups(a).forEach((g) => { if (g.subjectId === subjectId) push(g.teacherId); });
     });
@@ -1584,7 +1636,7 @@ export default function SchedulePage({
           add(a.teacherId2, cls.name);
           (a.levelGroups || []).forEach((g) => add(g.teacherId, cls.name));
         }
-        if (a.swapEnabled && a.swapSubjectId === subjectId) add(a.swapTeacherId, cls.name);
+        if (a.swapEnabled && a.swapSubjectId) swapTeachersOfSubject(a, subjectId).forEach((tid) => add(tid, cls.name));
         pairSideGroups(a).forEach((g) => { if (g.subjectId === subjectId) add(g.teacherId, cls.name); });
       });
     });
@@ -1717,7 +1769,9 @@ export default function SchedulePage({
           if (realSplit) add(a.roomId2, `C2|${cls.id}|${idx}`, h, cls.id);
         }
         // Fan almashinuvi qo'shimcha soat egallaydi — xona esa o'sha xona
-        if (a.swapEnabled && a.swapSubjectId) add(a.roomId, `SW|${cls.id}|${idx}`, h, cls.id);
+        if (a.swapEnabled && a.swapSubjectId) {
+          swapRoomIds(a).forEach((rid) => add(rid, `SW|${cls.id}|${idx}|${rid}`, h, cls.id));
+        }
       });
     });
 
@@ -1837,6 +1891,40 @@ export default function SchedulePage({
     [classes, classSubjects, teachers, sortedTimeslots, lunchGroups, schedule],
   );
 
+  // ——— BIR KUNGA TUSHGAN ZIDDIYATLI FANLAR ———
+  // Generator, zichlash va zaxira to'ldirgich bunday holatni YARATMAYDI,
+  // lekin qo'lda ko'chirish (yoki eski jadval) keltirib chiqarishi mumkin —
+  // shuning uchun ekranda ko'rinib tursin.
+  const conflictViolations = useMemo(() => {
+    if (!conflictOf.size) return [];
+    const out = [];
+    classes.forEach((cls) => {
+      DAYS.forEach((day) => {
+        const found = new Set();
+        sortedTimeslots.forEach((ts) => {
+          (schedule?.[day]?.[ts.id] || []).forEach((l) => {
+            if (!l || !classIdsOf(l).includes(cls.id)) return;
+            if (l.subjectId) found.add(l.subjectId);
+            if (l.alternating && l.altSubjectId) found.add(l.altSubjectId);
+          });
+        });
+        const ids = [...found];
+        for (let i = 0; i < ids.length; i++) {
+          for (let j = i + 1; j < ids.length; j++) {
+            const set = conflictOf.get(ids[i]);
+            if (!set || !set.has(ids[j])) continue;
+            out.push({
+              className: cls.name,
+              day,
+              text: `${subjectMap.get(ids[i])?.name || "?"} + ${subjectMap.get(ids[j])?.name || "?"}`,
+            });
+          }
+        }
+      });
+    });
+    return out;
+  }, [schedule, classes, sortedTimeslots, conflictOf, subjectMap]);
+
   // ——— YARIM TUSHGAN DARSLAR ———
   // Katakda guruhli darsning bir qismi yo'q (masalan 2-guruh ustozi).
   // Bu soat endi «joylashgan» deb sanalmaydi, lekin foydalanuvchi AYNAN
@@ -1862,7 +1950,7 @@ export default function SchedulePage({
     const skip = new Set();
     classes.forEach((cls) => (classSubjects?.[cls.id] || []).forEach((a) => {
       if (!a) return;
-      if (a.swapEnabled) { [a.teacherId, a.teacherId2, a.swapTeacherId].forEach((t) => t && skip.add(t)); }
+      if (a.swapEnabled) { [a.teacherId, a.teacherId2, ...swapTeacherIds(a)].forEach((t) => t && skip.add(t)); }
       if (a.weekAltEnabled) { [a.teacherId, a.weekAltTeacherId].forEach((t) => t && skip.add(t)); }
     }));
     const cells = new Map();   // teacherId → band kataklar soni
@@ -1893,6 +1981,28 @@ export default function SchedulePage({
       ...roomCapacityWarnings(scheduleComplete),
       ...supervisionCapacityWarnings(),
     ];
+    // ——— BIR KUNGA TUSHMAYDIGAN FANLAR: kun yetadimi? ———
+    // Algebra 4 kun + Geometriya 3 kun = 7 kun kerak, lekin haftada 6 kun —
+    // bunda soat ALBATTA tushmaydi, sababini oldindan aytib qo'yamiz.
+    if (conflictOf.size) {
+      classes.forEach((cls) => {
+        const ids = [...new Set((classSubjects?.[cls.id] || []).map((a) => a.subjectId).filter(Boolean))];
+        const days = usableDaysOf(cls.id);
+        for (let i = 0; i < ids.length; i++) {
+          for (let j = i + 1; j < ids.length; j++) {
+            const set = conflictOf.get(ids[i]);
+            if (!set || !set.has(ids[j])) continue;
+            const dA = Math.ceil(requiredHours(cls.id, ids[i]) / Math.max(1, subjectDayCap(cls.id, ids[i])));
+            const dB = Math.ceil(requiredHours(cls.id, ids[j]) / Math.max(1, subjectDayCap(cls.id, ids[j])));
+            if (dA + dB > days) {
+              const nA = subjectMap.get(ids[i])?.name || "?";
+              const nB = subjectMap.get(ids[j])?.name || "?";
+              warns.push(`${cls.name}: ${nA} va ${nB} bir kunga tushmasligi kerak, lekin ular uchun kamida ${dA} + ${dB} = ${dA + dB} kun kerak — sinfda esa atigi ${days} ish kuni bor. ${dA + dB - days} kunlik soat tushmaydi: soatni kamaytiring, «2 soat blok»ni yoqing yoki sinfning dam kunini oling.`);
+            }
+          }
+        }
+      });
+    }
     // Sinf sig'imi ham BASHORAT — jadval to'liq chiqqan bo'lsa, u rad etilgan.
     if (!scheduleComplete) {
       classes.forEach((cls) => {
@@ -2032,6 +2142,16 @@ export default function SchedulePage({
       && classIdsOf(l).length === 1;
   }
 
+  // Parallel hamrohlari (10-A uchun 10-B, 10-V) shu kuni shu fanni olayaptimi?
+  function parMatchOn(work, classId, subjectId, day) {
+    if (!parOn || !subjectId) return false;
+    const mates = parMates.get(classId);
+    if (!mates || !mates.length) return false;
+    return sortedTimeslots.some((ts) => (work?.[day]?.[ts.id] || []).some(
+      (l) => l.subjectId === subjectId && classIdsOf(l).some((cid) => mates.includes(cid)),
+    ));
+  }
+
   // Sinfning shu kundagi darslari ketma-ketmi? Yangi dars kun oxiriga qo'yilsa
   // oyna paydo bo'lmaydi — shuning uchun bo'sh kataklar shunga qarab tanlanadi.
   function dayLoadOf(work, classId, day) {
@@ -2041,9 +2161,16 @@ export default function SchedulePage({
   }
 
   // Kunlar kam yuklanganidan boshlab tartiblanadi — yangi soatlar bir kunga
-  // to'planib qolmasin.
-  function daysByLoad(work, classId) {
-    return [...DAYS].sort((a, b) => dayLoadOf(work, classId, a) - dayLoadOf(work, classId, b));
+  // to'planib qolmasin. `subjectId` berilsa parallel sinfda AYNI fan turgan
+  // kun bir dars yengilroq sanaladi: teng holatda o'sha kun tanlanadi, lekin
+  // yuk tengligi baribir ustun (moslik uchun kun ortiqcha to'ldirilmaydi).
+  function daysByLoad(work, classId, subjectId = "") {
+    const keyed = DAYS.map((day) => [
+      day,
+      dayLoadOf(work, classId, day) - (parMatchOn(work, classId, subjectId, day) ? 1.5 : 0),
+    ]);
+    keyed.sort((a, b) => a[1] - b[1]);
+    return keyed.map(([day]) => day);
   }
 
   function planResolutions(classId, subjectId, count) {
@@ -2102,9 +2229,10 @@ export default function SchedulePage({
       const t2 = teacherMap.get(l.teacherId);
       const tOff2 = new Set(Array.isArray(t2?.offDays) ? t2.offDays : []);
       const cap2 = subjectDayCap(cid, l.subjectId);
-      for (const day of daysByLoad(work, cid)) {
+      for (const day of daysByLoad(work, cid, l.subjectId)) {
         if (off2.has(day) || tOff2.has(day)) continue;
         if (subjOnDay(cid, l.subjectId, day) >= cap2) continue;
+        if (dayHasConflict(work, cid, l.subjectId, day, new Set([l]))) continue;
         for (const ts of teachingSlots) {
           if (day === exDay && ts.id === exTsId) continue;
           if (!slotUsable(cid, day, ts)) continue;
@@ -2171,10 +2299,11 @@ export default function SchedulePage({
       let done = false;
 
       // 1-bosqich — hech kimni bezovta qilmasdan
-      for (const day of daysByLoad(work, classId)) {
+      for (const day of daysByLoad(work, classId, subjectId)) {
         if (done) break;
         if (classOff.has(day) || tOff.has(day)) continue;
         if (subjOnDay(classId, subjectId, day) >= cap) continue;
+        if (dayHasConflict(work, classId, subjectId, day)) continue;
         for (const ts of teachingSlots) {
           if (!slotUsable(classId, day, ts)) continue;
           if (!classFree(classId, day, ts.id)) continue;
@@ -2188,10 +2317,11 @@ export default function SchedulePage({
       if (done) continue;
 
       // 2-bosqich — ustoz o'sha soatda boshqa sinfda band: o'sha darsni surish
-      for (const day of daysByLoad(work, classId)) {
+      for (const day of daysByLoad(work, classId, subjectId)) {
         if (done) break;
         if (classOff.has(day) || tOff.has(day)) continue;
         if (subjOnDay(classId, subjectId, day) >= cap) continue;
+        if (dayHasConflict(work, classId, subjectId, day)) continue;
         for (const ts of teachingSlots) {
           if (!slotUsable(classId, day, ts)) continue;
           if (!classFree(classId, day, ts.id)) continue;
@@ -2210,10 +2340,11 @@ export default function SchedulePage({
       if (done) continue;
 
       // 3-bosqich — sinfda dars bor: uni boshqa soatga surib joy ochish
-      for (const day of daysByLoad(work, classId)) {
+      for (const day of daysByLoad(work, classId, subjectId)) {
         if (done) break;
         if (classOff.has(day) || tOff.has(day)) continue;
         if (subjOnDay(classId, subjectId, day) >= cap) continue;
+        if (dayHasConflict(work, classId, subjectId, day)) continue;
         for (const ts of teachingSlots) {
           if (!slotUsable(classId, day, ts)) continue;
           if (!groupsFree(day, ts.id)) continue;
@@ -2440,12 +2571,13 @@ export default function SchedulePage({
       }
       const classOffs = cids.map((cid) => new Set(classes.find((c) => c.id === cid)?.offDays || []));
 
-      for (const day of daysByLoad(next, cids[0])) {
+      for (const day of daysByLoad(next, cids[0], sid)) {
         if (ksFix && day !== "Dushanba") continue;
         if (classOffs.some((s) => s.has(day))) continue;
         if (allT.some((id) => offOf.get(id).has(day))) continue;
         // Kunlik fan limiti — blok butunligicha sig'ishi kerak
         if (cids.some((cid) => subjOnDay(cid, sid, day) + size > subjectDayCap(cid, sid))) continue;
+        if (cids.some((cid) => dayHasConflict(next, cid, sid, day))) continue;
         for (let i = 0; i + size <= teachingSlots.length; i++) {
           let ok = true;
           for (let o = 0; o < size && ok; o++) {
@@ -2521,10 +2653,11 @@ export default function SchedulePage({
       const cObj = classes.find((c) => c.id === cid);
       const classOff2 = new Set(Array.isArray(cObj?.offDays) ? cObj.offDays : []);
       const cap2 = subjectDayCap(cid, l.subjectId);
-      for (const day of daysByLoad(next, cid)) {
+      for (const day of daysByLoad(next, cid, l.subjectId)) {
         if (classOff2.has(day)) continue;
         if (l.teacherId && teacherOffHas(l.teacherId, day)) continue;
         if (subjOnDay(cid, l.subjectId, day) >= cap2) continue;
+        if (dayHasConflict(next, cid, l.subjectId, day, new Set([l]))) continue;
         for (const ts of teachingSlots) {
           if (day === exDay && ts.id === exTs) continue;
           if (!slotAllowsClass(ts, cid)) continue;
@@ -2546,10 +2679,11 @@ export default function SchedulePage({
       const cObj = classes.find((c) => c.id === cid);
       const classOff2 = new Set(Array.isArray(cObj?.offDays) ? cObj.offDays : []);
       const cap2 = subjectDayCap(cid, l.subjectId);
-      for (const day of daysByLoad(next, cid)) {
+      for (const day of daysByLoad(next, cid, l.subjectId)) {
         if (classOff2.has(day)) continue;
         if (l.teacherId && teacherOffHas(l.teacherId, day)) continue;
         if (subjOnDay(cid, l.subjectId, day) >= cap2) continue;
+        if (dayHasConflict(next, cid, l.subjectId, day, new Set([l]))) continue;
         for (const ts of teachingSlots) {
           if (day === exDay && ts.id === exTs) continue;
           if (!slotAllowsClass(ts, cid)) continue;
@@ -2574,9 +2708,10 @@ export default function SchedulePage({
       if ((tLoad[t.id] || 0) + 1 > Number(t.maxWeeklyHours || 40)) return null;
       const tOff = new Set(Array.isArray(t.offDays) ? t.offDays : []);
       const cap = subjectDayCap(cid, sid);
-      for (const day of daysByLoad(next, cid)) {
+      for (const day of daysByLoad(next, cid, sid)) {
         if (classOff.has(day) || tOff.has(day)) continue;
         if (subjOnDay(cid, sid, day) >= cap) continue;
+        if (dayHasConflict(next, cid, sid, day)) continue;
         for (const ts of teachingSlots) {
           if (!slotAllowsClass(ts, cid)) continue;
           if (classesHaveLunchAt(ts, [cid], lunchGroups, day)) continue;
@@ -2853,7 +2988,7 @@ export default function SchedulePage({
         try {
           next = compactSchedule(
             classes, timeslots, lunchGroups, best, classSubjects, teachers, subjects, rooms,
-            { hard: true, spin: k, budgetMs: 900 + k * 500 },
+            { hard: true, spin: k, budgetMs: 900 + k * 500, parallelDays: parOn },
           );
         } catch {
           break;
@@ -3263,7 +3398,8 @@ export default function SchedulePage({
             const complete = anyLessons && totalMissing === 0 && partialCards.length === 0;
             const caps = capacityWarnings(complete);
             if (!anyLessons && !gm.length && !caps.length && !superviseGaps.length
-              && !partialCards.length && !teacherHourRows.length) return null;
+              && !partialCards.length && !teacherHourRows.length
+              && !conflictViolations.length) return null;
             return (
               <>
                 {/* 0) YARIM TUSHGAN DARSLAR — guruh yozuvi yetishmayotgan katak.
@@ -3410,6 +3546,28 @@ export default function SchedulePage({
                   );
                 })()}
 
+                {/* 2c) BIR KUNGA TUSHGAN ZIDDIYATLI FANLAR (Algebra + Geometriya)
+                    Avtomatik tuzishda bunday bo'lmaydi — qo'lda ko'chirishdan
+                    keyin paydo bo'lishi mumkin. */}
+                {conflictViolations.length > 0 && (
+                  <div style={{ background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 12, padding: 14, marginBottom: 16 }}>
+                    <div style={{ fontWeight: 800, color: "#9a3412", marginBottom: 4 }}>
+                      📚 {conflictViolations.length} ta sinf-kunda birga tushmasligi kerak bo'lgan fanlar bor
+                    </div>
+                    <div style={{ fontSize: 12.5, color: "#c2410c", marginBottom: 8 }}>
+                      Bu fanlar bitta sinfda bir kunda o'qitilmaydi. Birini boshqa kunga ko'chiring.
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {conflictViolations.slice(0, 20).map((v, i) => (
+                        <span key={i} style={{ background: "#ffedd5", borderRadius: 6, padding: "3px 7px", fontSize: 12.5, color: "#7c2d12" }}>
+                          {v.className} · {v.day}: {v.text}
+                        </span>
+                      ))}
+                      {conflictViolations.length > 20 && <span style={{ fontSize: 12.5, color: "#9a3412" }}>… yana {conflictViolations.length - 20} ta</span>}
+                    </div>
+                  </div>
+                )}
+
                 {/* 3) Sozlama ogohlantirishlari — ALOHIDA quti, tushmagan soatdan mustaqil */}
                 {caps.length > 0 && (
                   <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 12, padding: 14, marginBottom: 16 }}>
@@ -3424,6 +3582,37 @@ export default function SchedulePage({
               </>
             );
           })()}
+
+          {/* PARALLEL SINFLAR — bir kunda bir xil fan (ogohlantirish emas, ma'lumot) */}
+          {parStats.total > 0 && (
+            <div style={{ background: "#eef2ff", border: "1px solid #c7d2fe", borderRadius: 12, padding: 14, marginBottom: 16 }}>
+              <div style={{ fontWeight: 800, color: "#3730a3", fontSize: 15 }}>
+                🔗 Parallel sinflar: kunlar {parStats.slots ? Math.round((parStats.matched / parStats.slots) * 100) : 100}% mos
+                {" "}<span style={{ fontWeight: 500 }}>({parStats.aligned}/{parStats.total} fan to'liq bir kunga tushgan)</span>
+              </div>
+              <div style={{ fontSize: 12.5, color: "#4338ca", marginTop: 6 }}>
+                Bir darajaning sinflari (10-A, 10-B…) imkon qadar bir kunda bir xil fanlarni
+                o'qiydi. <b>Bir kun</b> — bir soat emas: ikkala sinfga ayni ustoz kirsa, ular
+                bir soatda o'qiy olmaydi. Quyidagi fanlarning kunlari to'liq mos kelmadi —
+                ko'pincha ustoz yoki xona bandligi sabab. Buni Sozlamalardan o'chirsa bo'ladi.
+              </div>
+              {parStats.groups.filter((g) => g.bad.length).map((g) => (
+                <div key={g.grade} style={{ marginTop: 8 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: "#3730a3", marginBottom: 4 }}>
+                    {g.grade}-sinflar ({g.size} ta) · {g.slots ? Math.round((g.matched / g.slots) * 100) : 100}% mos
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {g.bad.slice(0, 12).map((b) => (
+                      <span key={b.subjectId} style={{ background: "#e0e7ff", borderRadius: 6, padding: "3px 7px", fontSize: 12.5, color: "#312e81" }}>
+                        {b.name} · {b.miss}
+                      </span>
+                    ))}
+                    {g.bad.length > 12 && <span style={{ fontSize: 12.5, color: "#4338ca" }}>… yana {g.bad.length - 12} ta</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
 
           {setSchedule && gapTotal > 0 && (() => {
             const tight = tightTeachers();
@@ -3593,6 +3782,17 @@ export default function SchedulePage({
           const cap = subjectDayCap(classId, manualForm.subjectId);
           const today = subjectDayCount(classId, manualForm.subjectId, day);
           if (today >= cap) notes.push(`ℹ️ Bu fan ${day} kuni allaqachon ${today} soat turibdi (kunlik me'yor — ${cap}).`);
+          // Bir kunga tushmaydigan fanlar (Algebra ↔ Geometriya) — taqiqlamaydi
+          const foes = conflictOf.get(manualForm.subjectId);
+          if (foes && foes.size) {
+            const here = new Set();
+            sortedTimeslots.forEach((ts) => (schedule?.[day]?.[ts.id] || []).forEach((l) => {
+              if (l && foes.has(l.subjectId) && classIdsOf(l).includes(classId)) here.add(l.subjectId);
+            }));
+            here.forEach((fid) => notes.push(
+              `⚠️ ${day} kuni bu sinfda ${subjectMap.get(fid)?.name || "fan"} bor — bu ikki fan bir kunga tushmasligi kerak.`
+            ));
+          }
           // «Fan almashinuvi» — YAGONA holat: dars bitta yozuv bo'lib tushadi
           // (guruhlar keyingi soatda almashadi, buni qo'lda qurib bo'lmaydi).
           // Qolgan guruhli sozlamalar endi to'liq karta bo'lib qo'shiladi.

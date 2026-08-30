@@ -15,6 +15,7 @@ import { DAYS } from "./constants";
 import { isTeachingSlot, classHasLunchAt, overlappingSlots, isFixedMondaySubject } from "./scheduleGenerator";
 import { slotDisplayNumber } from "./shiftSlots";
 import { findSupervisionGaps } from "./homeroom";
+import { buildSubjectConflicts } from "./subjectConflicts";
 
 export function classIdsOf(lesson) {
   return Array.isArray(lesson?.classIds) ? lesson.classIds : [lesson?.classId].filter(Boolean);
@@ -346,6 +347,22 @@ export function softWarnings(ctx, unit, day) {
       if (has) warns.push(`«Ora kunda» sozlamasi: ${nday} kuni ham shu fan bor — kun oralig'i buziladi.`);
     });
   });
+  // Bir kunga tushmaydigan fanlar (Algebra ↔ Geometriya). Avtomatik tuzishda
+  // bu QATTIQ cheklov, qo'lda ko'chirishda esa faqat ogohlantirish —
+  // direktor bilib turib qo'yishi mumkin.
+  const foes = buildSubjectConflicts(ctx.subjects || []).get(unit.subjectId);
+  if (foes && foes.size) {
+    const nameOf = (id) => (ctx.subjects || []).find((s) => s.id === id)?.name || "fan";
+    unit.classIds.forEach((cid) => {
+      (ctx.timeslots || []).forEach((s) => {
+        (ctx.schedule?.[day]?.[s.id] || []).forEach((l) => {
+          if (!l || unit.entries.includes(l)) return;
+          if (!foes.has(l.subjectId) || !classIdsOf(l).includes(cid)) return;
+          warns.push(`⚠️ ${nameOf(unit.subjectId)} va ${nameOf(l.subjectId)} bir kunga tushmasligi kerak — ${day} kuni bu sinfda ${nameOf(l.subjectId)} allaqachon bor.`);
+        });
+      });
+    });
+  }
   return [...new Set(warns)];
 }
 

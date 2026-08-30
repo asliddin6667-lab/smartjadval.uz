@@ -21,7 +21,12 @@
 //  qaytariladi va UI ogohlantirish ko'rsatadi.
 // =====================================================================
 
-const TEACHER_FIELDS = ["teacherId", "teacherId2", "swapTeacherId", "weekAltTeacherId"];
+// `swapNextTeacherId` / `swapNextTeacher2Id` — almashinuvda 2-SOAT ustozlari
+// ([swapGroups.js](./swapGroups.js)); ular ham eski ustozga bog'lanib qolmasin.
+const TEACHER_FIELDS = [
+  "teacherId", "teacherId2", "swapTeacherId", "weekAltTeacherId",
+  "swapNextTeacherId", "swapNextTeacher2Id",
+];
 
 /**
  * Bitta biriktiruv (assignment) ichida eski ustoz nechta joyda uchraydi.

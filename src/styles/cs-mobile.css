@@ -196,9 +196,15 @@ body.dark-mode .cs-class-btn.active .cs-class-count {
   /* Sozlama gridlari telefon ekranida ustma-ust */
   .cs-grid-2,
   .cs-grid-3,
-  .cs-split-groups {
+  .cs-split-groups,
+  /* Almashinuv: 1-soat va 2-soat kartalari ustma-ust */
+  .cs-swap-flow,
+  .cs-swap-subjects {
     grid-template-columns: 1fr;
   }
+
+  /* «↔» belgisi telefonda tik turadi */
+  .cs-swap-x { transform: rotate(90deg); }
 
   /* Sahifa chetlari telefonda ixchamroq */
   .page-header { padding: 18px 14px 0; }

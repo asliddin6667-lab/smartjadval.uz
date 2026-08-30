@@ -1,6 +1,9 @@
 import { DAYS } from "./constants";
 import { normalizePairExtra, pairSideGroups, pairAllGroups } from "./pairGroups";
 import { supervisionRows, findSupervisionGaps } from "./homeroom";
+import { swapSlotGroups, swapTeacherIds, swapRoomIds } from "./swapGroups";
+import { buildSubjectConflicts } from "./subjectConflicts";
+import { buildParallelIndex, parallelMismatch } from "./parallelDays";
 
 export function isTeachingSlot(timeslot) {
   const type = timeslot?.type || "lesson";
@@ -81,6 +84,13 @@ export function normalizeAssignment(item, subject) {
     swapSubjectId: item.swapSubjectId || "",
     swapTeacherId: item.swapTeacherId || "",
     swapRoomId: item.swapRoomId || "",
+    // Almashgandan keyingi (2-) soat ustozi/xonasi — bo'sh bo'lsa
+    // 1-soatdagi ustoz davom etadi ([swapGroups.js](./swapGroups.js)).
+    swapAltTeachers: Boolean(item.swapAltTeachers),
+    swapNextTeacherId: item.swapNextTeacherId || "",
+    swapNextRoomId: item.swapNextRoomId || "",
+    swapNextTeacher2Id: item.swapNextTeacher2Id || "",
+    swapNextRoom2Id: item.swapNextRoom2Id || "",
     groupName1: item.groupName1 || "1-guruh",
     groupName2: item.groupName2 || "2-guruh",
     weekAltEnabled: Boolean(item.weekAltEnabled),
@@ -345,6 +355,26 @@ export function validateScheduleData(classes, subjects, teachers, rooms, timeslo
             errors.push(`${cls.name}: ${subject.name} almashinuvida ikkala fan ustozi bir xil bo'lmasin`);
           }
         }
+        // 2-soatga alohida ustoz tanlangan bo'lsa — u ham o'z faniga
+        // biriktirilgan bo'lishi va o'sha soatda takrorlanmasligi kerak.
+        if (a.swapAltTeachers) {
+          const check = (tid, sid, label) => {
+            if (!tid) return;
+            const t = teachers.find((x) => x.id === tid);
+            const sub = subjects.find((x) => x.id === sid);
+            if (!t) { errors.push(`${cls.name}: ${subject.name} — ${label} ustozi topilmadi`); return; }
+            if (sub && !getTeacherSubjectIds(t).includes(sid)) {
+              errors.push(`${t.name} ${sub.name} faniga biriktirilmagan`);
+            }
+          };
+          check(a.swapNextTeacherId, a.subjectId, "2-soat 2-guruh");
+          check(a.swapNextTeacher2Id, a.swapSubjectId, "2-soat 1-guruh");
+          const t1 = a.swapNextTeacher2Id || a.swapTeacherId;
+          const t2 = a.swapNextTeacherId || a.teacherId;
+          if (t1 && t1 === t2) {
+            errors.push(`${cls.name}: ${subject.name} — 2-soatda ikkala guruhga bir ustoz qo'yilgan`);
+          }
+        }
       } else if (a.splitEnabled) {
         if (!a.teacherId2) {
           errors.push(`${cls.name}: ${subject.name} 2-guruh uchun 2-ustoz tanlanmagan`);
@@ -549,6 +579,7 @@ export function stripMissingRooms(classSubjects = {}, rooms = null) {
     out[cid] = (Array.isArray(list) ? list : []).map((a) => {
       if (!a) return a;
       const hit = bad(a.roomId) || bad(a.roomId2) || bad(a.swapRoomId) || bad(a.weekAltRoomId) ||
+        bad(a.swapNextRoomId) || bad(a.swapNextRoom2Id) ||
         (Array.isArray(a.levelGroups) && a.levelGroups.some((g) => bad(g?.roomId)));
       if (!hit) return a;
       changed = true;
@@ -556,6 +587,8 @@ export function stripMissingRooms(classSubjects = {}, rooms = null) {
       if (bad(copy.roomId)) copy.roomId = "";
       if (bad(copy.roomId2)) copy.roomId2 = "";
       if (bad(copy.swapRoomId)) copy.swapRoomId = "";
+      if (bad(copy.swapNextRoomId)) copy.swapNextRoomId = "";
+      if (bad(copy.swapNextRoom2Id)) copy.swapNextRoom2Id = "";
       if (bad(copy.weekAltRoomId)) copy.weekAltRoomId = "";
       if (Array.isArray(copy.levelGroups)) {
         copy.levelGroups = copy.levelGroups.map((g) => (bad(g?.roomId) ? { ...g, roomId: "" } : g));
@@ -626,6 +659,17 @@ function attemptSchedule(
   const cIdxOf = new Map(classes.map((c, i) => [c.id, i]));
   const tIdxOf = new Map(teachers.map((t, i) => [t.id, i]));
   const sIdxOf = new Map(subjects.map((s, i) => [s.id, i]));
+  // ——— BIR KUNGA TUSHMAYDIGAN FANLAR (Algebra ↔ Geometriya) ———
+  // Har fan indeksi uchun u bilan BIR KUNDA tura olmaydigan fan indekslari.
+  // Ro'yxat [subjectConflicts.js](./subjectConflicts.js) da.
+  const conflictBySubj = buildSubjectConflicts(subjects);
+  const conflictSIdx = subjects.map((sj) => {
+    const set = conflictBySubj.get(sj.id);
+    if (!set || !set.size) return null;
+    const arr = [...set].map((id) => sIdxOf.get(id)).filter((x) => x !== undefined);
+    return arr.length ? arr : null;
+  });
+  const hasConflicts = conflictSIdx.some(Boolean);
   // ——— KELAJAK SOATI: dushanba indeksi va shu fan ID'lari ———
   const MONDAY_D = Math.max(0, DAYS.indexOf("Dushanba"));
   const fixedMondaySubj = new Set(
@@ -752,6 +796,40 @@ function attemptSchedule(
   const teacherDailyArr = new Int16Array(TT * D);
   const classDayCount = new Int16Array(C * D);
   const classDailySubj = new Int16Array(C * D * S);
+  // ——— PARALLEL SINFLAR: bir kunda bir xil fan ———
+  // 10-A da dushanba Fizika bo'lsa, 10-B da ham dushanba Fizika bo'lsin.
+  // Qoida YUMSHOQ: `fitsAt` ga tegmaydi, faqat `scoreCandidate` da mukofot
+  // beriladi — joy topilmasa dars boshqa kunga tushaveradi.
+  const par = buildParallelIndex(classes, options.parallelDays !== false);
+  const parOn = par.enabled && S > 0;
+  const gradeIdx = par.idxArr;
+  const gradeSize = par.sizes;
+  const PG = par.count;
+  // gradeDaySubj[(g * D + d) * S + si] — darajada shu kuni shu fanni
+  // oladigan SINFLAR soni (soat emas: bir sinf kuniga 2 soat qo'ysa ham 1).
+  const gradeDaySubj = parOn ? new Int16Array(PG * D * S) : null;
+  // gradeSubjAny[g * S + si] — fan haftada nechta KUNGA tushgan (tartib uchun)
+  const gradeSubjAny = parOn ? new Int16Array(PG * S) : null;
+  // classDailySubj ni O'ZGARTIRADIGAN YAGONA yo'l — parallel hisoblagich
+  // shu yerda 0↔1 o'tishlari bo'yicha yangilanadi.
+  function bumpDaySubj(ci, d, si, delta) {
+    if (ci < 0 || si < 0 || !delta) return;
+    const off = (ci * D + d) * S + si;
+    const before = classDailySubj[off];
+    const after = before + delta;
+    classDailySubj[off] = after;
+    if (!parOn) return;
+    const g = gradeIdx[ci];
+    if (g < 0) return;
+    const go = (g * D + d) * S + si;
+    if (before <= 0 && after > 0) {
+      gradeDaySubj[go] += 1;
+      if (gradeDaySubj[go] === 1) gradeSubjAny[g * S + si] += 1;
+    } else if (before > 0 && after <= 0) {
+      gradeDaySubj[go] -= 1;
+      if (gradeDaySubj[go] === 0) gradeSubjAny[g * S + si] -= 1;
+    }
+  }
   const placedKeyCount = new Map();
   function bumpKeyIdx(ci, si, delta) {
     if (ci < 0 || si < 0) return;
@@ -969,7 +1047,7 @@ function attemptSchedule(
               seen.add(k);
               lockedCount[k] = (lockedCount[k] || 0) + 1;
               if (ci !== undefined && si !== undefined) {
-                classDailySubj[(ci * D + d) * S + si] += 1;
+                bumpDaySubj(ci, d, si, 1);
                 bumpKeyIdx(ci, si, 1);
               }
             }
@@ -1159,11 +1237,19 @@ function attemptSchedule(
 
       if (a.splitEnabled && a.swapEnabled && a.swapSubjectId && a.swapTeacherId) {
         const swapBlocks = Math.max(1, Number(a.weeklyHours || 1));
+        // Blokning HAR SOATI o'z guruhlari bilan: 1-soatda 1-guruh asosiy
+        // fanni, 2-soatda esa 2-fanni o'qiydi. «Almashgandan keyin ustoz
+        // o'zgaradi» yoqilgan bo'lsa 2-soat ustozi/xonasi boshqa bo'ladi —
+        // shuning uchun bandlik SOATMA-SOAT hisoblanadi (`swapSlots`).
+        const swapSlots = swapSlotGroups(a);
         for (let k = 0; k < swapBlocks; k++) {
           simpleRequests.push({
             type: "swap", classIds: [cls.id], subjectId: a.subjectId, swapSubjectId: a.swapSubjectId,
             teacherId: a.teacherId, swapTeacherId: a.swapTeacherId, roomId: a.roomId || "", swapRoomId: a.swapRoomId || "",
-            teacherIds: [a.teacherId, a.swapTeacherId], roomIds: [a.roomId || "", a.swapRoomId || ""],
+            swapSlots: swapSlots.map((gs) => gs.map((g) => ({ ...g }))),
+            // Ro'yxatlar TAKRORSIZ: bir ustoz ikkala soatda ham turishi
+            // mumkin (odatiy holat) — takror bo'lsa so'rov rad etilardi.
+            teacherIds: swapTeacherIds(a), roomIds: swapRoomIds(a),
             groupName1: a.groupName1 || "1-guruh", groupName2: a.groupName2 || "2-guruh",
             blockSize: 2, priority: a.weeklyHours + 30, isCore: a.isCore,
             spacedDays: a.spacedDays,
@@ -1309,12 +1395,23 @@ function attemptSchedule(
     if (!subjectById.has(req.subjectId)) return false;
     if (reqTeachers.length !== reqTeacherIds.length) return false;
     if (req.type === "swap") {
-      const tA = teacherById.get(req.teacherId);
-      const tB = teacherById.get(req.swapTeacherId);
-      if (!tA || !tB) return false;
-      if (!teacherSubjSet.get(tA.id).has(req.subjectId)) return false;
-      if (!teacherSubjSet.get(tB.id).has(req.swapSubjectId)) return false;
-    } else if (req.type === "pair") {
+      // HAR SOAT alohida tekshiriladi: ikkala guruh ustozi bor, o'z fanini
+      // beradi va BIR SOATDA takrorlanmaydi (guruhlar ayni vaqtda o'qiydi).
+      const slots = req.swapSlots || [];
+      if (slots.length !== req.blockSize) return false;
+      for (const gs of slots) {
+        const ids = [];
+        for (const g of gs) {
+          const t = teacherById.get(g.teacherId);
+          if (!t || !g.subjectId || !subjectById.has(g.subjectId)) return false;
+          if (!teacherSubjSet.get(t.id).has(g.subjectId)) return false;
+          ids.push(t.id);
+        }
+        if (new Set(ids).size !== ids.length) return false;
+      }
+      return true;
+    }
+    if (req.type === "pair") {
       const tA = teacherById.get(req.teacherId);
       if (!tA || !teacherSubjSet.get(tA.id).has(req.subjectId)) return false;
       const groups = req.pairGroups || [];
@@ -1361,6 +1458,26 @@ function attemptSchedule(
       subjectName: subjectById.get(req.subjectId)?.name || "",
       part,
     });
+    // ——— ALMASHINUV: xona HAR SOAT bo'yicha tekshiriladi ———
+    // 1-soat va 2-soat AYNI xonani ishlatishi MUMKIN (aksincha, odatiy hol:
+    // fan o'z xonasida qoladi, faqat guruhlar almashadi). Takroriylik
+    // BITTA soat ichida bo'lsa muammo — guruhlar ayni vaqtda o'qiydi.
+    if (req.type === "swap" && Array.isArray(req.swapSlots)) {
+      req.swapSlots = req.swapSlots.map((gs, hour) => {
+        const seenHour = new Set();
+        return gs.map((g) => {
+          if (!g.roomId) return g;
+          if (seenHour.has(g.roomId)) {
+            note(`${g.groupPart || "guruh"} (${hour + 1}-soat)`);
+            return { ...g, roomId: "" };
+          }
+          seenHour.add(g.roomId);
+          return g;
+        });
+      });
+      req.roomIds = [...new Set(req.swapSlots.flat().map((g) => g.roomId).filter(Boolean))];
+      return;
+    }
     if (req.type === "levelGroup" && Array.isArray(req.levelGroups)) {
       req.levelGroups = req.levelGroups.map((g) => {
         if (take(g.roomId) === null) { note(g.name || "daraja guruhi"); return { ...g, roomId: "" }; }
@@ -1424,6 +1541,20 @@ function attemptSchedule(
           .filter((si) => si >= 0 && si !== req.sIdx))]);
     }
     req.roomArrs = req.rids.map((rid) => roomGrid(rid));
+    // ——— ALMASHINUV: BANDLIK SOATMA-SOAT ———
+    // 2-soatga alohida ustoz tanlangan bo'lsa, 1-soat ustozi 2-soatda BAND
+    // emas — u boshqa sinfga kira oladi. Shuning uchun ustoz/xona ro'yxati
+    // blokning har bir soati uchun alohida saqlanadi; qolgan so'rovlarda
+    // (`tIdxsAt` yo'q) avvalgidek butun blok bo'ylab bir xil ro'yxat ishlaydi.
+    req.tIdxsAt = null;
+    req.roomArrsAt = null;
+    req.ridsAt = null;
+    if (req.type === "swap" && Array.isArray(req.swapSlots)) {
+      req.tIdxsAt = req.swapSlots.map((gs) => [...new Set(gs.map((g) => g.teacherId).filter(Boolean))]
+        .map((id) => tIdxOf.get(id)).filter((x) => x !== undefined));
+      req.ridsAt = req.swapSlots.map((gs) => [...new Set(gs.map((g) => g.roomId).filter(Boolean))]);
+      req.roomArrsAt = req.ridsAt.map((ids) => ids.map((rid) => roomGrid(rid)));
+    }
     // ——— Kunlik fan limiti (qattiq) — kvotadan keyin qayta hisoblanadi ———
     computeDayCap(req);
     req.capRelax = 0;
@@ -1521,6 +1652,33 @@ function attemptSchedule(
     }
     return true;
   }
+  // ——— QATTIQ CHEKLOV: BIR KUNGA TUSHMAYDIGAN FANLAR ———
+  // Algebra va Geometriya bitta sinfda BIR KUNDA o'qitilmaydi
+  // (ro'yxat — [subjectConflicts.js](./subjectConflicts.js)).
+  // Yon berish YO'Q — qoida majburiy: joy topilmasa soat «tushmadi» bo'lib
+  // rostgo'y qoladi (ekranda ko'rinadi), lekin bir kunga qo'shilmaydi.
+  function conflictDayOk(req, d) {
+    if (!hasConflicts) return true;
+    // Kun ichida qayta tartiblashda kun o'zgarmaydi — cheklov ham o'zgarmaydi
+    if (dayRearrange) return true;
+    for (let k = 0; k < req.cIdxs.length; k++) {
+      const ci = req.cIdxs[k];
+      const extra = req.perClassSIdx ? req.perClassSIdx[k] : (req.swapSIdx >= 0 ? [req.swapSIdx] : null);
+      const mine = extra && extra.length ? [req.sIdx, ...extra] : [req.sIdx];
+      for (const si of mine) {
+        if (si < 0) continue;
+        const foes = conflictSIdx[si];
+        if (!foes) continue;
+        for (const fi of foes) {
+          // Ziddiyatli fan AYNI KARTANING ichida bo'lsa (guruhli dars) u
+          // baribir ayni soatda o'qiladi — ajratib bo'lmaydi, tegilmaydi.
+          if (mine.includes(fi)) continue;
+          if (classDailySubj[(ci * D + d) * S + fi] > 0) return false;
+        }
+      }
+    }
+    return true;
+  }
   // ——— QATTIQ CHEKLOV: kunlik yuk me'yori ———
   // Sinfning haftalik soati ish kunlariga teng bo'linadi: 35 soat / 6 kun =>
   // har kun 5 yoki 6 soat. "Bir kun 5, boshqa kun 7" holati taqiqlanadi.
@@ -1599,6 +1757,12 @@ function attemptSchedule(
     }
     return true;
   }
+  // ——— Blokning `o`-soatida band bo'ladigan ustozlar/xonalar ———
+  // Odatda butun blok bo'ylab bir xil; «almashinuvda ustoz o'zgaradi»
+  // rejimida esa har soatning O'Z ro'yxati bo'ladi (`tIdxsAt`).
+  const tIdxsAtOff = (req, o) => (req.tIdxsAt ? req.tIdxsAt[o] : req.tIdxs);
+  const roomArrsAtOff = (req, o) => (req.roomArrsAt ? req.roomArrsAt[o] : req.roomArrs);
+  const ridsAtOff = (req, o) => (req.ridsAt ? req.ridsAt[o] : req.rids);
   function buildDomain(req) {
     const dom = [];
     if (req.roomDup) return dom;
@@ -1620,7 +1784,7 @@ function attemptSchedule(
           for (const ci of req.cIdxs) { if (lunchGrid[ci * DT + d * T + k] || slotClassBlock[ci * DT + d * T + k]) { ok = false; break; } }
           if (!ok) break;
           // Ustoz setkasida qulflangan soat — bu katak umuman ishlatilmaydi
-          for (const ti of req.tIdxs) { if (teacherBlockGrid[ti * DT + d * T + k]) { ok = false; break; } }
+          for (const ti of tIdxsAtOff(req, o)) { if (teacherBlockGrid[ti * DT + d * T + k]) { ok = false; break; } }
           if (!ok) break;
         }
         if (ok) dom.push({ d, i });
@@ -1664,6 +1828,7 @@ function attemptSchedule(
       }
     }
     if (!subjDayOk(req, d)) return false;
+    if (!conflictDayOk(req, d)) return false;
     if (!spacedDayOk(req, d)) return false;
     if (!balanceOk(req, d)) return false;
     if (!quotaRankOk(req, d, i)) return false;
@@ -1675,8 +1840,8 @@ function attemptSchedule(
       const off = d * T + k;
       const toff = tbOff(d, k);
       for (const ci of req.cIdxs) if (classGrid[ci * DT + off]) return false;
-      for (const ti of req.tIdxs) if (teacherGrid[ti * DTB + toff] || teacherBlockGrid[ti * DT + off]) return false;
-      for (const rg of req.roomArrs) if (rg[toff]) return false;
+      for (const ti of tIdxsAtOff(req, o)) if (teacherGrid[ti * DTB + toff] || teacherBlockGrid[ti * DT + off]) return false;
+      for (const rg of roomArrsAtOff(req, o)) if (rg[toff]) return false;
     }
     return true;
   }
@@ -1697,8 +1862,8 @@ function attemptSchedule(
       for (const ci of req.cIdxs) {
         if (lunchGrid[ci * DT + off] || slotClassBlock[ci * DT + off] || classGrid[ci * DT + off]) return false;
       }
-      for (const ti of req.tIdxs) if (teacherGrid[ti * DTB + toff] || teacherBlockGrid[ti * DT + off]) return false;
-      for (const rg of req.roomArrs) if (rg[toff]) return false;
+      for (const ti of tIdxsAtOff(req, o)) if (teacherGrid[ti * DTB + toff] || teacherBlockGrid[ti * DT + off]) return false;
+      for (const rg of roomArrsAtOff(req, o)) if (rg[toff]) return false;
     }
     return true;
   }
@@ -1716,6 +1881,14 @@ function attemptSchedule(
     return false;
   }
   function loadAllows(req) {
+    // Almashinuvda ustoz blokning faqat BIR soatida turishi mumkin —
+    // yuklama soatma-soat sanaladi (aks holda bekorga "sig'maydi" chiqardi).
+    if (req.tIdxsAt) {
+      const need = new Map();
+      for (let o = 0; o < req.blockSize; o++) for (const ti of req.tIdxsAt[o]) need.set(ti, (need.get(ti) || 0) + 1);
+      for (const [ti, n] of need) if (teacherLoadArr[ti] + n > teacherMaxArr[ti]) return false;
+      return true;
+    }
     for (const ti of req.tIdxs) { if (teacherLoadArr[ti] + req.blockSize > teacherMaxArr[ti]) return false; }
     return true;
   }
@@ -1739,15 +1912,13 @@ function attemptSchedule(
   }
   function buildEntries(req, blockIndex) {
     if (req.type === "swap") {
-      const first = blockIndex === 0;
-      const g1 = first ? { subjectId: req.subjectId, teacherId: req.teacherId, roomId: req.roomId }
-        : { subjectId: req.swapSubjectId, teacherId: req.swapTeacherId, roomId: req.swapRoomId };
-      const g2 = first ? { subjectId: req.swapSubjectId, teacherId: req.swapTeacherId, roomId: req.swapRoomId }
-        : { subjectId: req.subjectId, teacherId: req.teacherId, roomId: req.roomId };
-      return [
-        { subjectId: g1.subjectId, classId: req.classIds[0], classIds: req.classIds, teacherId: g1.teacherId, roomId: g1.roomId || "", groupPart: req.groupName1, splitEnabled: true, swap: true, blockSize: 2, blockIndex },
-        { subjectId: g2.subjectId, classId: req.classIds[0], classIds: req.classIds, teacherId: g2.teacherId, roomId: g2.roomId || "", groupPart: req.groupName2, splitEnabled: true, swap: true, blockSize: 2, blockIndex },
-      ];
+      // Soat guruhlari tayyor: 1-soatda 1-guruh asosiy fanni, 2-soatda esa
+      // 2-fanni o'qiydi. Ustoz/xona har soat uchun ALOHIDA bo'lishi mumkin.
+      return req.swapSlots[blockIndex].map((g) => ({
+        subjectId: g.subjectId, classId: req.classIds[0], classIds: req.classIds,
+        teacherId: g.teacherId, roomId: g.roomId || "", groupPart: g.groupPart,
+        splitEnabled: true, swap: true, blockSize: 2, blockIndex,
+      }));
     }
     if (req.type === "weekAlt") {
       return [{
@@ -1806,17 +1977,24 @@ function attemptSchedule(
   }
   function applyCounters(req, d, sign) {
     const bs = sign * req.blockSize;
-    for (const ti of req.tIdxs) { teacherLoadArr[ti] += bs; teacherDailyArr[ti * D + d] += bs; }
+    if (req.tIdxsAt) {
+      // Almashinuv: har ustoz o'zi turgan soat uchungina sanaladi
+      for (let o = 0; o < req.blockSize; o++) {
+        for (const ti of req.tIdxsAt[o]) { teacherLoadArr[ti] += sign; teacherDailyArr[ti * D + d] += sign; }
+      }
+    } else {
+      for (const ti of req.tIdxs) { teacherLoadArr[ti] += bs; teacherDailyArr[ti * D + d] += bs; }
+    }
     for (let k = 0; k < req.cIdxs.length; k++) {
       const ci = req.cIdxs[k];
       const extra = req.perClassSIdx ? req.perClassSIdx[k] : (req.swapSIdx >= 0 ? [req.swapSIdx] : null);
-      classDailySubj[(ci * D + d) * S + req.sIdx] += bs;
+      bumpDaySubj(ci, d, req.sIdx, bs);
       classDayCount[ci * D + d] += bs;
       bumpKeyIdx(ci, req.sIdx, bs);
       if (extra) {
         for (const si2 of extra) {
           if (si2 < 0) continue;
-          classDailySubj[(ci * D + d) * S + si2] += bs;
+          bumpDaySubj(ci, d, si2, bs);
           bumpKeyIdx(ci, si2, bs);
         }
       }
@@ -1845,8 +2023,8 @@ function attemptSchedule(
       const off = d * T + kk;
       const toff = tbOff(d, kk);
       for (const ci of req.cIdxs) classGrid[ci * DT + off] = 1;
-      for (const ti of req.tIdxs) teacherGrid[ti * DTB + toff] = 1;
-      for (const rg of req.roomArrs) rg[toff] = 1;
+      for (const ti of tIdxsAtOff(req, o)) teacherGrid[ti * DTB + toff] = 1;
+      for (const rg of roomArrsAtOff(req, o)) rg[toff] = 1;
     }
     applyCounters(req, d, +1);
     placedHours += req.blockSize;
@@ -1867,8 +2045,8 @@ function attemptSchedule(
       const off = d * T + kk;
       const toff = tbOff(d, kk);
       for (const ci of req.cIdxs) classGrid[ci * DT + off] = 0;
-      for (const ti of req.tIdxs) teacherGrid[ti * DTB + toff] = 0;
-      for (const rg of req.roomArrs) rg[toff] = 0;
+      for (const ti of tIdxsAtOff(req, o)) teacherGrid[ti * DTB + toff] = 0;
+      for (const rg of roomArrsAtOff(req, o)) rg[toff] = 0;
     }
     p.entries.forEach((e) => entryToPlacement.delete(e));
     applyCounters(req, d, -1);
@@ -1997,6 +2175,23 @@ function attemptSchedule(
     }
     return pen;
   }
+  // ——— PARALLEL SINFLAR mukofoti ———
+  // Faqat MUKOFOT (manfiy jarima), hech qachon jarima emas: shu tufayli
+  // mexanizm birorta joyni "yomonlashtira" olmaydi va tushmagan soatni
+  // ko'paytirmaydi. Sinf shu kuni bu fanni allaqachon olayotgan bo'lsa
+  // mukofot yo'q — aks holda takror dars rag'batlantirilgan bo'lardi.
+  function parallelBonus(req, d) {
+    if (!parOn || req.sIdx < 0) return 0;
+    let bonus = 0;
+    for (const ci of req.cIdxs) {
+      const g = gradeIdx[ci];
+      if (g < 0) continue;
+      if (classDailySubj[(ci * D + d) * S + req.sIdx] > 0) continue;
+      const mates = gradeDaySubj[(g * D + d) * S + req.sIdx];
+      if (mates > 0) bonus -= Math.min(mates, gradeSize[g] - 1) * PARALLEL_W;
+    }
+    return bonus;
+  }
   function scoreCandidate(req, d, i) {
     const blockSize = req.blockSize;
     const adjacencyPenalty = blockSize === 1 && adjacentSame(d, i, blockSize, req) ? 1500 : 0;
@@ -2057,8 +2252,9 @@ function attemptSchedule(
     }
     const spacedPen = spacedPenalty(req, d);
     const supervisePen = supervisePenalty(req, d, i);
+    const parallelPen = parallelBonus(req, d);
     const randomPenalty = rng() * RAND_W;
-    return compactPenalty + repeatPenalty + classLoadPenalty + teacherPenalty + spreadPenalty + corePenalty + adjacencyPenalty + bridgePenalty + dayCapPenalty + spacedPen + supervisePen + fixedPen + randomPenalty;
+    return compactPenalty + repeatPenalty + classLoadPenalty + teacherPenalty + spreadPenalty + corePenalty + adjacencyPenalty + bridgePenalty + dayCapPenalty + spacedPen + supervisePen + parallelPen + fixedPen + randomPenalty;
   }
   function bestCandidate(req, withForwardCheck) {
     let best = null;
@@ -2082,6 +2278,14 @@ function attemptSchedule(
   // Boshlang'ich sinf rahbari chiqib ketgan soat — oynadan yengil, lekin
   // kunlik yuk tengligidan (DAYCAP_W) ancha og'ir.
   const SUPERVISE_W = 2600;
+  // Parallel sinflarda fan bir kunga tushgani — MUKOFOT.
+  // Oyna (5200), nazoratsiz soat (2600) va kunlik yuk tengligidan (800)
+  // ancha yengil: moslik uchun oyna ham, notekis yuk ham ochilmaydi.
+  // ⚠️ Og'irlikni OSHIRISHNING ma'nosi yo'q — o'lchovda 30 dan 3000 gacha
+  // moslik AYNI darajada qoldi (nomuvofiqlik ~890 dan ~630 ga tushdi),
+  // chunki qolgan nomuvofiqlik sababi og'irlik emas, ustoz/xona bandligi.
+  // Kattaroq qiymat esa qidiruvni bekorga chalg'itadi.
+  const PARALLEL_W = 260;
   // ——— ASOSIY FAN og'irliklari ———
   const CORE_EARLY_W = 420;
   const CORE_LATE_W = 2200;
@@ -2164,6 +2368,24 @@ function attemptSchedule(
   const deferred = [];
   // MRV — lekin avval 0-navbat (sozlamali darslar), keyin oddiylari.
   // Tanlash tartibi strategiyaga qarab o'zgaradi — har urinish boshqa yechim beradi.
+  // Parallel hamrohi ALLAQACHON joylashgan so'rov navbatda oldinroq tursin —
+  // shunda `parallelBonus` unga ta'sir qila oladi (birinchi joylangan sinf
+  // kunni belgilaydi, qolganlari unga ergashadi). Bu ENG OXIRGI mezon:
+  // MRV, degree, diff va priority teng bo'lgandagina ishlaydi, shuning uchun
+  // qidiruv tartibini buzmaydi.
+  function parPlaced(r) {
+    if (r.sIdx < 0) return false;
+    for (const ci of r.cIdxs) {
+      const g = gradeIdx[ci];
+      if (g >= 0 && gradeSubjAny[g * S + r.sIdx] > 0) return true;
+    }
+    return false;
+  }
+  function parBetter(r, sel) {
+    if (!parOn) return false;
+    const a = parPlaced(r);
+    return a !== parPlaced(sel) ? a : false;
+  }
   function betterPick(r, sel) {
     if (!sel) return true;
     if (r.tier !== sel.tier) return r.tier < sel.tier;
@@ -2171,24 +2393,28 @@ function attemptSchedule(
       if (r.degree !== sel.degree) return r.degree > sel.degree;
       if (r.feasCount !== sel.feasCount) return r.feasCount < sel.feasCount;
       if (r.diff !== sel.diff) return r.diff > sel.diff;
-      return r.priority > sel.priority;
+      if (r.priority !== sel.priority) return r.priority > sel.priority;
+      return parBetter(r, sel);
     }
     if (strategy === 2) {
       if (r.diff !== sel.diff) return r.diff > sel.diff;
       if (r.feasCount !== sel.feasCount) return r.feasCount < sel.feasCount;
       if (r.degree !== sel.degree) return r.degree > sel.degree;
-      return r.priority > sel.priority;
+      if (r.priority !== sel.priority) return r.priority > sel.priority;
+      return parBetter(r, sel);
     }
     if (strategy === 4) {
       if (r.feasCount !== sel.feasCount) return r.feasCount < sel.feasCount;
       if (r.priority !== sel.priority) return r.priority > sel.priority;
       if (r.degree !== sel.degree) return r.degree > sel.degree;
-      return r.diff > sel.diff;
+      if (r.diff !== sel.diff) return r.diff > sel.diff;
+      return parBetter(r, sel);
     }
     if (r.feasCount !== sel.feasCount) return r.feasCount < sel.feasCount;
     if (r.degree !== sel.degree) return r.degree > sel.degree;
     if (r.diff !== sel.diff) return r.diff > sel.diff;
-    return r.priority > sel.priority;
+    if (r.priority !== sel.priority) return r.priority > sel.priority;
+    return parBetter(r, sel);
   }
   function pickMRV() {
     for (let iter = 0; iter < 5; iter++) {
@@ -2582,8 +2808,8 @@ function attemptSchedule(
       const off = d * T + kk;
       const toff = tbOff(d, kk);
       for (const ci of req.cIdxs) classGrid[ci * DT + off] = val;
-      for (const ti of req.tIdxs) teacherGrid[ti * DTB + toff] = val;
-      for (const rg of req.roomArrs) rg[toff] = val;
+      for (const ti of tIdxsAtOff(req, o)) teacherGrid[ti * DTB + toff] = val;
+      for (const rg of roomArrsAtOff(req, o)) rg[toff] = val;
     }
     const delta = val ? req.blockSize : -req.blockSize;
     for (const ci of req.cIdxs) classDayCount[ci * D + d] += delta;
@@ -2595,6 +2821,25 @@ function attemptSchedule(
       let n = classDailySubj[(ci * D + dd) * S + req.sIdx];
       if (dd === oldD) n -= req.blockSize;
       if (n > 0) c += n * REPEAT_W;
+    }
+    return c;
+  }
+
+  // Parallel moslik — zichlashda. Bu bosqichda ko'chirish faqat oyna
+  // KAMAYSA yoki O'ZGARMASA qabul qilinadi, shuning uchun bu yerdagi
+  // mukofot oynani hech qachon yomonlashtira olmaydi — u faqat teng
+  // variantlardan parallel sinfga mos kelganini tanlaydi.
+  function parallelCostAt(req, dd, oldD) {
+    if (!parOn || req.sIdx < 0) return 0;
+    let c = 0;
+    for (const ci of req.cIdxs) {
+      const g = gradeIdx[ci];
+      if (g < 0) continue;
+      const cur = classDailySubj[(ci * D + dd) * S + req.sIdx];
+      const own = dd === oldD ? cur - req.blockSize : cur;
+      if (own > 0) continue;   // sinf shu kuni bu fanni allaqachon oladi
+      const mates = gradeDaySubj[(g * D + dd) * S + req.sIdx] - (cur > 0 ? 1 : 0);
+      if (mates > 0) c -= Math.min(mates, gradeSize[g] - 1) * PARALLEL_W;
     }
     return c;
   }
@@ -2776,7 +3021,7 @@ function attemptSchedule(
         if (!req.domain || req.domain.length < 2) continue;
         const oldD = p.d;
         const oldI = p.startIdx;
-        const baseCost = compactCost(req.cIdxs) + repeatCostAt(req, oldD, oldD) + spacedCostAt(req, oldD, oldD) + coreCostAt(req, oldD, oldI);
+        const baseCost = compactCost(req.cIdxs) + repeatCostAt(req, oldD, oldD) + spacedCostAt(req, oldD, oldD) + coreCostAt(req, oldD, oldI) + parallelCostAt(req, oldD, oldD);
         const baseGap = _lastGap;
         markBits(req, oldD, oldI, 0);
         let bestD = -1;
@@ -2787,7 +3032,7 @@ function attemptSchedule(
           if (cand.d === oldD && cand.i === oldI) continue;
           if (!fitsAt(req, cand.d, cand.i)) continue;
           markBits(req, cand.d, cand.i, 1);
-          let c = compactCost(req.cIdxs) + repeatCostAt(req, cand.d, oldD) + spacedCostAt(req, cand.d, oldD) + coreCostAt(req, cand.d, cand.i);
+          let c = compactCost(req.cIdxs) + repeatCostAt(req, cand.d, oldD) + spacedCostAt(req, cand.d, oldD) + coreCostAt(req, cand.d, cand.i) + parallelCostAt(req, cand.d, oldD);
           const g = _lastGap;
           markBits(req, cand.d, cand.i, 0);
           if (req.blockSize === 1 && adjacentSame(cand.d, cand.i, 1, req)) c += ADJ_W;
@@ -2921,7 +3166,8 @@ function attemptSchedule(
     for (const ci of rq.cIdxs) if (!seen.has(ci)) { seen.add(ci); union.push(ci); }
     const base = compactCost(union) + repeatCostAt(rp, pd, pd) + repeatCostAt(rq, qd, qd)
       + spacedCostAt(rp, pd, pd) + spacedCostAt(rq, qd, qd)
-      + coreCostAt(rp, pd, pi) + coreCostAt(rq, qd, qi);
+      + coreCostAt(rp, pd, pi) + coreCostAt(rq, qd, qi)
+      + parallelCostAt(rp, pd, pd) + parallelCostAt(rq, qd, qd);
     const baseGap = _lastGap;
     let afterGap = Infinity;
     markBits(rp, pd, pi, 0);
@@ -2935,7 +3181,8 @@ function attemptSchedule(
         okFit = true;
         after = compactCost(union) + repeatCostAt(rp, qd, pd) + repeatCostAt(rq, pd, qd)
           + spacedCostAt(rp, qd, pd) + spacedCostAt(rq, pd, qd)
-          + coreCostAt(rp, qd, qi) + coreCostAt(rq, pd, pi);
+          + coreCostAt(rp, qd, qi) + coreCostAt(rq, pd, pi)
+          + parallelCostAt(rp, qd, pd) + parallelCostAt(rq, pd, qd);
         afterGap = _lastGap;
         markBits(rq, pd, pi, 0);
       }
@@ -3017,7 +3264,7 @@ function attemptSchedule(
     const pd = p.d, pi = p.startIdx, qd = q.d, qi = q.startIdx;
     if (!inDomain(rq, pd, pi)) return false;
     const uni = unionIdx(rp.cIdxs, rq.cIdxs);
-    const costBefore = compactCost(uni) + repeatCostAt(rp, pd, pd) + spacedCostAt(rp, pd, pd);
+    const costBefore = compactCost(uni) + repeatCostAt(rp, pd, pd) + spacedCostAt(rp, pd, pd) + parallelCostAt(rp, pd, pd);
     const gapBefore = _lastGap;
     for (const cand of rp.domain) {
       if (cand.d === pd && cand.i === pi) continue;
@@ -3028,7 +3275,7 @@ function attemptSchedule(
         markBits(rq, pd, pi, 1);
         if (fitsAt(rp, cand.d, cand.i)) {
           markBits(rp, cand.d, cand.i, 1);
-          const costAfter = compactCost(uni) + repeatCostAt(rp, cand.d, pd) + spacedCostAt(rp, cand.d, pd);
+          const costAfter = compactCost(uni) + repeatCostAt(rp, cand.d, pd) + spacedCostAt(rp, cand.d, pd) + parallelCostAt(rp, cand.d, pd);
           const gapAfter = _lastGap;
           ok = gapAfter <= gapBefore && costAfter <= costBefore + BAL_W;
           markBits(rp, cand.d, cand.i, 0);
@@ -3826,18 +4073,18 @@ function attemptSchedule(
         let clash = false;
         for (let o = 0; o < p.req.blockSize && !clash; o++) {
           const off = p.d * T + slotAt(p.offs, p.startIdx, o);
-          for (const ti of p.req.tIdxs) { if (occ.has("T" + ti + ":" + off)) { clash = true; break; } }
+          for (const ti of tIdxsAtOff(p.req, o)) { if (occ.has("T" + ti + ":" + off)) { clash = true; break; } }
           if (clash) break;
           for (const ci of p.req.cIdxs) { if (occ.has("C" + ci + ":" + off)) { clash = true; break; } }
           if (clash) break;
-          for (const rid of p.req.rids) { if (occ.has("R" + rid + ":" + off)) { clash = true; break; } }
+          for (const rid of ridsAtOff(p.req, o)) { if (occ.has("R" + rid + ":" + off)) { clash = true; break; } }
         }
         if (clash) { bad.push(p); continue; }
         for (let o = 0; o < p.req.blockSize; o++) {
           const off = p.d * T + slotAt(p.offs, p.startIdx, o);
-          for (const ti of p.req.tIdxs) occ.set("T" + ti + ":" + off, p);
+          for (const ti of tIdxsAtOff(p.req, o)) occ.set("T" + ti + ":" + off, p);
           for (const ci of p.req.cIdxs) occ.set("C" + ci + ":" + off, p);
-          for (const rid of p.req.rids) occ.set("R" + rid + ":" + off, p);
+          for (const rid of ridsAtOff(p.req, o)) occ.set("R" + rid + ":" + off, p);
         }
       }
       if (!bad.length) return round > 0;
@@ -3869,11 +4116,16 @@ function attemptSchedule(
     schedule, classes, subjects, teachers, timeslots: allSortedTs, classSubjects,
     lunchGroups, classOffSet, teacherOffSet, teacherBlockedMap, entryToPlacement,
   });
+  // Parallel sinflarda «bir kunda bir xil fan» qanchalik bajarilgani —
+  // variantlarni taqqoslash uchun (kam bo'lgani yaxshi). Tayyor jadvaldan
+  // hisoblanadi, ya'ni ekrandagi ko'rsatkich bilan AYNI son.
+  const align = parOn ? parallelMismatch(schedule, classes, subjects, true) : 0;
   report.gaps = gaps;
   report.imbalance = imbalance;
+  report.parallelMismatch = align;
   report.teacherHints = teacherHints;
   report.roomDupFixes = roomDupFixes;
-  return { schedule, placed: placedHours, attempted: attemptedHours, soft, gaps, imbalance, report };
+  return { schedule, placed: placedHours, attempted: attemptedHours, soft, gaps, imbalance, align, report };
 }
 
 function buildValidationReport(ctx) {
@@ -4073,6 +4325,12 @@ export function compactSchedule(
     });
     if (any) tBlockedMap.set(t.id, g);
   });
+
+  // Bir kunga tushmaydigan fanlar (Algebra ↔ Geometriya) — zichlash ham
+  // shu qoidaga bo'ysunadi, aks holda generator to'g'ri qo'ygan darsni
+  // keyingi zichlash bosqichi ziddiyatli kunga ko'chirib yuborardi.
+  const conflictOf = buildSubjectConflicts(subjects);
+  const anyConflict = conflictOf.size > 0;
 
   // "Ora kunda", "Asosiy fan" va haftalik soat ma'lumotlari
   const spacedSet = new Set();
@@ -4303,10 +4561,26 @@ export function compactSchedule(
   };
   const classDayCount = new Int16Array(C * D);
   const subjDay = new Map(); // `${ci}|${d}|${subjectId}` -> soni
+  // ——— PARALLEL SINFLAR: bir kunda bir xil fan ———
+  // Zichlash darsni boshqa kunga ko'chirib moslikni buzmasin. Oyna baribir
+  // ustun (u alohida solishtiriladi) — bu faqat TENG variantlarni ajratadi.
+  const cPar = buildParallelIndex(classes, opt.parallelDays !== false);
+  const cParOn = cPar.enabled;
+  const cGradeIdx = cPar.idxArr;
+  // `${g}|${d}|${subjectId}` -> shu kuni fanni oladigan SINFLAR soni
+  const gradeSubjDay = new Map();
   const bumpSubj = (u, d, sign) => {
     for (const sk of u.subjKeys) {
       const k = `${sk.ci}|${d}|${sk.subjectId}`;
-      subjDay.set(k, (subjDay.get(k) || 0) + sign * u.len);
+      const before = subjDay.get(k) || 0;
+      const after = before + sign * u.len;
+      subjDay.set(k, after);
+      if (!cParOn) continue;
+      const g = cGradeIdx[sk.ci];
+      if (g < 0) continue;
+      const gk = `${g}|${d}|${sk.subjectId}`;
+      if (before <= 0 && after > 0) gradeSubjDay.set(gk, (gradeSubjDay.get(gk) || 0) + 1);
+      else if (before > 0 && after <= 0) gradeSubjDay.set(gk, (gradeSubjDay.get(gk) || 0) - 1);
     }
   };
   const setBits = (u, d, i, val) => {
@@ -4332,6 +4606,21 @@ export function compactSchedule(
         let n = subjDay.get(`${sk.ci}|${d}|${sk.subjectId}`) || 0;
         if (d === u.d) n -= u.len;
         if (n + u.len > sk.cap) return false;
+      }
+    }
+    // Bir kunga tushmaydigan fanlar. O'Z kunida qolish HAR DOIM mumkin:
+    // aks holda jadvalda allaqachon mavjud ziddiyat (qo'lda qo'yilgan dars)
+    // birlikni umuman qimirlata olmas va soat yo'qolib ketardi.
+    if (anyConflict && d !== u.d) {
+      for (const sk of u.subjKeys) {
+        const foes = conflictOf.get(sk.subjectId);
+        if (!foes) continue;
+        for (const fid of foes) {
+          // Ziddiyatli fan shu birlikning O'ZIDA bo'lsa — ayni soatda
+          // o'qiladi, ajratib bo'lmaydi.
+          if (u.subjKeys.some((x) => x.ci === sk.ci && x.subjectId === fid)) continue;
+          if ((subjDay.get(`${sk.ci}|${d}|${fid}`) || 0) > 0) return false;
+        }
       }
     }
     for (let o = 0; o < u.len; o++) {
@@ -4372,6 +4661,8 @@ export function compactSchedule(
   const REPEAT_W = 45;
   const SPACED_W = 600;
   const CORE_W = 420;
+  // Parallel moslik — kunlik yuk tengligidan (BAL_W) yengil
+  const PARALLEL_C_W = 200;
 
   // Kunlik me'yor: sinfning haftalik soati ish kunlariga teng bo'linadi
   // (24 soat / 6 kun => kuniga aynan 4 ta).
@@ -4489,6 +4780,23 @@ export function compactSchedule(
     }
     return c;
   };
+  // Parallel sinflar mukofoti: shu kunda darajadagi BOSHQA sinf ayni fanni
+  // olayotgan bo'lsa — narx kamayadi. Faqat mukofot, jarima yo'q.
+  const parallelAt = (u, dd, oldD) => {
+    if (!cParOn || !u.subjectId) return 0;
+    let c = 0;
+    for (const ci of u.cIdxs) {
+      const g = cGradeIdx[ci];
+      if (g < 0) continue;
+      const cur = subjDay.get(`${ci}|${dd}|${u.subjectId}`) || 0;
+      const own = dd === oldD ? cur - u.len : cur;
+      if (own > 0) continue;   // sinf shu kuni bu fanni allaqachon oladi
+      const gCur = gradeSubjDay.get(`${g}|${dd}|${u.subjectId}`) || 0;
+      const mates = gCur - (cur > 0 ? 1 : 0);   // o'z sinfining hissasi chiqariladi
+      if (mates > 0) c -= Math.min(mates, cPar.sizes[g] - 1) * PARALLEL_C_W;
+    }
+    return c;
+  };
   const coreAt = (u, d, i) => {
     let c = 0;
     for (const ci of u.cIdxs) {
@@ -4521,7 +4829,7 @@ export function compactSchedule(
       if (Date.now() > stop) break;
       const oldD = u.d;
       const oldI = u.i;
-      const base = costOf(u.cIdxs) + repeatAt(u, oldD, oldD) + spacedAt(u, oldD, oldD) + coreAt(u, oldD, oldI);
+      const base = costOf(u.cIdxs) + repeatAt(u, oldD, oldD) + spacedAt(u, oldD, oldD) + coreAt(u, oldD, oldI) + parallelAt(u, oldD, oldD);
       const baseGap = _gap;
       setBits(u, oldD, oldI, 0);
       let bd = -1;
@@ -4532,7 +4840,7 @@ export function compactSchedule(
         if (cand.d === oldD && cand.i === oldI) continue;
         if (!fits(u, cand.d, cand.i)) continue;
         setBits(u, cand.d, cand.i, 1);
-        const c = costOf(u.cIdxs) + repeatAt(u, cand.d, oldD) + spacedAt(u, cand.d, oldD) + coreAt(u, cand.d, cand.i);
+        const c = costOf(u.cIdxs) + repeatAt(u, cand.d, oldD) + spacedAt(u, cand.d, oldD) + coreAt(u, cand.d, cand.i) + parallelAt(u, cand.d, oldD);
         const g = _gap;
         setBits(u, cand.d, cand.i, 0);
         if (g < bg || (g === bg && c < bc)) { bg = g; bc = c; bd = cand.d; bi = cand.i; }
@@ -4947,7 +5255,7 @@ export function compactSchedule(
               setBits(b, bd2, bi2, 1);
               // 2-strategiya: oddiy fanni boshqa katakka ko'chirib (evict),
               // asosiy fanni bo'shagan erta o'ringa qo'yamiz
-              const evBefore = costOf(uni) + repeatAt(a, ad, ad) + spacedAt(a, ad, ad);
+              const evBefore = costOf(uni) + repeatAt(a, ad, ad) + spacedAt(a, ad, ad) + parallelAt(a, ad, ad);
               const evGap = _gap;
               let evicted = false;
               for (const cand of a.domain) {
@@ -4959,7 +5267,7 @@ export function compactSchedule(
                   setBits(b, ad, ai, 1);
                   if (fits(a, cand.d, cand.i)) {
                     setBits(a, cand.d, cand.i, 1);
-                    const evAfter = costOf(uni) + repeatAt(a, cand.d, ad) + spacedAt(a, cand.d, ad);
+                    const evAfter = costOf(uni) + repeatAt(a, cand.d, ad) + spacedAt(a, cand.d, ad) + parallelAt(a, cand.d, ad);
                     ok2 = _gap <= evGap && evAfter <= evBefore + BAL_W;
                     if (!ok2) {
                       setBits(a, cand.d, cand.i, 0);
@@ -5426,13 +5734,18 @@ export function generateScheduleAttempt(
   const strategy = options.strategy ?? (call % 6);
   return attemptSchedule(
     classes, subjects, teachers, rooms, timeslots, classSubjects, lunchGroups, lockedSchedule,
-    { seed, strategy, deadline: Date.now() + solveMs, polishBudgetMs: polishMs, compactBudgetMs: compactMs }
+    {
+      seed, strategy, deadline: Date.now() + solveMs, polishBudgetMs: polishMs, compactBudgetMs: compactMs,
+      // Parallel sinflarda «bir kunda bir xil fan» (sukut bo'yicha yoqilgan)
+      parallelDays: options.parallelDays !== false,
+    }
   );
 }
 
 // Eng yaxshi variant leksikografik tanlanadi:
 // (1) tushmagan soat kam, (2) joylangan soat ko'p, (3) KUN O'RTASIDA OYNA kam,
-// (4) kunlik yuk notekisligi kam, (5) jarima kam
+// (4) kunlik yuk notekisligi kam, (5) PARALLEL SINFLARDA fanlar bir kunga
+// tushgan, (6) jarima kam
 function betterResult(res, cur) {
   if (!cur) return true;
   const rm = res.report?.remainingTotal ?? Infinity;
@@ -5445,6 +5758,11 @@ function betterResult(res, cur) {
   const ri = res.imbalance ?? Infinity;
   const ci = cur.imbalance ?? Infinity;
   if (ri !== ci) return ri < ci;
+  // Parallel sinflarda fanlar bir kunga tushganimi — sifat mezonlaridan
+  // KEYIN turadi: moslik uchun oyna ham, notekis yuk ham qabul qilinmaydi.
+  const ra = res.align ?? 0;
+  const ca = cur.align ?? 0;
+  if (ra !== ca) return ra < ca;
   return res.soft < cur.soft;
 }
 
@@ -5472,12 +5790,14 @@ export function generateSchedule(...args) {
         compactMs: options.compactMs ?? b.compactMs,
         polishMs: options.polishMs ?? b.polishMs,
         seed: options.seed, strategy: options.strategy,
+        parallelDays: options.parallelDays !== false,
       }
     );
     attempt += 1;
     if (betterResult(res, best)) best = res;
     if (res.attempted === 0) break;
-    if (res.report && res.report.remainingTotal === 0 && (res.gaps || 0) === 0 && (res.imbalance || 0) === 0) break;
+    if (res.report && res.report.remainingTotal === 0 && (res.gaps || 0) === 0 && (res.imbalance || 0) === 0
+      && (res.align || 0) === 0) break;
   }
   if (!best) return emptySchedule(timeslots);
   const r = best.report;
@@ -5485,7 +5805,7 @@ export function generateSchedule(...args) {
     const pct = r.requiredTotal ? ((r.placedTotal / r.requiredTotal) * 100).toFixed(1) : "0";
     const conf = r.teacherConflicts.length + r.roomConflicts.length + r.classConflicts.length
       + r.lunchConflicts.length + r.offDayConflicts.length + (r.blockedSlotConflicts?.length || 0);
-    const line = `📊 #${__genCall} · ${r.placedTotal}/${r.requiredTotal} (${pct}%) · oyna ${r.gaps ?? 0} · nomutanosib ${r.imbalance ?? 0}${conf ? ` · ⚠️ ziddiyat ${conf}` : ""}`;
+    const line = `📊 #${__genCall} · ${r.placedTotal}/${r.requiredTotal} (${pct}%) · oyna ${r.gaps ?? 0} · nomutanosib ${r.imbalance ?? 0}${r.parallelMismatch ? ` · parallel ${r.parallelMismatch}` : ""}${conf ? ` · ⚠️ ziddiyat ${conf}` : ""}`;
     console.log(line);
   }
   return best.schedule;

@@ -99,6 +99,14 @@ export const CS_DEFAULTS = {
   // 4 soat blok — faqat superadmin yoqadi, shuning uchun default o'chiq
   allowQuad: false,
   swapEnabled: false,
+  // Almashgandan keyingi (2-) soatga ALOHIDA ustoz/xona tanlash.
+  // O'chiq bo'lsa 1-soatdagi ustoz davom etadi —
+  // [swapGroups.js](../utils/swapGroups.js).
+  swapAltTeachers: false,
+  swapNextTeacherId: "",
+  swapNextRoomId: "",
+  swapNextTeacher2Id: "",
+  swapNextRoom2Id: "",
   splitEnabled: false,
   weekAltHours: 1,
   swapSubjectId: "",

@@ -10,6 +10,7 @@ import { DAYS } from './constants';
 import { loadStyledXLSX } from './excelUtils';
 import { isTeachingSlot } from './scheduleGenerator';
 import { pairSideGroups, pairAllGroups } from './pairGroups';
+import { swapTeachersOfSubject, swapTeacherIds } from './swapGroups';
 
 function lessonClassIds(lesson) {
   return Array.isArray(lesson.classIds) ? lesson.classIds : [lesson.classId].filter(Boolean);
@@ -128,7 +129,7 @@ export async function exportAnalysisExcel({
       (classSubjects[cid] || []).forEach((a) => {
         const ids = new Set();
         if (a.teacherId) ids.add(a.teacherId);
-        if (a.swapTeacherId) ids.add(a.swapTeacherId);
+        if (a.swapTeacherId) swapTeacherIds(a).forEach((t) => ids.add(t));
         pairSideGroups(a).forEach((g) => { if (g.teacherId) ids.add(g.teacherId); });
         if (Array.isArray(a.teacherIds)) a.teacherIds.forEach((x) => x && ids.add(x));
         if (Array.isArray(a.groups)) a.groups.forEach((g) => g?.teacherId && ids.add(g.teacherId));
@@ -153,7 +154,8 @@ export async function exportAnalysisExcel({
         if (a.teacherId) out.add(a.teacherId);
         if (Array.isArray(a.teacherIds)) a.teacherIds.forEach((x) => x && out.add(x));
         if (Array.isArray(a.groups)) a.groups.forEach((g) => g?.teacherId && out.add(g.teacherId));
-        if (a.swapEnabled && a.swapSubjectId === subjectId && a.swapTeacherId) out.add(a.swapTeacherId);
+        // Almashinuvda 2-soatga alohida ustoz tanlangan bo'lishi mumkin
+        if (a.swapEnabled && a.swapSubjectId) swapTeachersOfSubject(a, subjectId).forEach((t) => out.add(t));
         pairSideGroups(a).forEach((g) => { if (g.subjectId === subjectId && g.teacherId) out.add(g.teacherId); });
       });
       return [...out];

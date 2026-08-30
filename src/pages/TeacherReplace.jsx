@@ -215,6 +215,8 @@ export default function TeacherReplacePage({
       (list || []).forEach((a) => {
         const hit = a.teacherId === oldTeacherId || a.teacherId2 === oldTeacherId
           || a.swapTeacherId === oldTeacherId || a.weekAltTeacherId === oldTeacherId
+          // almashinuvdagi 2-soat ustozlari
+          || a.swapNextTeacherId === oldTeacherId || a.swapNextTeacher2Id === oldTeacherId
           || (Array.isArray(a.levelGroups) && a.levelGroups.some((g) => g.teacherId === oldTeacherId));
         if (hit && a.subjectId) usedSubjects.add(a.subjectId);
       });

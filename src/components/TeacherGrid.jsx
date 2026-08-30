@@ -13,6 +13,7 @@ import { Fragment, useMemo, useState } from "react";
 import { DAYS } from "../utils/constants";
 import { isTeachingSlot } from "../utils/scheduleGenerator";
 import { pairSideGroups } from "../utils/pairGroups";
+import { swapTeacherIds } from "../utils/swapGroups";
 import {
   classIdsOf, teacherIdsOf, collectCardEntries, unitOf, resolveMove, applyActions, sameCard,
   softWarnings, checkPlace, findAutoPartner, onlyBusyReasons, unitLabel, slotLabel,
@@ -125,7 +126,8 @@ export default function TeacherGrid({
         const roles = [];
         if (a.teacherId === teacherId) roles.push("asosiy");
         if (a.teacherId2 === teacherId) roles.push("2-guruh");
-        if (a.swapEnabled && a.swapTeacherId === teacherId) roles.push("almashinuv");
+        // Almashinuvda 2-soat ustozi boshqa bo'lishi mumkin — u ham shu qatorda
+        if (a.swapEnabled && a.teacherId !== teacherId && swapTeacherIds(a).includes(teacherId)) roles.push("almashinuv");
         if (a.weekAltEnabled && a.weekAltTeacherId === teacherId) roles.push("juft/toq");
         if (a.pairEnabled && a.teacherId === teacherId) roles.push("2 fan birga");
         if ((a.levelGroups || []).some((g) => g.teacherId === teacherId)) roles.push("daraja guruhi");

@@ -114,6 +114,30 @@ export default function SettingsPage({ settings, setSettings, classes, subjects,
               </div>
             </div>
 
+            {/* Jadval tuzish qoidalari */}
+            <div className="settings-section">
+              <div className="settings-section-title">Jadval tuzish</div>
+              <div className="settings-row">
+                <div>
+                  <div className="settings-row-label">🔗 Parallel sinflarda fanlar bir kunga tushsin</div>
+                  <div className="settings-row-desc">
+                    10-A da dushanba Fizika bo'lsa, 10-B da ham dushanba Fizika bo'lishga
+                    harakat qilinadi. Qoida yumshoq: joy topilmasa dars boshqa kunga tushadi.
+                    <b> Bir kun — bir soat emas</b>: ikkala sinfga ayni ustoz kirsa, ular bir
+                    soatda o'qiy olmaydi
+                  </div>
+                </div>
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={settings.parallelDays !== false}
+                    onChange={e => setSettings({ ...settings, parallelDays: e.target.checked })}
+                  />
+                  <span className="toggle-slider" />
+                </label>
+              </div>
+            </div>
+
             {/* Appearance */}
             <div className="settings-section">
               <div className="settings-section-title">Ko'rinish</div>

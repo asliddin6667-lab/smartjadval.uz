@@ -130,7 +130,12 @@ export default function SubjectsPage({ subjects, setSubjects, classSubjects = {}
           if (a.subjectId === deleteId) { orphans += 1; continue; }
           // O'chirilgan fanga qo'shimcha havolalar: almashinuv / juft-hafta / 2-fan
           const patch = {};
-          if (a.swapSubjectId === deleteId) { patch.swapEnabled = false; patch.swapSubjectId = ""; patch.swapTeacherId = ""; patch.swapRoomId = ""; }
+          if (a.swapSubjectId === deleteId) {
+            patch.swapEnabled = false; patch.swapSubjectId = ""; patch.swapTeacherId = ""; patch.swapRoomId = "";
+            // 2-soat uchun alohida tanlangan ustoz/xona ham ketadi
+            patch.swapAltTeachers = false; patch.swapNextTeacherId = ""; patch.swapNextRoomId = "";
+            patch.swapNextTeacher2Id = ""; patch.swapNextRoom2Id = "";
+          }
           if (a.weekAltSubjectId === deleteId) { patch.weekAltEnabled = false; patch.weekAltSubjectId = ""; patch.weekAltTeacherId = ""; patch.weekAltRoomId = ""; }
           if (a.pairSubjectId === deleteId) { patch.pairEnabled = false; patch.pairGroupKey = ""; patch.pairSubjectId = ""; patch.pairTeacherId = ""; patch.pairRoomId = ""; patch.pairShare2 = false; patch.pairExtra = []; }
           // 3-guruh, 4-guruh… — o'chirilgan fanga tegishli guruh olib tashlanadi

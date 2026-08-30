@@ -172,6 +172,41 @@ guruhlari (`levelGroupEnabled`), parallel sinflar (`classIds` bir nechta), juft/
 hafta almashinuvi (`weekAltEnabled`), fan almashinuvi (`swapEnabled`),
 **bir vaqtda bir nechta fan** (`pairEnabled`).
 
+**FAN ALMASHINUVI (`splitEnabled` + `swapEnabled`)** — sinf 2 guruhga bo'linadi,
+guruhlar har xil fan o'qiydi va KEYINGI SOATDA o'rin almashadi. Dars har doim
+2 soatlik blok (`type: "swap"`, `blockSize: 2`):
+
+| Soat | 1-guruh | 2-guruh |
+|---|---|---|
+| 1-soat | asosiy fan — `teacherId`/`roomId` | 2-fan — `swapTeacherId`/`swapRoomId` |
+| 2-soat | 2-fan | asosiy fan |
+
+**2-soatda USTOZ (va xona) BOSHQA bo'lishi mumkin** — `swapAltTeachers`
+yoqilganda: asosiy fanni 2-soatda `swapNextTeacherId`/`swapNextRoomId`,
+2-fanni `swapNextTeacher2Id`/`swapNextRoom2Id` beradi. Bayroq o'chiq (yoki
+maydon bo'sh) bo'lsa — 1-soatdagi ustoz davom etadi, ya'ni eski xatti-harakat
+saqlanadi. Model butunlay [swapGroups.js](src/utils/swapGroups.js) da
+(`swapSides()`, `swapSlotGroups()`, `swapTeacherIds()`, `swapTeachersOfSubject()`) —
+**yangi kod `swapTeacherId` ni qo'lda o'qimasin, shu yordamchilardan foydalansin**,
+aks holda 2-soat ustozi bir joyda hisobga olinib, boshqasida unutiladi.
+
+⚠️ Bandlik shu sababli SOATMA-SOAT hisoblanadi: so'rovda `swapSlots[soat]`
+turadi, undan `tIdxsAt`/`roomArrsAt`/`ridsAt` yasaladi va `fitsAt`, `rawFree`,
+`place`, `unplace`, `markBits`, `buildDomain`, `applyCounters`, `loadAllows`,
+`auditRepair` shularni `tIdxsAtOff()`/`roomArrsAtOff()`/`ridsAtOff()` orqali
+o'qiydi (boshqa so'rovlarda ular `null` — avvalgidek butun blok bo'ylab bir xil
+ro'yxat ishlaydi). Busiz 1-soat ustozi 2-soatda ham bekorga band bo'lib qolardi.
+Xona takrorlanishi BIR SOAT ichida tekshiriladi (`dedupeRooms` ning `swap`
+shoxi) — fan o'z xonasida qolib, faqat guruhlar almashishi odatiy hol.
+
+Ustoz soati: blok soni = `weeklyHours`, har blokda har bir ustoz 1 soat
+ishlaydi — demak almashinuv qatoridagi HAR BIR ustoz `weeklyHours` soat oladi
+(ClassSubjects `computeTeacherHours`, homeroom `rowTeacherParts` /
+`buildTeacherStreams`, TeacherAvailability, analysisExport shu qoidada).
+UI — [ClassSubjects.jsx](src/pages/ClassSubjects.jsx) dagi «🔄 almashinuv
+jadvali»: ikki fan, «🔀 Almashgandan keyin ustoz boshqa bo'lsin» belgisi va
+1-soat / 2-soat kartalari (uslublar — `global.css` dagi `.cs-swap*`).
+
 **Bir vaqtda bir nechta fan (`pairEnabled`)** — sinf 2, 3, 4… guruhga bo'linadi va
 guruhlar AYNI BIR SOATDA turli fan o'qiydi (masalan 1-guruh Ona tili, 2-guruh Rus
 tili, 3-guruh SAT). `swapEnabled` dan farqi: guruhlar almashmaydi va 2 soatlik blok
@@ -355,6 +390,77 @@ soat hisobi boshqacha; yolg'iz dars qo'yish jadvalni buzadi, shuning uchun ular
 
 Hard cheklovlar (ikkala dvigatelda ham): ustoz/sinf dam kuni, obed guruhlari, smena
 (`timeslot.classIds`), ustoz/sinf/xona bandligi.
+
+**BIR KUNGA TUSHMAYDIGAN FANLAR** ([subjectConflicts.js](src/utils/subjectConflicts.js)).
+`SAME_DAY_CONFLICT_GROUPS` — bitta sinfda BIR KUNDA birga o'qitilmaydigan
+fanlar guruhi (hozircha `["algebra", "geometriya"]`). Fan NOMI bo'yicha
+solishtiriladi (so'z bo'yicha, apostrof shakllari normallashtiriladi);
+guruhning ikki tokeniga ham mos kelgan qo'shma fan («Algebra va geometriya»)
+qoidadan chetda qoladi. Yangi juftlik kerak bo'lsa — faqat shu ro'yxatga
+qo'shiladi.
+
+Qoida QATTIQ, yon berish YO'Q: joy topilmasa soat «tushmadi» bo'lib rostgo'y
+qoladi (`capEmergency`/`solveSlack` kabi yumshatgichlar bunga tegmaydi).
+Uchala joyda ham takrorlangan — bittasi unutilsa dars ziddiyatli kunga
+ko'chib ketadi:
+
+| Joy | Funksiya |
+|---|---|
+| Generator | `conflictDayOk()` → `fitsAt()` ([scheduleGenerator.js](src/utils/scheduleGenerator.js)) |
+| Zichlash | `compactSchedule` dagi `fits()` — O'Z kunida qolish har doim mumkin, aks holda allaqachon mavjud ziddiyat birlikni qimirlata olmas va soat yo'qolardi |
+| Zaxira to'ldirgich | `dayHasConflict()` ([Schedule.jsx](src/pages/Schedule.jsx)) — `spotFor`, `fillRemaining` va `planResolutions` ning HAR BIR kun tanlash siklida |
+
+Qo'lda ko'chirish TAQIQLANMAYDI — `softWarnings()`
+([moveResolver.js](src/utils/moveResolver.js)) va «＋ Qo'lda dars qo'shish»
+oynasi faqat ogohlantiradi. Tayyor jadvaldagi buzilishlar Schedule.jsx dagi
+`conflictViolations` memosida sanaladi va 📚 to'q sariq quti bilan ko'rsatiladi.
+Kun yetmasligi (Algebra 4 kun + Geometriya 3 kun > 6 kun) esa
+`capacityWarnings()` da oldindan aytiladi.
+
+**PARALLEL SINFLARDA BIR KUNDA BIR XIL FAN**
+([parallelDays.js](src/utils/parallelDays.js)). 10-A da dushanba Fizika bo'lsa,
+10-B da ham dushanba Fizika bo'lsin — direktorga shunday qulay. Daraja
+`gradeOf(cls.name)` bilan aniqlanadi («10-A», «10-B» → 10), darajada kamida
+2 sinf bo'lishi kerak; `classes[].parallelOff === true` sinfni chetlashtiradi.
+Sozlama — `settings.parallelDays` (Sozlamalar → «Jadval tuzish», sukut bo'yicha
+YOQILGAN); `generateSchedule`/`compactSchedule` ga `options.parallelDays`
+bo'lib boradi.
+
+⚠️ **«Bir kun» — «bir soat» EMAS.** Ikkala sinfga ayni ustoz kirsa, ular bir
+soatda o'qiy olmaydi. Maqsad — fanlar to'plamini bir kunga yig'ish.
+
+Qoida **YUMSHOQ**: hech qayerda taqiq yo'q, faqat MUKOFOT (manfiy jarima).
+Shuning uchun u tushmagan soatni ko'paytira olmaydi. Uchta joyda:
+
+| Joy | Funksiya | Og'irlik |
+|---|---|---|
+| Joylashtirish | `parallelBonus()` → `scoreCandidate` | `PARALLEL_W = 260` |
+| Generator ichidagi zichlash | `parallelCostAt()` → `baseCost`/`c`, `trySwap`, `tryEvict` | `PARALLEL_W` |
+| `compactSchedule` | `parallelAt()` → move pass | `PARALLEL_C_W = 200` |
+
+Hisoblagich `gradeDaySubj[(g * D + d) * S + si]` — darajada shu kuni shu fanni
+oladigan **sinflar** soni (soat emas). U `classDailySubj` ning 0↔1 o'tishlariga
+ulangan, shuning uchun **`classDailySubj` ni faqat `bumpDaySubj()` orqali
+o'zgartiring** — to'g'ridan-to'g'ri yozsangiz hisoblagich buzilib, mukofot
+yolg'on joyga beriladi. `compactSchedule` da xuddi shu rol `bumpSubj` da.
+
+Tanlov tartibi: `betterResult()` va Schedule.jsx `betterThan()` da moslik
+(`align` = `parallelMismatch`) **tushmagan soat → joylangan → oyna → kunlik
+notekislik** dan KEYIN turadi — moslik uchun oyna ham, notekis yuk ham qabul
+qilinmaydi. `betterPick` da esa u eng oxirgi mezon (hamma narsa teng bo'lganda).
+
+Zaxira to'ldirgichda kun tanlash: `daysByLoad(work, classId, subjectId)`
+([Schedule.jsx](src/pages/Schedule.jsx)) parallel sinfda ayni fan turgan kunni
+1.5 dars yengilroq sanaydi — yuk tengligi baribir ustun.
+
+Ekranda 🔗 ko'k quti: `parallelReport()` — «kunlar N% mos» va mos kelmagan
+fanlar. Foiz `matched / slots` (kun-yozuvlari), «to'liq mos fan» soni emas:
+5 soatlik fanda bitta kun mos kelmasa ham qolgan kunlar foydali.
+
+O'lchov (demo maktab, 35 sinf va to'liq yechiladigan 11 sinflik kesim):
+moslik 47% → 65%, to'liq mos fanlar 2 → 43 (147 dan); tushmagan soat, oyna va
+kunlik notekislik o'zgarmadi. **Og'irlikni oshirishning ma'nosi yo'q** — 30 dan
+3000 gacha natija bir xil qoldi, cheklovchi omil ustoz/xona bandligi.
 
 **ZICHLASH — «🧲 Oynani yopish» (`compactSchedule`, 9-parametr `options`).**
 Funksiya ikki rejimda ishlaydi:
