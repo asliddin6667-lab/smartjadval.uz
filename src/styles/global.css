@@ -3041,6 +3041,14 @@ body.dark-mode .cs-swap-badge-2 { color: #f9a8d4; }
 
 .cs-pp-add-select { max-width: 220px; }
 
+/* «➕ Parallel sinf qo'shish» ostidagi izoh — butun qatorni egallaydi */
+.cs-pp-add-hint {
+  flex: 1 1 100%;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
 .cs-pp-add-note {
   font-size: 11.5px;
   font-weight: 700;

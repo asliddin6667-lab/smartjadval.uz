@@ -313,10 +313,29 @@ o'chiq bo'lsa — odatdagi `groupKey` (bitta fan, bir nechta sinf). YOQILGAN
 bo'lsa esa u `pairGroupKey` ni boshqaradi: butun karta (barcha guruhlari
 bilan) boshqa sinflarga bog'lanadi. Shuning uchun tugma endi
 `pairEnabled` da **o'chirilmaydi** — ilgari o'chirilar va foydalanuvchi
-parallel sinflarni umuman yoqa olmasdi. Mantiq ClassSubjects dagi
-`togglePairParallel()` / `autoPairParallelSameGrade()` / `unlinkPairGroup()`
-da; sinf bog'lash esa BITTA joyda — `linkPairClasses(subjectId, classIds,
-ownerPatch)`. **Sikl ichida `setClassSubjects` chaqirmang** — har qadam eski
+parallel sinflarni umuman yoqa olmasdi.
+
+⚠️ **IKKI KIRISH YO'LI — IKKI XIL NATIJA (ataylab).** Bog'lash bitta
+funksiyada (`linkPairClasses`), farq faqat «umumiy» bayroqlarida:
+
+| Qayerdan | Natija |
+|---|---|
+| «🔁 Parallel dars» tugmasi (`togglePairParallel`) | tugma sinf tanlamaydi — **sinflar ro'yxatini ochadi** (`togglePairClass`, tugmalar ostidagi yashil quti). Tanlangan sinfda **HAMMA guruh umumiy** (`shareAllPatch`): kartadagi barcha fan har sinfda bir xil dars, bitta ustozdan |
+| «➕ Parallel sinf qo'shish» ro'yxati (`addPairClass`) va «⚡ Barcha parallellarini bog'lash» | faqat 1-guruh umumiy; 2-guruh va keyingilari **har sinfda alohida** tanlanadi |
+
+Ro'yxatdan sinf olib tashlansa `pairGroupKey` SAQLANADI (`togglePairClass`) —
+aks holda oxirgi sinf o'chirilganda quti yopilib qolardi.
+
+Keyin foydalanuvchi har guruhning «🔗 Parallel sinflarda umumiy» belgisi
+bilan istaganini o'zgartiradi. `unlinkPairGroup()` bog'lanishni uzganda
+`pairShare2` va `pairExtra[].shared` NOLGA qaytadi — aks holda tugmadan
+qolgan «hammasi umumiy» holati yopishib qolar va keyin qo'lda qo'shilgan
+sinf 2-guruhini tanlay olmasdi.
+
+Mantiq ClassSubjects dagi `togglePairParallel()` /
+`autoPairParallelSameGrade()` / `unlinkPairGroup()` da; sinf bog'lash esa
+BITTA joyda — `linkPairClasses(subjectId, classIds, ownerPatch)`.
+**Sikl ichida `setClassSubjects` chaqirmang** — har qadam eski
 holatdan boshlanib, oldingi bog'lanish yo'qoladi; shu sababli bir nechta
 sinf bitta o'tishda yoziladi va `togglePairMode` rejimni yoqishda oddiy
 parallel guruhni (`groupKey`) `ownerPatch` bilan AYNI o'tishda `pairGroupKey`
