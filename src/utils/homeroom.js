@@ -30,7 +30,7 @@
 //
 import { DAYS } from "./constants";
 import { pairAllGroups, pairCardKey } from "./pairGroups";
-import { swapTeacherIds } from "./swapGroups";
+import { swapActive, swapTeacherParts } from "./swapGroups";
 
 // Boshlang'ich ta'lim — 1-sinfdan shu sinfgacha
 export const PRIMARY_MAX_GRADE = 4;
@@ -84,6 +84,14 @@ export function rowTeacherParts(a) {
     return parts;
   }
 
+  // Fan almashinuvi: qator setkada `h × 2` katak egallaydi, ustoz esa
+  // blokning nechta soatida tursa — shuncha soat oladi
+  // ([swapGroups.js](./swapGroups.js)).
+  if (swapActive(a)) {
+    swapTeacherParts(a, h).forEach((p) => parts.push(p));
+    return parts;
+  }
+
   // Hafta almashinuvi: `weekAltHours` soat ikkinchi ustozda o'tadi.
   // Asosiy ustoz shu soatlarda sinfda BO'LMAYDI — nazorat hisobida
   // shu ayirma muhim.
@@ -93,13 +101,6 @@ export function rowTeacherParts(a) {
   if (a.teacherId && h - altH > 0) parts.push({ teacherId: a.teacherId, subjectId: a.subjectId, hours: h - altH });
   if (altH > 0) parts.push({ teacherId: a.weekAltTeacherId, subjectId: a.weekAltSubjectId || a.subjectId, hours: altH });
   if (a.splitEnabled && a.teacherId2) parts.push({ teacherId: a.teacherId2, subjectId: a.subjectId, hours: h });
-  // Fan almashinuvi: 2-fan ustozi (va 2-soatga alohida tanlangan
-  // ustozlar) ham shu sinfda o'sha soat turadi — [swapGroups.js](./swapGroups.js).
-  if (a.swapEnabled && a.swapTeacherId) {
-    swapTeacherIds(a).forEach((tid) => {
-      if (tid !== a.teacherId) parts.push({ teacherId: tid, subjectId: a.swapSubjectId || a.subjectId, hours: h });
-    });
-  }
   return parts;
 }
 
@@ -218,17 +219,15 @@ export function buildTeacherStreams(classes = [], classSubjects = {}) {
       } else if (gk && !realSplit) {
         // 🔁 Parallel dars: bir nechta sinf ayni soatda, bitta ustozdan
         add(a.teacherId, `G|${a.subjectId}|${a.teacherId}|${a.roomId || ""}|${gk}`, h, cls.id, a.subjectId);
+      } else if (swapActive(a)) {
+        // Fan almashinuvi: ustoz blokning nechta soatida tursa — shuncha
+        // soat ([swapGroups.js](./swapGroups.js)). 2-soatga alohida ustoz
+        // tanlanmagan bo'lsa u ikkala guruhga ham kiradi — `h × 2`.
+        swapTeacherParts(a, h).forEach((p) => add(
+          p.teacherId, `SW|${cls.id}|${idx}|${p.teacherId}|${p.subjectId}`, p.hours, cls.id, p.subjectId));
       } else {
         add(a.teacherId, `C|${cls.id}|${idx}`, h, cls.id, a.subjectId);
         if (realSplit) add(a.teacherId2, `C2|${cls.id}|${idx}`, h, cls.id, a.subjectId);
-      }
-      // Fan almashinuvi: 2-fan ustozi va 2-soatga alohida tanlangan
-      // ustozlar — har biri `h` soat (blok soni `h`, har blokda 1 soat).
-      if (a.swapEnabled && a.swapTeacherId) {
-        swapTeacherIds(a).forEach((tid) => {
-          if (tid === a.teacherId) return;   // asosiy oqimda allaqachon bor
-          add(tid, `SW|${cls.id}|${idx}|${tid}`, h, cls.id, a.swapSubjectId);
-        });
       }
       if (a.weekAltEnabled && a.weekAltTeacherId) {
         add(a.weekAltTeacherId, `WA|${cls.id}|${idx}`, Number(a.weekAltHours || 1), cls.id, a.weekAltSubjectId);

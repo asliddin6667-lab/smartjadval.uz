@@ -250,10 +250,28 @@ ro'yxat ishlaydi). Busiz 1-soat ustozi 2-soatda ham bekorga band bo'lib qolardi.
 Xona takrorlanishi BIR SOAT ichida tekshiriladi (`dedupeRooms` ning `swap`
 shoxi) — fan o'z xonasida qolib, faqat guruhlar almashishi odatiy hol.
 
-Ustoz soati: blok soni = `weeklyHours`, har blokda har bir ustoz 1 soat
-ishlaydi — demak almashinuv qatoridagi HAR BIR ustoz `weeklyHours` soat oladi
-(ClassSubjects `computeTeacherHours`, homeroom `rowTeacherParts` /
-`buildTeacherStreams`, TeacherAvailability, analysisExport shu qoidada).
+**USTOZ SOATI — BLOKDAGI SOATLARI BO'YICHA.** Qator `weeklyHours` ta 2 soatlik
+blokdan iborat (sinf setkasida `weeklyHours × 2` katak), ustoz esa blokning
+NECHTA soatida tursa — shuncha soat oladi:
+
+| Holat | Ustoz soati |
+|---|---|
+| 2-soatga alohida ustoz tanlanmagan — o'zi 1-soatda bir guruhga, 2-soatda ikkinchisiga kiradi | `weeklyHours × 2` |
+| 2-soatga boshqa ustoz tanlangan (`swapAltTeachers`) — har biri blokda 1 soat | `weeklyHours` |
+
+Ekrandagi odatiy holat aralash bo'ladi: masalan Informatika ustozi ikkala soatda
+ham o'zi qoladi (`× 2`), Rus tiliga esa 2-soatda boshqa ustoz kiradi (har biriga
+`weeklyHours`). ⚠️ Ilgari hamma joyda `weeklyHours` yozilardi — ikkala soatda ham
+turgan ustozning yarim yuklamasi ko'rinmasdi (setkada 2 soat band, rejada 1 soat).
+
+Hisob [swapGroups.js](src/utils/swapGroups.js) dagi `swapTeacherParts()` /
+`swapTeacherHours()` da — **soat sanaydigan yangi kod `swapTeacherIds()` ni
+ishlatmasin** (u faqat «kim qatnashadi» ro'yxati). Chaqiruvchilar: ClassSubjects
+`computeTeacherHours`, homeroom `rowTeacherParts` / `buildTeacherStreams`,
+TeacherAvailability. Xona ham shu qoidada — Schedule `computeRoomLoadRows`
+`swapRoomHours()` ni o'qiydi. analysisExport soatni tayyor setkadan sanaydi,
+shuning uchun unga tegilmaydi. Reja ↔ setka tekshiruvi (Schedule
+`teacherHourRows`) endi almashinuv ustozlarini ham qamraydi — soat mos tushadi.
 UI — [ClassSubjects.jsx](src/pages/ClassSubjects.jsx) dagi «🔄 almashinuv
 jadvali»: ikki fan, «🔀 Almashgandan keyin ustoz boshqa bo'lsin» belgisi va
 1-soat / 2-soat kartalari (uslublar — `global.css` dagi `.cs-swap*`).
@@ -287,7 +305,27 @@ Guruh fanlarini "Sinf fanlari" ro'yxatida ALOHIDA belgilash shart emas
 **Parallel sinflar (`pairGroupKey`).** Bir nechta sinf bitta kartani baham ko'radi —
 hammasi AYNI SOATDA o'qiydi. Model **oynali**: guruhga kirgan HAR BIR sinfda o'z
 `classSubjects` yozuvi turadi, ularni `pairGroupKey` bog'laydi. Guruhga ko'pi bilan
-3 sinf kiradi (`PAIR_MAX_EXTRA = 2`).
+6 sinf kiradi (`PAIR_MAX_EXTRA = 5`) — chegara faqat UI da, generator soniga
+qaramaydi.
+
+⚠️ **«🔁 Parallel dars» tugmasi IKKI mexanizmga ulanadi.** `pairEnabled`
+o'chiq bo'lsa — odatdagi `groupKey` (bitta fan, bir nechta sinf). YOQILGAN
+bo'lsa esa u `pairGroupKey` ni boshqaradi: butun karta (barcha guruhlari
+bilan) boshqa sinflarga bog'lanadi. Shuning uchun tugma endi
+`pairEnabled` da **o'chirilmaydi** — ilgari o'chirilar va foydalanuvchi
+parallel sinflarni umuman yoqa olmasdi. Mantiq ClassSubjects dagi
+`togglePairParallel()` / `autoPairParallelSameGrade()` / `unlinkPairGroup()`
+da; sinf bog'lash esa BITTA joyda — `linkPairClasses(subjectId, classIds,
+ownerPatch)`. **Sikl ichida `setClassSubjects` chaqirmang** — har qadam eski
+holatdan boshlanib, oldingi bog'lanish yo'qoladi; shu sababli bir nechta
+sinf bitta o'tishda yoziladi va `togglePairMode` rejimni yoqishda oddiy
+parallel guruhni (`groupKey`) `ownerPatch` bilan AYNI o'tishda `pairGroupKey`
+ga ko'chiradi (aks holda foydalanuvchining parallel guruhi jimgina yo'qolardi).
+
+⚠️ Generator pair so'rovini faqat `a.pairSubjectId && a.pairTeacherId`
+bo'lganda tuzadi. 2-guruhi (umumiy bo'lmasa) sozlanmagan a'zo sinf kartadan
+TUSHIB QOLADI va darsi alohida joylashadi — «🔗 Parallel sinflar» bo'limi
+buni `cs-pair-warn` qutisida ochiq aytadi.
 
 Har bir guruh alohida **UMUMIY** (`shared`) bo'lishi mumkin:
 

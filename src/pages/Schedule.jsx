@@ -12,7 +12,7 @@ import {
 } from "../utils/moveResolver";
 import { slotDisplayNumber } from "../utils/shiftSlots";
 import { pairSideGroups, pairAllGroups, pairCardKey } from "../utils/pairGroups";
-import { swapTeacherIds, swapTeachersOfSubject, swapRoomIds } from "../utils/swapGroups";
+import { swapActive, swapTeachersOfSubject, swapRoomHours } from "../utils/swapGroups";
 import { buildTeacherStreams, supervisionRows, findSupervisionGaps } from "../utils/homeroom";
 import { buildSubjectConflicts } from "../utils/subjectConflicts";
 import { parallelDaysOn, buildParallelIndex, parallelMismatch } from "../utils/parallelDays";
@@ -1773,13 +1773,13 @@ export default function SchedulePage({
           pairAllGroups(a).forEach((g) => add(g.roomId, `${card}|${g.roomId}`, h, cls.id));
         } else if (gk && !realSplit) {
           add(a.roomId, `G|${a.subjectId}|${a.roomId}|${gk}`, h, cls.id);
+        } else if (swapActive(a)) {
+          // Fan almashinuvi: blok 2 soat, xona blokning nechta soatida band
+          // bo'lsa — shuncha ([swapGroups.js](../utils/swapGroups.js)).
+          swapRoomHours(a, h).forEach((hh, rid) => add(rid, `SW|${cls.id}|${idx}|${rid}`, hh, cls.id));
         } else {
           add(a.roomId, `C|${cls.id}|${idx}`, h, cls.id);
           if (realSplit) add(a.roomId2, `C2|${cls.id}|${idx}`, h, cls.id);
-        }
-        // Fan almashinuvi qo'shimcha soat egallaydi — xona esa o'sha xona
-        if (a.swapEnabled && a.swapSubjectId) {
-          swapRoomIds(a).forEach((rid) => add(rid, `SW|${cls.id}|${idx}|${rid}`, h, cls.id));
         }
       });
     });
@@ -1953,13 +1953,15 @@ export default function SchedulePage({
   // soat = u band bo'lgan KATAKLAR soni (parallel dars, daraja guruhi va
   // parallel sinflar shu sababli o'z-o'zidan bir marta sanaladi).
   //
-  // «Fan almashinuvi» va «hafta almashinuvi» bu ro'yxatga kirmaydi: u yerda
-  // reja soati bilan katak soni ataylab boshqacha (guruhlar navbatlashadi).
+  // «Fan almashinuvi» ham shu ro'yxatga kiradi: reja soati endi ustoz
+  // blokning nechta soatida turishini hisobga oladi
+  // ([swapGroups.js](../utils/swapGroups.js)), ya'ni setkadagi katak soni
+  // bilan mos tushadi. «Hafta almashinuvi» esa chetda qoladi — u yerda
+  // juft/toq hafta navbatlashadi.
   const teacherHourRows = useMemo(() => {
     const skip = new Set();
     classes.forEach((cls) => (classSubjects?.[cls.id] || []).forEach((a) => {
       if (!a) return;
-      if (a.swapEnabled) { [a.teacherId, a.teacherId2, ...swapTeacherIds(a)].forEach((t) => t && skip.add(t)); }
       if (a.weekAltEnabled) { [a.teacherId, a.weekAltTeacherId].forEach((t) => t && skip.add(t)); }
     }));
     const cells = new Map();   // teacherId → band kataklar soni

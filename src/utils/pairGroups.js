@@ -17,7 +17,7 @@
 //  Massivning STRUKTURASI (gid / name / shared) guruhdagi barcha sinfda
 //  bir xil turadi; qiymatlar esa umumiy guruhda bir xil, aks holda sinfga xos.
 //
-export const PAIR_MAX_EXTRA = 2;        // qo'shimcha PARALLEL SINFLAR soni
+export const PAIR_MAX_EXTRA = 5;        // qo'shimcha PARALLEL SINFLAR soni (jami 6 sinf)
 export const PAIR_MAX_GROUPS = 6;       // bitta kartadagi guruhlar soni (1-guruh bilan)
 export const PAIR_MAX_EXTRA_GROUPS = PAIR_MAX_GROUPS - 2;
 

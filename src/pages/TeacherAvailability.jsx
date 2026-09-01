@@ -3,7 +3,7 @@ import { DAYS } from "../utils/constants";
 import { isTeachingSlot } from "../utils/scheduleGenerator";
 import { groupSlotsByShift, shiftSlotNumbers } from "../utils/shiftSlots";
 import { pairCardKey, pairTeacherIds } from "../utils/pairGroups";
-import { swapTeacherIds } from "../utils/swapGroups";
+import { swapActive, swapTeacherHours } from "../utils/swapGroups";
 import "../styles/teacherAvailability.css";
 
 // ————————————————————————————————————————————————————————————
@@ -179,11 +179,11 @@ export default function TeacherAvailabilityPage({
           if (!seen.has(key)) { seen.add(key); total += wh; }
           return;
         }
-        // Almashinuv (2 fan bitta vaqtda) — har bir ustoz band.
-        // 2-soatga ALOHIDA ustoz tanlangan bo'lsa u ham shu qatordan
-        // `wh` soat oladi ([swapGroups.js](../utils/swapGroups.js)).
-        if (a.splitEnabled && a.swapEnabled) {
-          if (a.teacherId === tid || swapTeacherIds(a).includes(tid)) total += wh;
+        // Almashinuv (2 fan bitta vaqtda) — har bir ustoz band. Ustoz
+        // blokning IKKALA soatida ham tursa `wh × 2`, faqat bittasida
+        // tursa `wh` soat ([swapGroups.js](../utils/swapGroups.js)).
+        if (swapActive(a)) {
+          total += swapTeacherHours(a, wh).get(tid) || 0;
           return;
         }
         // Hafta almashinuvi (juft/toq)

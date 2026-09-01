@@ -14,7 +14,7 @@ import {
   pairCardKey, pairTeacherIds, pairAlignSlots,
 } from "../utils/pairGroups";
 // Fan almashinuvi: 2-soatda ustoz/xona boshqa bo'lishi mumkin
-import { swapActive, swapSides, swapTeacherIds } from "../utils/swapGroups";
+import { swapActive, swapSides, swapTeacherHours } from "../utils/swapGroups";
 import "../styles/cs-mobile.css";
 
 function teacherSubjectIds(teacher) {
@@ -270,10 +270,12 @@ function computeTeacherHours(classSubjects) {
       }
 
       // 4) Fan almashinuvi — guruhlar keyingi soatda o'rin almashadi.
-      //    Blok soni = `h`, har blokda har bir ustoz 1 soat ishlaydi, ya'ni
-      //    2-soatga ALOHIDA ustoz tanlangan bo'lsa u ham `h` soat oladi.
+      //    Blok soni = `h`. Ustoz blokning IKKALA soatida ham tursa
+      //    (2-soatga alohida ustoz tanlanmagan) — `h × 2` soat, faqat
+      //    bitta soatida tursa — `h` soat
+      //    ([swapGroups.js](../utils/swapGroups.js)).
       if (swapActive(a)) {
-        swapTeacherIds(a).forEach((tid) => add(tid, h));
+        swapTeacherHours(a, h).forEach((hh, tid) => add(tid, hh));
         return;
       }
 
@@ -816,7 +818,8 @@ Fan bilan birga ular ham o'chsinmi?`;
   // guruhdan chiqadi — aks holda ular yolg'iz qolib, jadvalni buzardi.
   function togglePairMode(subjectId, on) {
     const a = getAssignment(subjectId);
-    updateAssignment(subjectId, {
+    if (!a) return;
+    const patch = {
       pairEnabled: on,
       // Bir vaqtda 2 fan boshqa rejimlar bilan birga ishlamaydi
       splitEnabled: false,
@@ -831,60 +834,94 @@ Fan bilan birga ular ham o'chsinmi?`;
       pairShare2: on ? Boolean(a.pairShare2) : false,
       pairExtra: on ? normalizePairExtra(a.pairExtra) : [],
       pairGroupKey: on ? String(a.pairGroupKey || "").trim() : "",
-    });
+    };
+    // ——— Oddiy parallel dars guruhi YO'QOLMAYDI ———
+    // Rejim yoqilganda `groupKey` tozalanadi (ikkalasi birga ishlamaydi),
+    // lekin unga bog'langan sinflar shu yerda `pairGroupKey` ga ko'chadi —
+    // foydalanuvchi parallel guruhni qaytadan yig'masin.
+    const gk = String(a.groupKey || "").trim();
+    const carry = on && gk
+      ? sortedClasses
+        .filter(c => c.id !== selectedClassId && classInParallel(c.id, subjectId, gk))
+        .slice(0, PAIR_MAX_EXTRA)
+        .map(c => c.id)
+      : [];
+    if (carry.length) {
+      linkPairClasses(subjectId, carry, patch);
+      toast?.(`Parallel guruh saqlandi — ${carry.length + 1} ta sinf bitta kartada`, "success");
+      return;
+    }
+    updateAssignment(subjectId, patch);
   }
 
-  // Guruhga yangi sinf qo'shish: 1-guruh sozlamalari nusxalanadi,
-  // 2-guruh fanini foydalanuvchi o'zi tanlaydi.
-  function addPairClass(subjectId, classId) {
-    if (!classId) return;
+  // Guruhga sinf(lar) qo'shish: 1-guruh sozlamalari nusxalanadi,
+  // 2-guruh fanini foydalanuvchi o'zi tanlaydi. Bir nechta sinf BITTA
+  // o'tishda bog'lanadi — sikl ichida `setClassSubjects` chaqirilsa,
+  // har qadam ESKI holatdan boshlanib, oldingi bog'lanish yo'qolardi.
+  // Qaytaradi: bog'langan sinflar soni.
+  // `ownerPatch` — asosiy sinf qatoriga AYNI o'tishda qo'llanadigan
+  // o'zgarish (masalan rejimni yoqish). Ikki marta `setClassSubjects`
+  // chaqirib bo'lmaydi: ikkinchisi eski holatdan hisoblanadi.
+  function linkPairClasses(subjectId, classIds, ownerPatch = null) {
+    const ids = [...new Set((classIds || []).filter(cid => cid && cid !== selectedClassId))];
     const current = classSubjects[selectedClassId] || [];
-    const a = current.find(x => x.subjectId === subjectId);
-    if (!a) return;
+    const found = current.find(x => x.subjectId === subjectId);
+    if (!found) return 0;
+    const a = ownerPatch ? { ...found, ...ownerPatch } : found;
     const subject = subjectById(subjectId);
     const key = String(a.pairGroupKey || "").trim()
       || `${subject?.name || "Fan"} juftligi — ${selectedClass?.name || ""}`;
 
     const next = { ...classSubjects };
-    next[selectedClassId] = current.map(x => x.subjectId === subjectId ? { ...x, pairGroupKey: key } : x);
+    next[selectedClassId] = current.map(x => x.subjectId === subjectId ? { ...x, ...(ownerPatch || {}), pairGroupKey: key } : x);
 
-    const list = next[classId] || [];
-    const exist = list.find(x => x.subjectId === subjectId);
-    const linked = {
-      ...(exist || makeAssignment(subject)),
-      subjectId,
-      pairEnabled: true,
-      pairGroupKey: key,
-      // 1-guruh — guruhda umumiy
-      weeklyHours: Number(a.weeklyHours || 1),
-      teacherId: a.teacherId || "",
-      roomId: a.roomId || "",
-      groupName1: a.groupName1 || "1-guruh",
-      groupName2: a.groupName2 || "2-guruh",
-      allowDouble: Boolean(a.allowDouble),
-      allowQuad: Boolean(a.allowQuad),
-      isCore: Boolean(a.isCore),
-      spacedDays: Boolean(a.spacedDays),
-      // Boshqa rejimlar o'chadi
-      splitEnabled: false,
-      swapEnabled: false,
-      weekAltEnabled: false,
-      levelGroupEnabled: false,
-      parallelEnabled: false,
-      groupKey: "",
-      // 2-guruh: UMUMIY bo'lsa asosiy sinfdan nusxalanadi, aks holda
-      // shu sinfning O'Z fani (fanni foydalanuvchi tanlaydi)
-      pairShare2: Boolean(a.pairShare2),
-      pairSubjectId: a.pairShare2 ? (a.pairSubjectId || "") : (exist?.pairSubjectId || ""),
-      pairTeacherId: a.pairShare2 ? (a.pairTeacherId || "") : (exist?.pairTeacherId || ""),
-      pairRoomId: a.pairShare2 ? (a.pairRoomId || "") : (exist?.pairRoomId || ""),
-      // 3-guruh, 4-guruh… — tuzilishi bir xil, qiymatlari umumiylikka qarab
-      pairExtra: mergePairExtra(a.pairExtra, exist?.pairExtra),
-    };
-    next[classId] = exist
-      ? list.map(x => x.subjectId === subjectId ? linked : x)
-      : [...list, linked];
+    ids.forEach((classId) => {
+      const list = next[classId] || [];
+      const exist = list.find(x => x.subjectId === subjectId);
+      const linked = {
+        ...(exist || makeAssignment(subject)),
+        subjectId,
+        pairEnabled: true,
+        pairGroupKey: key,
+        // 1-guruh — guruhda umumiy
+        weeklyHours: Number(a.weeklyHours || 1),
+        teacherId: a.teacherId || "",
+        roomId: a.roomId || "",
+        groupName1: a.groupName1 || "1-guruh",
+        groupName2: a.groupName2 || "2-guruh",
+        allowDouble: Boolean(a.allowDouble),
+        allowQuad: Boolean(a.allowQuad),
+        isCore: Boolean(a.isCore),
+        spacedDays: Boolean(a.spacedDays),
+        // Boshqa rejimlar o'chadi
+        splitEnabled: false,
+        swapEnabled: false,
+        weekAltEnabled: false,
+        levelGroupEnabled: false,
+        parallelEnabled: false,
+        groupKey: "",
+        // 2-guruh: UMUMIY bo'lsa asosiy sinfdan nusxalanadi, aks holda
+        // shu sinfning O'Z fani (fanni foydalanuvchi tanlaydi)
+        pairShare2: Boolean(a.pairShare2),
+        pairSubjectId: a.pairShare2 ? (a.pairSubjectId || "") : (exist?.pairSubjectId || ""),
+        pairTeacherId: a.pairShare2 ? (a.pairTeacherId || "") : (exist?.pairTeacherId || ""),
+        pairRoomId: a.pairShare2 ? (a.pairRoomId || "") : (exist?.pairRoomId || ""),
+        // 3-guruh, 4-guruh… — tuzilishi bir xil, qiymatlari umumiylikka qarab
+        pairExtra: mergePairExtra(a.pairExtra, exist?.pairExtra),
+      };
+      next[classId] = exist
+        ? list.map(x => x.subjectId === subjectId ? linked : x)
+        : [...list, linked];
+    });
     setClassSubjects(next);
+    return ids.length;
+  }
+
+  function addPairClass(subjectId, classId) {
+    if (!classId) return;
+    const a = getAssignment(subjectId);
+    if (!a) return;
+    if (!linkPairClasses(subjectId, [classId])) return;
     const need = pairSideSlots(a).filter(g => !g.shared).length;
     toast?.(
       need
@@ -892,6 +929,69 @@ Fan bilan birga ular ham o'chsinmi?`;
         : `${classes.find(c => c.id === classId)?.name || "Sinf"} guruhga qo'shildi`,
       "success"
     );
+  }
+
+  // ——— «🔁 Parallel dars» — «bir vaqtda bir nechta fan» YOQILGANDA ———
+  // Oddiy parallel dars (`groupKey`) bitta fanni bir nechta sinfga beradi;
+  // bu yerda esa butun KARTA (barcha guruhlari bilan) bog'lanadi, ya'ni
+  // `pairGroupKey`. Shuning uchun tugma o'chirilmaydi — u shunchaki boshqa
+  // mexanizmga ulanadi. Yoqilganda shu darajadagi parallel sinflar
+  // avtomatik qo'shiladi, o'chirilganda bog'lanish uziladi.
+  function togglePairParallel(subjectId, on) {
+    const a = getAssignment(subjectId);
+    if (!a) return;
+    if (!on) { unlinkPairGroup(subjectId); return; }
+    if (autoPairParallelSameGrade(subjectId, true)) return;
+    // Mos parallel sinf topilmadi — kalitni baribir ochamiz, sinfni
+    // foydalanuvchi «🔗 Parallel sinflar» ro'yxatidan o'zi tanlaydi.
+    linkPairClasses(subjectId, []);
+    toast?.("Parallel sinfni pastdagi «🔗 Parallel sinflar» ro'yxatidan tanlang", "warning");
+  }
+
+  // Shu darajadagi sinflarni (11-A, 11-B, 11-V…) bitta kartaga bog'laydi.
+  // Qaytaradi: qo'shilgan sinflar soni.
+  function autoPairParallelSameGrade(subjectId, silent = false) {
+    const a = getAssignment(subjectId);
+    if (!a || !selectedClass) return 0;
+    const subject = subjectById(subjectId);
+    const grade = getGradeFromClassName(selectedClass.name);
+    const members = pairMemberRows(subjectId, a.pairGroupKey);
+    const used = new Set([selectedClassId, ...members.map(m => m.cls.id)]);
+    const room = Math.max(0, PAIR_MAX_EXTRA - members.length);
+    const cand = classesForSubject(subject)
+      .filter(c => !used.has(c.id) && getGradeFromClassName(c.name) === grade)
+      .slice(0, room);
+    if (!cand.length) {
+      if (!silent) {
+        toast?.(
+          room
+            ? `${grade}-sinfda bog'lanmagan boshqa parallel sinf yo'q`
+            : `Guruh to'ldi — bir kartaga ko'pi bilan ${PAIR_MAX_EXTRA + 1} ta sinf kiradi`,
+          "warning"
+        );
+      }
+      return 0;
+    }
+    linkPairClasses(subjectId, cand.map(c => c.id));
+    toast?.(`${grade}-sinf ${subject?.name || "fan"} — ${cand.length} ta parallel sinf bog'landi ✓`, "success");
+    return cand.length;
+  }
+
+  // Kartani parallel sinflardan uzish. A'zo sinflarda fan QOLADI (oddiy
+  // dars bo'lib), faqat bog'lanish va guruh sozlamalari tozalanadi.
+  function unlinkPairGroup(subjectId) {
+    const a = getAssignment(subjectId);
+    const key = String(a?.pairGroupKey || "").trim();
+    const next = { ...classSubjects };
+    Object.entries(next).forEach(([cid, list]) => {
+      next[cid] = (list || []).map(x => {
+        if (x.subjectId !== subjectId) return x;
+        if (cid === selectedClassId) return { ...x, pairGroupKey: "" };
+        if (key && x.pairEnabled && String(x.pairGroupKey || "").trim() === key) return { ...x, ...PAIR_CLEARED };
+        return x;
+      });
+    });
+    setClassSubjects(next);
   }
 
   // Sinfni guruhdan chiqarish. Fan sinfda QOLADI (oddiy dars bo'lib),
@@ -1271,6 +1371,10 @@ Fan bilan birga ular ham o'chsinmi?`;
         text: names.length ? `🧩 + ${names.join(" + ")}` : "🧩 2 fan (fan tanlanmagan)",
         bg: "#e0e7ff", fg: "#4338ca",
       });
+      // Karta boshqa sinflar bilan bog'langan (pairGroupKey)
+      if (String(a.pairGroupKey || "").trim()) {
+        chips.push({ text: "🔁 Parallel sinflar", bg: "#d1fae5", fg: "#065f46" });
+      }
     }
     if (a.levelGroupEnabled) chips.push({ text: "🎯 Daraja guruhi", bg: "#dbeafe", fg: "#1e40af" });
     if (a.weekAltEnabled) chips.push({ text: "⇄ Hafta almashinuvi", bg: "#ede9fe", fg: "#6d28d9" });
@@ -1502,9 +1606,20 @@ Fan bilan birga ular ham o'chsinmi?`;
                                 <input type="checkbox" checked={Boolean(a.spacedDays)} onChange={e => updateAssignment(s.id, { spacedDays: e.target.checked })} />
                                 <span>📆 Ora kunda (kun oralab)</span>
                               </label>
-                              <label className="cs-toggle" title="Parallel dars">
-                                <input type="checkbox" disabled={a.levelGroupEnabled || a.weekAltEnabled || a.pairEnabled} checked={Boolean(a.groupKey)} onChange={e => updateAssignment(s.id, { parallelEnabled: e.target.checked, weekAltEnabled: false, pairEnabled: false, groupKey: e.target.checked ? (a.groupKey || `${getGradeFromClassName(selectedClass?.name)}-sinf ${s.name} parallel — ${selectedClass?.name || ""}`) : "" })} />
-                                <span>🔁 Parallel dars</span>
+                              {/* «Parallel dars» IKKI mexanizmga ulanadi:
+                                  oddiy holatda `groupKey` (bitta fan bir necha
+                                  sinfga), «bir vaqtda bir nechta fan» yoqilganda
+                                  esa `pairGroupKey` — butun karta o'z guruhlari
+                                  bilan boshqa sinflarga bog'lanadi. */}
+                              <label className="cs-toggle" title={a.pairEnabled
+                                ? "Shu kartani boshqa sinflar bilan parallel qilish: hamma guruh ayni soatda, 1-guruh bitta ustozdan o'tadi"
+                                : "Parallel dars"}>
+                                <input type="checkbox" disabled={a.levelGroupEnabled || a.weekAltEnabled}
+                                  checked={a.pairEnabled ? Boolean(String(a.pairGroupKey || "").trim()) : Boolean(a.groupKey)}
+                                  onChange={e => (a.pairEnabled
+                                    ? togglePairParallel(s.id, e.target.checked)
+                                    : updateAssignment(s.id, { parallelEnabled: e.target.checked, weekAltEnabled: false, pairEnabled: false, groupKey: e.target.checked ? (a.groupKey || `${getGradeFromClassName(selectedClass?.name)}-sinf ${s.name} parallel — ${selectedClass?.name || ""}`) : "" }))} />
+                                <span>🔁 Parallel dars{a.pairEnabled ? " (boshqa sinflar bilan)" : ""}</span>
                               </label>
                               <label className="cs-toggle" title="Sinfni 2 guruhga bo'lish">
                                 <input type="checkbox" disabled={a.levelGroupEnabled || a.weekAltEnabled || a.pairEnabled} checked={Boolean(a.splitEnabled)} onChange={e => updateAssignment(s.id, { splitEnabled: e.target.checked, weekAltEnabled: false, pairEnabled: false })} />
@@ -1757,6 +1872,22 @@ Fan bilan birga ular ham o'chsinmi?`;
                                               </div>
                                             );
                                           })}
+                                        </div>
+
+                                        {/* USTOZ SOATI — blokdagi soatlari bo'yicha.
+                                            Ikkala soatda ham o'zi turgan ustoz 1-soatda bir
+                                            guruhga, 2-soatda ikkinchisiga kiradi: soati ikki
+                                            barobar ([swapGroups.js](../utils/swapGroups.js)). */}
+                                        <div className="cs-swap-hours">
+                                          <span className="cs-swap-hours-title">⏱ Ustoz soati (haftasiga):</span>
+                                          {[...swapTeacherHours(a, Number(a.weeklyHours || 0))].map(([tid, hh]) => (
+                                            <span key={tid} className="cs-swap-hours-item"><b>{tName(tid) || "— ustoz —"}</b> {hh} soat</span>
+                                          ))}
+                                          <em>
+                                            Blokning IKKALA soatida ham turgan ustoz {Number(a.weeklyHours || 0) * 2} soat oladi
+                                            (1-soatda bir guruhga, 2-soatda ikkinchisiga kiradi); faqat bitta soatida
+                                            turgani — {Number(a.weeklyHours || 0)} soat.
+                                          </em>
                                         </div>
                                       </div>
                                     );
@@ -2054,6 +2185,42 @@ Fan bilan birga ular ham o'chsinmi?`;
                                         </div>
                                       </div>
 
+                                      {/* Guruhi sozlanmagan sinf kartadan TUSHIB QOLADI:
+                                          generator uni alohida oddiy dars deb joylashtiradi,
+                                          parallel bo'lmaydi va ustoz soati ikkilanadi. */}
+                                      {(() => {
+                                        const rows = [
+                                          { name: selectedClass?.name || "Shu sinf", row: a },
+                                          ...members.map(m => ({ name: m.cls.name, row: m.a })),
+                                        ];
+                                        const out = rows.filter(({ row }) => {
+                                          const g2 = slotsOf(row).find(g => g.isSecond);
+                                          return g2 && !g2.shared && (!g2.subjectId || !g2.teacherId);
+                                        }).map(x => x.name);
+                                        // 3-guruh va undan keyingilari: yarim sozlangani jadvalga chiqmaydi
+                                        const half = [];
+                                        rows.forEach(({ name, row }) => {
+                                          slotsOf(row).forEach(g => {
+                                            if (g.isSecond || g.shared) return;
+                                            if (!g.subjectId && !g.teacherId) return;
+                                            if (!g.subjectId || !g.teacherId) half.push(`${name} · ${g.name}`);
+                                          });
+                                        });
+                                        if (!out.length && !half.length) return null;
+                                        return (
+                                          <div className="cs-pair-warn">
+                                            {out.length > 0 && (
+                                              <>⚠️ <b>{out.join(", ")}</b> — 2-guruh fani yoki ustozi tanlanmagan.
+                                                Bunday sinf umumiy kartaga qo'shilmaydi: darsi alohida joylashadi.</>
+                                            )}
+                                            {out.length > 0 && half.length > 0 && <br />}
+                                            {half.length > 0 && (
+                                              <>⚠️ {half.join(" · ")} — fan yoki ustoz tanlanmagan, bu guruh jadvalga chiqmaydi.</>
+                                            )}
+                                          </div>
+                                        );
+                                      })()}
+
                                       <div className="cs-pp-list">
                                         {/* Joriy sinf — sozlamalari yuqoridagi kartalarda */}
                                         <div className="cs-pp-card is-owner">
@@ -2162,6 +2329,11 @@ Fan bilan birga ular ham o'chsinmi?`;
                                               <option value="">— sinfni tanlang —</option>
                                               {addable.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                                             </select>
+                                            <button type="button" className="btn btn-secondary btn-sm"
+                                              onClick={() => autoPairParallelSameGrade(s.id)}
+                                              title="Shu darajadagi barcha parallel sinflarni (masalan 11-A, 11-B, 11-V) bitta kartaga bog'lash">
+                                              ⚡ Barcha parallellarini bog'lash
+                                            </button>
                                           </>
                                         ) : (
                                           <span className="cs-pp-add-note">Qo'shish uchun mos sinf yo'q</span>

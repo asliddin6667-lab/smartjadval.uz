@@ -95,12 +95,80 @@ export function swapRoomIds(a) {
   return [...new Set([main.r1.roomId, main.r2.roomId, second.r1.roomId, second.r2.roomId].filter(Boolean))];
 }
 
-// ——— USTOZ SOATI ———
-// Almashinuv `weeklyHours` ta 2 soatlik blokdan iborat, ya'ni har blokda
-// har bir ustoz 1 soat ishlaydi. Demak 2-soatda ALOHIDA ustoz tanlangan
-// bo'lsa — har ikkalasi `weeklyHours` soat oladi. Ustoz ikkala soatda ham
-// o'zi tursa hisob ilgarigidek `weeklyHours` bo'lib qolaveradi (bu qoida
-// hamma joyda bir xil: ustoz almashinuv qatoridan `weeklyHours` soat oladi).
+// ═══════════════════════════════════════════════════════════════════
+//  USTOZ VA XONA SOATI
+//
+//  Almashinuv `weeklyHours` ta 2 SOATLIK blokdan iborat: sinf setkasida
+//  har blok 2 katak egallaydi (asosiy fan + 2-fan, ya'ni sinf bu qatordan
+//  jami `weeklyHours × 2` soat oladi).
+//
+//  ⚠️ USTOZNING BLOKDAGI SOATI 1 EMAS, 2 BO'LISHI MUMKIN — u blokning
+//  qaysi soat(lar)ida turishiga bog'liq:
+//
+//    • 2-soatga ALOHIDA ustoz tanlanmagan bo'lsa, o'sha ustoz 1-soatda
+//      bir guruhga, 2-soatda ikkinchi guruhga kiradi — blokda 2 SOAT
+//      ishlaydi, ya'ni `weeklyHours × 2`;
+//    • 2-soatga boshqa ustoz tanlangan bo'lsa (`swapAltTeachers`) — har
+//      biri blokda 1 soat, ya'ni `weeklyHours`.
+//
+//  Ilgari hamma joyda `weeklyHours` yozilardi va ikkala soatda ham o'zi
+//  turgan ustozning yarim yuklamasi ko'rinmasdi: setkada 2 soat band edi,
+//  rejada esa 1 soat. Xona ham AYNI shu qoida bo'yicha sanaladi.
+//
+//  Shuning uchun soat sanaydigan kod `swapTeacherIds()` ni EMAS,
+//  `swapTeacherParts()` / `swapTeacherHours()` / `swapRoomHours()` ni
+//  ishlatsin.
+// ═══════════════════════════════════════════════════════════════════
+
+/**
+ * Blokning har bir soatidagi bandlik: `[{ round, groupPart, subjectId,
+ * teacherId, roomId }]` — 2 soat × 2 guruh = 4 yozuv.
+ */
+export function swapOccupancy(a) {
+  const out = [];
+  swapSlotGroups(a).forEach((gs, round) => gs.forEach((g) => out.push({ ...g, round })));
+  return out;
+}
+
+/**
+ * Ustoz-fan bo'laklari SOATI bilan: `[{ teacherId, subjectId, hours }]`.
+ * `blocks` — 2 soatlik bloklar soni (`weeklyHours`). Ustoz blokning
+ * nechta soatida tursa — soati shuncha marta ko'p.
+ */
+export function swapTeacherParts(a, blocks) {
+  const n = Math.max(0, Number(blocks || 0));
+  const map = new Map();
+  swapOccupancy(a).forEach((g) => {
+    if (!g.teacherId) return;
+    const key = `${g.teacherId}|${g.subjectId}`;
+    let e = map.get(key);
+    if (!e) map.set(key, (e = { teacherId: g.teacherId, subjectId: g.subjectId, rounds: new Set() }));
+    e.rounds.add(g.round);
+  });
+  return [...map.values()].map((e) => ({ teacherId: e.teacherId, subjectId: e.subjectId, hours: n * e.rounds.size }));
+}
+
+/** `Map(teacherId → soat)` — almashinuv qatoridagi ustoz yuklamasi */
+export function swapTeacherHours(a, blocks) {
+  const out = new Map();
+  swapTeacherParts(a, blocks).forEach((p) => out.set(p.teacherId, (out.get(p.teacherId) || 0) + p.hours));
+  return out;
+}
+
+/** `Map(roomId → soat)` — xona ham blokning nechta soatida band bo'lsa, shuncha */
+export function swapRoomHours(a, blocks) {
+  const n = Math.max(0, Number(blocks || 0));
+  const rounds = new Map();
+  swapOccupancy(a).forEach((g) => {
+    if (!g.roomId) return;
+    let s = rounds.get(g.roomId);
+    if (!s) rounds.set(g.roomId, (s = new Set()));
+    s.add(g.round);
+  });
+  const out = new Map();
+  rounds.forEach((s, rid) => out.set(rid, n * s.size));
+  return out;
+}
 
 /** Shu fanni almashinuvda beradigan ustozlar (asosiy yoki 2-fan) */
 export function swapTeachersOfSubject(a, subjectId) {
