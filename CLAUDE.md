@@ -18,7 +18,11 @@ npm run build     # dist/ ga production build
 npm run lint      # eslint . (flat config, dist/ e'tiborsiz)
 npm run preview   # build natijasini ko'rish
 
-node scripts/blobRoundtrip.mjs   # bulut formati yo'qotishsizmi? (pastga qarang)
+npm run build:engine   # jadval dvigatelini qurib Edge Function ichiga joylash
+npm run check:bundle   # dvigatel dist/ ga sizib chiqmadimi? (build'dan keyin)
+
+node scripts/blobRoundtrip.mjs      # bulut formati yo'qotishsizmi? (pastga qarang)
+node scripts/buildDemoSchedule.mjs  # demo jadvalni qayta yaratish
 ```
 
 Windows PowerShell'da `npm.ps1` execution-policy xatosi chiqsa — `npm.cmd run dev`.
@@ -122,8 +126,8 @@ tarixi, [Backups.jsx](src/pages/Backups.jsx) — "Zaxira nusxalar" sahifasi,
   (avval o'sha ketadi).
 - **Internet yo'q → FAQAT O'QISH.** Sinxronizatsiya holati `offline`/`error` bo'lsa
   App.jsx `<main>` ustidagi `guardClick`/`guardFocus` barcha tahrirlashni bloklaydi
-  va qizil banner chiqaradi (mehmon rejimi bilan bir xil naqsh; qulfdan chiqarish
-  atributi — `data-sync-allow`). Bir martalik uzilishda qulflanmaydi — ketma-ket
+  va qizil banner chiqaradi (mehmon rejimi bilan bir xil naqsh; qulfdan chiqarish —
+  `ref={allowRef}`, pastga qarang). Bir martalik uzilishda qulflanmaydi — ketma-ket
   ikki muvaffaqiyatsiz tekshiruv kerak (`headFailures`).
 - App.jsx `syncDone` bayrog'i: kirishdagi sinxronizatsiya tugamaguncha `schedulePush`
   chaqirilmaydi va tahrirlash ham kutdiriladi (`syncPending`).
@@ -424,9 +428,59 @@ o'qiganidan, sinf setkasida har bir **TURLI** fan `weeklyHours` ta soat egallayd
 ham shu sababli takroriy fan indeksini (va `req.sIdx` ni) tashlaydi.
 Ustoz yuklamasi esa aksincha — har guruh ustozi ALOHIDA sanaladi.
 
+### DVIGATEL BRAUZERDA EMAS — SERVERDAN YUKLANADI
+
+Jadval tuzish dvigateli (`attemptSchedule` va uning atrofidagi hamma narsa)
+**bundle'ga kirmaydi**. Sabab: ma'lumot RLS bilan qulflangan (obunasiz hech
+narsa saqlanmaydi), lekin jadval TUZISH brauzerda bajarilar edi — ya'ni
+bundle'ni patch qilgan odam obunasiz ham jadval tuzib, Excel'ga chiqarib
+olardi. Endi kodning o'zi obuna tekshiruvidan keyin beriladi.
+
+Bitta edi — uchtaga bo'lindi:
+
+| Fayl | Nima | Qayerda ishlaydi |
+|---|---|---|
+| [scheduleCore.js](src/utils/scheduleCore.js) | umumiy yordamchilar (`isTeachingSlot`, `slotsOverlap`, `classHasLunchAt`, `budgetFor`, blok bo'lish, vaqt bandlari…) | bundle'da (UI ga ham kerak) |
+| [scheduleGenerator.js](src/utils/scheduleGenerator.js) | **zichlagich** `compactSchedule()` + core'ni qayta eksport | bundle'da |
+| [scheduleEngine.js](src/engine/scheduleEngine.js) | **dvigatel**: `attemptSchedule`, `generateScheduleAttempt`, `generateSchedule`, `buildValidationReport` | faqat serverdan yuklanadi |
+
+Oqim: [engineLoader.js](src/services/engineLoader.js) `schedule-engine` Edge
+Function'idan kodni `fetch` qiladi (Authorization header bilan) → `Blob` →
+`import(blobUrl)` → modul sessiya davomida keshda. Funksiya avval
+`has_active_sub()` ni foydalanuvchi tokeni bilan chaqiradi va obuna yo'q bo'lsa
+**402** qaytaradi. `eval` ishlatilmaydi.
+
+**Zichlagich ATAYLAB brauzerda qoldi** — u generatsiya siklida har raundda va
+«🧲 Oynani yopish» tugmasida chaqiriladi; serverga chiqarilsa har bosishda
+~200 KB jadval u yoqqa-bu yoqqa yurardi.
+
+⚠️ **Qoidalar:**
+
+1. `src/` ichidagi hech bir fayl `src/engine/...` dan **statik import
+   qilmasin** — Vite uni jimgina bundle'ga qo'shadi va himoya yo'qoladi.
+   Yagona to'g'ri yo'l — `loadEngine()`. Tekshiruv:
+   `npm run build && npm run check:bundle`
+   ([checkBundle.mjs](scripts/checkBundle.mjs) minifikatsiyadan keyin ham
+   qoladigan belgilarni qidiradi: `teacherHints`, `perClassSIdx` va h.k.).
+2. Dvigatelga tegilsa — **`npm run build:engine`** va keyin
+   `supabase functions deploy schedule-engine`. Aks holda serverda eski kod
+   qoladi va o'zgarishingiz hech qayerda ko'rinmaydi.
+3. Dev serverda (`npm run dev`) dvigatel to'g'ridan-to'g'ri manbadan olinadi
+   (`import.meta.env.DEV` shoxi) — Edge Function deploy qilinmagan bo'lsa ham
+   ishlaydi. Production build'da bu shox butunlay olib tashlanadi.
+4. **Demo hisobining obunasi yo'q**, ya'ni u dvigatelni ola olmaydi. Shuning
+   uchun demo jadval oldindan tuzilgan:
+   [demoSchedule.js](src/utils/demoSchedule.js) (avtomatik yaratilgan, qo'lda
+   tahrirlanmaydi). demoData.js dagi sinf/ustoz ro'yxati o'zgarsa —
+   `node scripts/buildDemoSchedule.mjs`.
+
+Bu **kriptografik himoya emas**: obunasi bor odam kodni tarmoq panelidan
+saqlab qolishi mumkin. Maqsad — obunasi YO'Q odamda dvigatel umuman
+bo'lmasligi (server tomondagi RLS bilan birga: saqlash ham, tuzish ham yo'q).
+
 ### Jadval dvigatellari
 
-- [scheduleGenerator.js](src/utils/scheduleGenerator.js) (~3700 qator) — avtomatik
+- [scheduleEngine.js](src/engine/scheduleEngine.js) (~3700 qator) — avtomatik
   generatsiya. `generateSchedule()` bir necha `generateScheduleAttempt()` chaqiradi
   (har birida boshqa `seed` va `strategy`), natijalarni `betterResult()` bilan
   leksikografik taqqoslaydi: tushmagan soat → joylangan soat → kun o'rtasidagi oyna →
@@ -906,8 +960,14 @@ Jadvallar: `profiles`, `schools`, `school_backups`, `districts`, `schedule_submi
 RPC: `admin_set_subscription`, `admin_set_role`, `admin_set_status`, `admin_create_user`,
 `admin_delete_user`, `admin_set_district`, `admin_set_location`, `admin_set_phone`,
 `admin_update_profile`, `admin_revoke_subscription`, `clear_password_change_flag`.
-Edge Function: **`quick-handler`** — admin tomonidan parol tiklash (`RESET_PASSWORD_FN`
-konstantasi authService va districtService'da takrorlangan).
+Edge Function'lar:
+- **`quick-handler`** — admin tomonidan parol tiklash (`RESET_PASSWORD_FN`
+  konstantasi authService va districtService'da takrorlangan). Manbasi repoda YO'Q.
+- **`schedule-engine`** — jadval tuzish dvigatelining kodini qaytaradi, faqat
+  `has_active_sub()` rost bo'lganda (aks holda 402). Manbasi repoda:
+  [supabase/functions/schedule-engine/index.ts](supabase/functions/schedule-engine/index.ts);
+  dvigatelning o'zi `engine.gen.ts` ga `npm run build:engine` bilan joylanadi
+  (base64). Deploy: `supabase functions deploy schedule-engine`.
 
 Xavfsizlik butunlay RLS va `security definer` funksiyalarda — frontend faqat so'rov
 yuboradi, ruxsatni server tekshiradi.
@@ -942,9 +1002,44 @@ Kesh eskirishi mumkin: Supabase access token ~1 soatda tugaydi. Shuning uchun ha
 himoyalangan chaqiruvdan oldin `getFreshSession()` ishlatiladi va token `Authorization`
 header'ida ANIQ yuboriladi. Yangi admin amali qo'shsangiz — shu naqshni takrorlang.
 
-**Mehmon rejimi (paywall):** obuna tugagan bo'lsa `App.jsx` `<main>` ustida
-`onClickCapture`/`onFocusCapture` bilan barcha bosishlarni ushlaydi va `PaywallModal`
-ochadi. Qulfdan chiqarish uchun element `data-pw-allow` atributiga ega bo'lishi kerak.
+**Mehmon rejimi (paywall) — UCH QATLAM.** Qulf endi "ustidan qo'yilgan" emas:
+
+1. **Sahifa umuman render qilinmaydi.** `contentLocked` rost bo'lsa `renderPage()`
+   CHAQIRILMAYDI — o'rniga 🔒 "Obuna faol emas" paneli chiqadi. Bosiladigan
+   narsaning o'zi yo'q, ya'ni qorovulni chetlab o'tishning ma'nosi qolmaydi.
+2. **Qulf holati SERVERDAN keladi.** `checkSubscription()` localStorage keshini
+   o'qiydi va faqat KO'RSATKICH uchun ishlatiladi (qolgan kunlar, banner matni);
+   qulf esa `verifySubscription()` ([authService.js](src/services/authService.js))
+   javobiga bog'langan — u `profiles` qatorini har safar Supabase'dan so'raydi
+   (mount + oynaga qaytilganda). `sub_status`/`role`/`status` ustunlariga
+   foydalanuvchida `grant update` yo'q, demak javobni soxtalashtirib bo'lmaydi.
+   **Demo hisobi ham shu javobdan aniqlanadi** (`demo`) — aks holda keshdagi
+   email'ni `demo@smartjadval.uz` ga almashtirib qulf ochilardi (demo ozod).
+   Server javob bermasa (`null`) keshga qaytiladi, lekin bunda bulut ham
+   ishlamayapti — `cloudBlocked` tahrirlashni baribir to'sadi.
+3. **Bulutning "yozishga ruxsat yo'q" javobi ham qulflaydi.** `syncState === "denied"`
+   (RLS 42501) `contentLocked` ga kiradi: profil so'rovini brauzerda to'sib qo'yish
+   mumkin, serverning yozishni rad etishini esa — yo'q.
+
+Bulardan tashqari `<main>` ustida `onClickCapture`/`onFocusCapture` qorovuli
+saqlanib qoldi (bulut qulfi va oraliq holatlar uchun) va `PaywallModal` ochadi.
+
+⚠️ **Qulfdan ozod element ATRIBUT bilan belgilanmaydi.** Ilgari `data-pw-allow` /
+`data-sync-allow` atributlari ishlatilar va `el.closest()` bilan qidirilardi —
+brauzer konsolida bitta qator butun qulfni ochib yuborardi:
+`document.body.setAttribute('data-pw-allow','true')` (BODY har bir elementning
+ajdodi). Endi ruxsat DOM da ko'rinmaydi: element `ref={allowRef}` (ikkala qulf)
+yoki `ref={pwAllowRef}` oladi, havola App.jsx dagi `allowNodes` WeakSet lariga
+tushadi, `allowedWithin()` esa ajdodlar zanjirini shu to'plamlar bo'yicha
+tekshiradi. To'plam komponent yopilmasida — konsoldan unga yozib bo'lmaydi.
+
+**Baribir bu FAQAT UI to'sig'i.** Haqiqiy himoya server tomonda:
+[subscription_rls_setup.sql](subscription_rls_setup.sql) dagi `has_active_sub()`
+obunasiz foydalanuvchiga `schools` va `school_backups` ga yozishga ruxsat
+bermaydi (o'qish ochiq — mehmon o'z jadvalini ko'radi), `profiles` da esa
+`sub_status`/`role`/`status` ustunlariga `grant update` YO'Q. cloudSync 42501
+xatosini `denied` holatiga aylantiradi va "Obuna faol emas" banneri chiqadi.
+Ya'ni konsolda qulfni ochgan odam ham ma'lumotini bulutga saqlay olmaydi.
 
 ### Excel import/export
 
@@ -994,5 +1089,9 @@ bir necha MB — shu brauzerda IKKINCHI profil ochilsa kvota to'ladi.
   bo'lsa — [Schedule.jsx](src/pages/Schedule.jsx) `capacityWarnings()` ga yozing.
 - **Ildizdagi `README_*.md` fayllari** — eski versiya eslatmalari (port 5173, demo
   parollari va h.k. eskirgan). Haqiqat manbai — kod va shu fayl.
-- Fayllar katta (`scheduleGenerator.js` 3.7k qator, `Schedule.jsx` ~2k). Tahrirlashdan
-  oldin kerakli bo'limni grep bilan toping, butun faylni qayta yozmang.
+- Fayllar katta (`src/engine/scheduleEngine.js` 3.7k qator, `Schedule.jsx` ~2k).
+  Tahrirlashdan oldin kerakli bo'limni grep bilan toping, butun faylni qayta yozmang.
+- **Quyidagi izohlarda `scheduleGenerator.js` deb yozilgan ko'p joy endi
+  [scheduleEngine.js](src/engine/scheduleEngine.js) da** (bo'linish tarixi yuqorida).
+  Faylda qolganlari: `compactSchedule` va core'ning qayta eksporti. Funksiyani
+  qidirsangiz ikkala faylga ham qarang.

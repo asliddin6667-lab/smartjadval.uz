@@ -1,5 +1,9 @@
 import { STANDARD_SUBJECTS, SUBJECT_COLORS } from "./constants";
-import { generateSchedule } from "./scheduleGenerator";
+// Demo jadval OLDINDAN tuzilgan va faylga yozilgan. Sabab: jadval tuzish
+// dvigateli endi bundle'da emas — u obuna tekshiruvidan keyin serverdan
+// yuklanadi (engineLoader.js), demo hisobining esa obunasi yo'q.
+// Qayta yaratish: node scripts/buildDemoSchedule.mjs
+import demoSchedule from "./demoSchedule.js";
 
 const EXTRA_SUBJECTS = [
   { name: "Tabiatshunoslik", weeklyHours: 1, type: "Oddiy" },
@@ -211,7 +215,8 @@ export function buildDemoSchoolData() {
     }).filter(Boolean);
   });
 
-  const schedule = generateSchedule(classes, subjects, teachers, rooms, timeslots, classSubjects, lunchGroups);
+  // Tayyor nusxa (fayldagi asl obyekt tahrirlanib ketmasin)
+  const schedule = structuredClone(demoSchedule);
 
   return {
     settings: { schoolName: "Demo Turon odob-ilm maktabi", academicYear: "2026-2027" },

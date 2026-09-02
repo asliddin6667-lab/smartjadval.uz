@@ -1,9 +1,12 @@
 import { useMemo, useRef, useState } from "react";
 import { DAYS, typeOfGroup } from "../utils/constants";
 import {
-  generateSchedule, budgetFor, isTeachingSlot, classHasLunchAt, classesHaveLunchAt, compactSchedule,
+  budgetFor, isTeachingSlot, classHasLunchAt, classesHaveLunchAt, compactSchedule,
   isFixedMondaySubject, QUAD_SIZE,
 } from "../utils/scheduleGenerator";
+// Jadval tuzish dvigateli bundle'da YO'Q — u serverdan, obuna
+// tekshiruvidan keyin yuklanadi. Qarang: src/services/engineLoader.js
+import { loadEngine } from "../services/engineLoader";
 import { exportColoredSchedule } from "../utils/coloredScheduleExport";
 import {
   collectCardEntries, unitOf, resolveMove, applyActions, softWarnings, checkPlace,
@@ -1054,6 +1057,18 @@ export default function SchedulePage({
     };
 
     try {
+      // ——— DVIGATELNI YUKLASH (serverdan) ———
+      // Kod bundle'da turmaydi: Edge Function uni faqat obunasi faol
+      // foydalanuvchiga beradi. Birinchi chaqiruvda ~0.3 s, keyin kesh.
+      // Xato xabari engineLoader'da tayyorlanadi (obuna faol emas,
+      // internet yo'q, sessiya tugagan). `try/catch` ataylab
+      // ishlatilmadi — u React compiler tekshiruvini chalg'itadi.
+      const engine = await loadEngine().catch((e) => {
+        toast?.(e?.message || "Jadval tuzish moduli yuklanmadi", "error");
+        return null;
+      });
+      if (!engine) return;
+
       // ——— IKKI BOSQICHLI QIDIRUV ———
       // 1) TEZKOR: past byudjetli bir necha urinish. Har urinishda BARCHA
       //    qoidalar (ustoz/sinf/xona bandligi, dam kuni, obed, smena, bloklar)
@@ -1118,7 +1133,7 @@ export default function SchedulePage({
         const strategy = fast
           ? r % 6
           : (r % 3 === 2 ? (bestStrategy + 1 + Math.floor(r / 3)) % 6 : bestStrategy);
-        const raw = generateSchedule(
+        const raw = engine.generateSchedule(
           classes, subjects, teachers, rooms, timeslots, classSubjects, lunchGroups, seed,
           { solveMs: b.solveMs, compactMs: b.compactMs, polishMs: b.polishMs, strategy, quiet: true, parallelDays: parOn }
         );
@@ -1694,19 +1709,26 @@ export default function SchedulePage({
       const hours = info.total;
       const off = new Set(Array.isArray(t?.offDays) ? t.offDays : []);
       const bs = t?.blockedSlots && typeof t.blockedSlots === "object" ? t.blockedSlots : {};
+      // `avail`     — HAQIQIY bo'sh soat (ustoz setkasidagi qulflar olib tashlangan)
+      // `availOpen`  — qulflar BO'LMAGANDA qancha soat bo'lar edi
+      // Ikkalasi ham kerak: sig'im yetmasa, sababi smena/dam kunimi yoki
+      // foydalanuvchi o'zi qo'ygan 🔒 qulflarmi — shundan aniqlanadi.
       let avail = 0;
+      let availOpen = 0;
       DAYS.forEach((day) => {
         if (off.has(day)) return;
         const bl = new Set(Array.isArray(bs[day]) ? bs[day] : []);
         sortedTimeslots.forEach((ts) => {
-          if (!isTeachingSlot(ts) || bl.has(ts.id)) return;
+          if (!isTeachingSlot(ts)) return;
           // Ustoz shu soatda kamida bitta o'z sinfiga dars bera oladimi?
           const ok = [...info.classIds].some((cid) => {
             const c = classes.find((x) => x.id === cid);
             if (Array.isArray(c?.offDays) && c.offDays.includes(day)) return false;
             return slotAllowsClass(ts, cid) && !classHasLunchAt(ts, cid, lunchGroups, day);
           });
-          if (ok) avail += 1;
+          if (!ok) return;
+          availOpen += 1;
+          if (!bl.has(ts.id)) avail += 1;
         });
       });
       const max = Number(t?.maxWeeklyHours || 0);
@@ -1715,6 +1737,9 @@ export default function SchedulePage({
         name: getName(teacherMap, tid),
         hours,
         avail,
+        availOpen,
+        // «🔒 Ustoz setkasi»da qulflangani uchun yo'qotilgan soat
+        lockedLoss: Math.max(0, availOpen - avail),
         max,
         classNames: [...info.classIds].map((cid) => classes.find((c) => c.id === cid)?.name).filter(Boolean),
         subjectIds: info.subjectIds,
@@ -1848,17 +1873,45 @@ export default function SchedulePage({
   // sig'maydi" degan BASHORAT amalda rad etilgan: uni ko'rsatish faqat
   // chalg'itadi. «Maksimal haftalik soat» limiti esa jadvaldan qat'i nazar
   // buzilgan bo'lishi mumkin — u har doim ko'rinadi.
+  // ⚠️ SABABNI TO'G'RI AYTISH SHART. Ilgari bu yerda har doim «uning
+  // smenasida atigi N ta dars soati bor» deb yozilar va «ikkinchi ustoz
+  // qo'ying yoki soatni kamaytiring» deb maslahat berilardi. Aslida eng
+  // ko'p uchraydigan sabab butunlay boshqa: foydalanuvchi «🔒 Ustoz
+  // setkasi» sahifasida kataklarni O'ZI qulflab qo'ygan bo'ladi. Yolg'on
+  // sabab ko'rsatilsa, direktor smenani ham, soatni ham behuda titkilaydi,
+  // jadval esa baribir chiqmaydi. Shuning uchun qulf sababli yo'qolgan
+  // soat (`lockedLoss`) alohida ajratib ko'rsatiladi.
+  const TEACHER_CAP_LIMIT = 8;
+
   function teacherCapacityWarnings(scheduleComplete = false) {
-    return teacherLoadRows()
-      .filter((r) => (r.overSlots && !scheduleComplete) || r.overLimit)
-      .slice(0, 6)
+    const rows = teacherLoadRows()
+      .filter((r) => (r.overSlots && !scheduleComplete) || r.overLimit);
+    const out = rows
+      .slice(0, TEACHER_CAP_LIMIT)
       .map((r) => {
         const where = r.classNames.slice(0, 5).join(", ") + (r.classNames.length > 5 ? "…" : "");
         if (r.overSlots && !scheduleComplete) {
+          if (r.lockedLoss > 0) {
+            // Qulflar ochilsa soat sig'adimi? Sig'sa — yagona sabab shu.
+            const enough = r.hours <= r.availOpen;
+            const head = r.avail === 0
+              ? `🔒 ${r.name}: «🔒 Ustoz setkasi»da BARCHA kataklari qulflangan (${r.lockedLoss} ta) — bu ustozga birorta ham dars qo'yib bo'lmaydi`
+              : `🔒 ${r.name}: haftada ${r.hours} soat dars berishi kerak, lekin «🔒 Ustoz setkasi»da ${r.lockedLoss} ta katak qulflangan — ochiq atigi ${r.avail} ta soat qoldi`;
+            const tail = enough
+              ? `Qulflar ochilsa bu soatlar to'liq joylashadi (qulfsiz ${r.availOpen} ta soat bo'lardi).`
+              : `Qulflar butunlay ochilsa ham atigi ${r.availOpen} ta soat bo'ladi — qulfni oching VA shu fanlarga ikkinchi ustoz qo'ying yoki soatni kamaytiring.`;
+            return `${head}. ${r.hours - r.avail} soat jadvalga sig'maydi (${where}). «🔒 Ustoz setkasi» sahifasiga kiring, ustozni tanlang va «🔓 Hammasini ochish»ni bosing. ${tail}`;
+          }
           return `👤 ${r.name}: haftada ${r.hours} soat dars berishi kerak, lekin uning smenasida atigi ${r.avail} ta dars soati bor — ${r.hours - r.avail} soat HECH QANDAY jadvalga sig'maydi (${where}). Yechim: shu fanlarga ikkinchi ustoz qo'ying yoki soatni kamaytiring.`;
         }
         return `👤 ${r.name}: ${r.hours} soat yuklama, lekin «maksimal haftalik soat» ${r.max} qilib belgilangan (${where}). Limitni oshiring yoki yukni bo'ling.`;
       });
+    // Ro'yxat kesilgani ham aytilsin — aks holda 16 ta muammoli ustozdan
+    // 8 tasi ko'rinib, foydalanuvchi «hammasini tuzatdim» deb o'ylaydi.
+    if (rows.length > TEACHER_CAP_LIMIT) {
+      out.push(`… va yana ${rows.length - TEACHER_CAP_LIMIT} ta ustozda xuddi shunday muammo bor — ro'yxat qisqartirildi.`);
+    }
+    return out;
   }
 
   // ——— NAZORAT SIG'IMI (1–4 sinf) ———

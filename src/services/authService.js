@@ -52,6 +52,9 @@ import {
 
 const SESSION_KEY = "auth_current_user";
 
+// Ko'rgazma hisobi — qulfdan ozod (cloudSync.js dagi DEMO_EMAIL bilan bir xil)
+const DEMO_EMAIL = "demo@smartjadval.uz";
+
 // Edge Function nomi. Supabase Dashboard'da funksiya "quick-handler"
 // nomi bilan deploy qilingan. Keyinchalik alohida "admin-reset-password"
 // funksiyasi yaratsangiz, faqat shu qatorni o'zgartirasiz.
@@ -80,7 +83,7 @@ const CAPTCHA_ERR_MSG =
 //  boradi. Sessiya umuman bo'lmasa (refresh token ham eskirgan) —
 //  aniq xabar bilan to'xtatamiz.
 // ---------------------------------------------------------------------
-async function getFreshSession() {
+export async function getFreshSession() {
   const { data } = await supabase.auth.getSession();
   let session = data?.session || null;
 
@@ -466,7 +469,50 @@ export async function refreshCurrentUser() {
 }
 
 // ---------------------------------------------------------------------
+//  OBUNA HOLATI — SERVERDAN (keshga ISHONMAYDI)
+//
+//  `checkSubscription()` localStorage'dagi profil nusxasini o'qiydi,
+//  ya'ni uni brauzer konsolidan tahrirlab qulfni ochib bo'ladi.
+//  Bu funksiya esa profilni HAR SAFAR serverdan so'raydi.
+//
+//  Nega buni soxtalashtirib bo'lmaydi: `profiles` jadvalida
+//  `sub_status` / `sub_expires_at` / `role` ustunlariga foydalanuvchi
+//  YOZA olmaydi — supabase_setup.sql dagi `grant update (...)` ro'yxati
+//  faqat name/school_name/email/phone/region/district ni beradi.
+//  Ya'ni serverdan kelgan javob haqiqiy holat.
+//
+//  Qaytadi:
+//    { verified: true,  blocked: bool }  — server javob berdi
+//    { verified: false, blocked: false } — server javob bermadi
+//        (internet yo'q). Chaqiruvchi bunda keshga qaytadi; tahrirlash
+//        baribir bloklangan bo'ladi, chunki bulut ham ishlamayapti
+//        (App.jsx `cloudBlocked` — "faqat o'qish" rejimi).
+// ---------------------------------------------------------------------
+export async function verifySubscription() {
+  try {
+    const { data } = await supabase.auth.getSession();
+    if (!data?.session) return { verified: true, blocked: true, demo: false };
+
+    const fresh = await fetchOwnProfile(data.session.user.id);
+    if (!fresh) return { verified: false, blocked: false, demo: false };
+
+    return {
+      verified: true,
+      blocked: checkSubscription(fresh).blocked,
+      // Demo hisobi qulfdan ozod, shuning uchun uning ham SERVERDAGI
+      // email'i qaytariladi: keshdagi email'ni konsolda
+      // "demo@smartjadval.uz" ga almashtirib qulfni ochib bo'lmasin.
+      demo: fresh.email === DEMO_EMAIL,
+    };
+  } catch {
+    return { verified: false, blocked: false, demo: false };
+  }
+}
+
+// ---------------------------------------------------------------------
 //  OBUNA HOLATI (sinxron — keshdagi profil asosida)
+//  DIQQAT: bu faqat UI ko'rsatkichi uchun (qolgan kunlar, banner).
+//  QULF uchun yuqoridagi `verifySubscription()` ishlatiladi.
 // ---------------------------------------------------------------------
 const DAY_MS = 24 * 60 * 60 * 1000;
 

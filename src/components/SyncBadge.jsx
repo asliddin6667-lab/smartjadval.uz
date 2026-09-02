@@ -10,6 +10,11 @@ import { useEffect, useState } from "react";
 //    pending / saving  -> "Saqlanmoqda..."   (ko'k)
 //    saved             -> "Saqlandi ✓"       (yashil, keyin so'nadi)
 //    offline / error   -> "Saqlanmadi"       (qizil, "Qayta urinish" tugmasi)
+//    denied            -> "Obuna faol emas"  (to'q sariq)
+//
+//  "denied" — server RLS yozishni rad etdi (obuna faol emas). Uni
+//  "offline" dan AJRATISH shart: aks holda foydalanuvchi internetini
+//  bekorga tekshiradi. Tugma qoladi — to'lovdan keyin bosib tekshiradi.
 //
 //  Qizil holatda ilova FAQAT O'QISH rejimiga o'tadi (App.jsx) — shuning
 //  uchun nishon yo'qolmaydi va tugmasi doim ko'rinib turadi.
@@ -21,6 +26,7 @@ const STYLES = {
   saved: { bg: "linear-gradient(135deg,#16a34a,#059669)", icon: "✓", text: "Saqlandi" },
   offline: { bg: "linear-gradient(135deg,#dc2626,#b91c1c)", icon: "📴", text: "Bulutga ulanib bo'lmadi" },
   error: { bg: "linear-gradient(135deg,#dc2626,#b91c1c)", icon: "⚠️", text: "Saqlanmadi" },
+  denied: { bg: "linear-gradient(135deg,#f59e0b,#d97706)", icon: "💳", text: "Obuna faol emas" },
   idle: { bg: "linear-gradient(135deg,#64748b,#475569)", icon: "☁️", text: "Bulut bilan sinxron" },
 };
 
@@ -55,18 +61,22 @@ export default function SyncBadge({ state, onRetry, retrying = false }) {
 
   const s = STYLES[kind] || STYLES.idle;
   const failed = kind === "offline" || kind === "error";
+  const denied = kind === "denied";
   // Uzoq cho'zilgan "saqlanmoqda" ham qizil ko'rinadi va tugma beradi
-  const bad = failed || slow;
-  const label = failed
-    ? "Saqlanmadi — internetni tekshiring"
-    : slow
-      ? "Saqlash cho'zilyapti..."
-      : s.text;
+  const bad = failed || denied || slow;
+  const label = denied
+    ? "Obuna faol emas — saqlanmadi"
+    : failed
+      ? "Saqlanmadi — internetni tekshiring"
+      : slow
+        ? "Saqlash cho'zilyapti..."
+        : s.text;
 
   return (
+    // Nishon <main> dan TASHQARIDA turadi, ya'ni App.jsx dagi
+    // guardClick/guardFocus unga umuman yetib bormaydi — qulfdan ozod
+    // qilish belgisi (ilgari data-pw-allow / data-sync-allow) kerak emas.
     <div
-      data-pw-allow
-      data-sync-allow
       title={state?.message || s.text}
       style={{
         position: "fixed", right: 16, bottom: 16, zIndex: 2700,
@@ -93,7 +103,7 @@ export default function SyncBadge({ state, onRetry, retrying = false }) {
             fontFamily: "inherit", cursor: retrying ? "wait" : "pointer",
           }}
         >
-          {retrying ? "..." : "🔄 Qayta urinish"}
+          {retrying ? "..." : denied ? "🔄 Tekshirish" : "🔄 Qayta urinish"}
         </button>
       )}
     </div>

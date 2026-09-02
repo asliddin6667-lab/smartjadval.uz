@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:engine": "vite build --config vite.engine.config.js && node scripts/packEngine.mjs",
+    "check:bundle": "node scripts/checkBundle.mjs",
     "lint": "eslint .",
     "preview": "vite preview"
   },

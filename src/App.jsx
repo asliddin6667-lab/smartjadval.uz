@@ -33,7 +33,7 @@ import {
 } from "./services/storageService";
 import {
   getCurrentUser, logout, checkSubscription, refreshCurrentUser,
-  isPasswordRecoveryUrl, completeForcedPasswordChange,
+  isPasswordRecoveryUrl, completeForcedPasswordChange, verifySubscription,
 } from "./services/authService";
 import {
   syncOnLogin, schedulePush, flushPush, cleanupLegacyKeys,
@@ -136,6 +136,46 @@ export default function App() {
   // Birinchi marta hash yozilganda tarixga yangi yozuv qo'shilmasin
   const hashInitDone = useRef(false);
 
+  // =====================================================================
+  //  QULFDAN OZOD HUDUDLAR — DOM ATRIBUTI EMAS, ELEMENT HAVOLASI
+  //
+  //  Mehmon rejimi (obuna yo'q) va bulut qulfi (internet yo'q) butun
+  //  <main> ni to'sadi; ayrim elementlargina ochiq qoladi — banner
+  //  ichidagi "To'lov qilish" va "Qayta urinish" tugmalari.
+  //
+  //  ⚠️ Ilgari bu ruxsat DOM ATRIBUTI edi (`data-pw-allow`) va
+  //  `el.closest(...)` bilan qidirilardi. Atributni brauzer konsolidan
+  //  yozib bo'ladi, ya'ni qulf bitta qator bilan ochilardi:
+  //      document.body.setAttribute('data-pw-allow', 'true')
+  //  Qidiruvni <main> bilan cheklash yetarli emas — konsolda main
+  //  ichidagi elementlarga ham atribut yozib chiqish mumkin:
+  //      document.querySelectorAll('main *').forEach(e => e.setAttribute(...))
+  //
+  //  Endi ruxsat DOM da UMUMAN ko'rinmaydi: element havolasi (ref)
+  //  quyidagi WeakSet larga tushadi, tekshiruv esa ajdodlar zanjiri
+  //  bo'ylab `has(node)` bilan bajariladi. To'plamlar komponent
+  //  yopilmasida (closure) yotadi — konsoldan ularga na yozib, na
+  //  ularni o'qib bo'ladi. WeakSet tanlangani bejiz emas: element DOM
+  //  dan chiqsa yozuv o'zi tozalanadi.
+  //
+  //  ⚠️ Yangi "qulfdan ozod" element qo'shsangiz ATRIBUT YOZMANG —
+  //  `ref={allowRef}` (ikkala qulf) yoki `ref={pwAllowRef}` bering.
+  //
+  //  Bu — faqat UI to'sig'i. Haqiqiy himoya server tomonda:
+  //  subscription_rls_setup.sql dagi has_active_sub() obunasiz
+  //  foydalanuvchiga `schools` / `school_backups` ga YOZDIRMAYDI,
+  //  cloudSync esa 42501 xatosini "denied" holatiga aylantiradi.
+  // =====================================================================
+  const allowNodes = useRef({ pw: new WeakSet(), sync: new WeakSet() });
+  const pwAllowRef = useCallback((node) => {
+    if (node) allowNodes.current.pw.add(node);
+  }, []);
+  const allowRef = useCallback((node) => {
+    if (!node) return;
+    allowNodes.current.pw.add(node);
+    allowNodes.current.sync.add(node);
+  }, []);
+
   // Parol tiklash havolasidan kelgan bo'lsa — hamma narsadan oldin
   // yangi parol o'rnatish ekrani ko'rsatiladi.
   const [recoveryMode, setRecoveryMode] = useState(() => isPasswordRecoveryUrl());
@@ -172,6 +212,48 @@ export default function App() {
   // ——— Mehmon rejimi holatlari ———
   const [paywallOpen, setPaywallOpen] = useState(false);
   const [showPayPage, setShowPayPage] = useState(false);
+
+  // ——— OBUNANING SERVERDAN TASDIQLANGAN HOLATI ———
+  //
+  // `checkSubscription()` localStorage keshini o'qiydi, ya'ni uni
+  // konsoldan tahrirlab qulfni ochib bo'ladi. Shuning uchun qulf
+  // SERVER javobiga bog'lanadi: quyidagi qiymat faqat Supabase'dan
+  // keladi va hech qachon keshdan to'ldirilmaydi.
+  //
+  //   null  — hali tekshirilmadi yoki server javob bermadi (keshga
+  //           qaytamiz; bunda bulut ham ishlamayapti, demak
+  //           `cloudBlocked` tahrirlashni baribir to'sib turadi)
+  //   bool  — server aytgan haqiqiy holat
+  const [subBlockedServer, setSubBlockedServer] = useState(null);
+
+  // Demo hisobi qulfdan ozod (`contentLocked` uni chetlab o'tadi),
+  // shuning uchun "menmi demo?" degan javob ham SERVERDAN olinadi.
+  // Aks holda keshdagi email'ni konsolda "demo@smartjadval.uz" ga
+  // almashtirish butun platformani ochib yuborardi.
+  //   null — hali tekshirilmadi/server javob bermadi (keshga qaytamiz)
+  const [demoServer, setDemoServer] = useState(null);
+  const subUserId = currentUser?.id;
+
+  useEffect(() => {
+    if (!subUserId || LOCAL_ONLY) return;
+    let alive = true;
+    const run = () => {
+      verifySubscription().then((r) => {
+        if (!alive || !r.verified) return;
+        setSubBlockedServer(r.blocked);
+        setDemoServer(!!r.demo);
+      });
+    };
+    run();
+    // Oynaga qaytilganda qayta tekshiramiz — obuna to'langanda
+    // foydalanuvchi sahifani yangilamasdan ham ochilishi kerak,
+    // muddati tugaganda esa qulf o'z vaqtida tushishi kerak.
+    window.addEventListener("focus", run);
+    return () => {
+      alive = false;
+      window.removeEventListener("focus", run);
+    };
+  }, [subUserId]);
 
   // ——— Mobil menyu ———
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -674,9 +756,12 @@ export default function App() {
     );
   }
 
-  // ——— Obuna nazorati (MEHMON REJIMI) ———
+  // ——— Obuna nazorati ———
+  // `subState` — faqat KO'RSATKICH uchun (qolgan kunlar, banner matni).
+  // QULF esa serverdan keladi: `subBlockedServer` null bo'lganda
+  // (server javob bermadi) keshga qaytamiz, aks holda server ustun.
   const subState = checkSubscription(currentUser);
-  const locked = subState.blocked;
+  const locked = subBlockedServer === null ? subState.blocked : subBlockedServer;
 
   // =====================================================================
   //  BULUT QULFI — "FAQAT O'QISH" REJIMI
@@ -688,10 +773,52 @@ export default function App() {
   //
   //  Ma'lumotni KO'RISH, Excel'ga chiqarish va chop etish ishlayveradi.
   // =====================================================================
-  const isDemoUser = currentUser.email === "demo@smartjadval.uz";
+  // Server javob bergan bo'lsa — uning so'zi; bermagan bo'lsa keshga
+  // qaytamiz (bunda bulut ham ishlamayapti, ya'ni tahrirlash baribir
+  // `cloudBlocked` bilan to'silgan).
+  const isDemoUser = demoServer === null
+    ? currentUser.email === "demo@smartjadval.uz"
+    : demoServer;
+
+  // =====================================================================
+  //  OBUNASIZ FOYDALANUVCHIGA SAHIFALAR RENDER QILINMAYDI
+  //
+  //  Ilgari sahifalar to'liq chizilar, ustidan esa `guardClick`
+  //  bosishlarni ushlab turardi. Bunday "ustidan qo'yilgan" qulf
+  //  printsipial ravishda ishonchsiz: DOM ham, React holati ham
+  //  brauzerda, ya'ni qorovulni chetlab o'tish uchun bitta qator
+  //  yetardi (aynan shu bo'lgan: `document.body.setAttribute(...)`).
+  //
+  //  Endi qulf TUZILMAVIY: obuna yo'q bo'lsa `renderPage()` umuman
+  //  chaqirilmaydi — bosiladigan narsaning o'zi yo'q. Buni ochish
+  //  uchun React holatini o'zgartirish kerak, u esa serverdan kelgan
+  //  `subBlockedServer` ga bog'langan.
+  //
+  //  Demo hisobi ozod — u ko'rgazma uchun, obunasi bo'lmasligi normal.
+  //  (Demo ekanligi ham serverdan tasdiqlanadi — yuqoriga qarang.)
+  // =====================================================================
   const cloudBlocked =
     !LOCAL_ONLY && !isDemoUser &&
     (syncState.state === "offline" || syncState.state === "error");
+
+  // ——— OBUNA QULFI (server tomondan) ———
+  // Server yozishni RAD ETDI: subscription_rls_setup.sql dagi
+  // has_active_sub() obunasiz foydalanuvchiga schools jadvaliga
+  // yozishga ruxsat bermaydi.
+  //
+  // Bu "internet yo'q" EMAS. Ilgari ikkalasi ham "offline" holatiga
+  // tushar va foydalanuvchi internetini bekorga tekshirib, "sayt
+  // buzuq" deb qo'ng'iroq qilardi. Endi sabab ochiq aytiladi va
+  // to'lov sahifasiga yo'l ko'rsatiladi.
+  const subBlocked = !LOCAL_ONLY && !isDemoUser && syncState.state === "denied";
+
+  // Sahifalar umuman render qilinmaydigan holat. Ikki manba ham SERVERNIKI:
+  //   • `locked` — profil so'rovi (verifySubscription) aytgan holat;
+  //   • `subBlocked` — bulut YOZISHNI rad etdi (RLS: has_active_sub()).
+  // Ikkinchisi muhim: profil so'rovini brauzerda to'sib qo'yish mumkin
+  // (o'shanda keshga qaytamiz), lekin serverning "yozishga ruxsat yo'q"
+  // javobini soxtalashtirib bo'lmaydi — obuna yo'qligining haqiqiy isboti.
+  const contentLocked = (locked || subBlocked) && !isDemoUser;
 
   // Kirishdagi sinxronizatsiya hali tugamagan (odatda 1 soniyacha).
   // Shu paytda kiritilgan o'zgarish bulutdan kelayotgan nusxa ostida
@@ -735,16 +862,30 @@ export default function App() {
     );
   }
 
+  // Element (yoki uning <main> gacha bo'lgan ajdodlaridan biri) qulfdan
+  // ozod qilinganmi? `kind` — "pw" (mehmon rejimi) yoki "sync" (bulut
+  // qulfi). Ruxsat DOM da emas, yuqoridagi WeakSet larda saqlanadi —
+  // qarang: "QULFDAN OZOD HUDUDLAR" izohi.
+  function allowedWithin(el, root, kind) {
+    const set = allowNodes.current[kind];
+    for (let n = el; n && n !== root; n = n.parentElement) {
+      if (set.has(n)) return true;
+    }
+    return false;
+  }
+
   function guardClick(e) {
+    const root = e.currentTarget;
     // 1) BULUT QULFI — ulanish yo'q yoki bulut hali yuklanmagan bo'lsa
-    if (cloudBlocked || syncPending) {
+    if (cloudBlocked || syncPending || subBlocked) {
       const el = e.target.closest?.(
         "button, a, input, select, textarea, label, [role='button'], .btn"
       );
-      if (el && !el.closest("[data-sync-allow]")) {
+      if (el && !allowedWithin(el, root, "sync")) {
         e.preventDefault();
         e.stopPropagation();
-        if (cloudBlocked) warnReadOnly();
+        if (subBlocked) setPaywallOpen(true);
+        else if (cloudBlocked) warnReadOnly();
         else addToast("Bulutdan oxirgi holat yuklanmoqda — bir soniya kuting", "info");
         return;
       }
@@ -755,23 +896,25 @@ export default function App() {
       "button, a, input, select, textarea, label, [role='button'], .btn"
     );
     if (!el) return;
-    if (el.closest("[data-pw-allow]")) return;
+    if (allowedWithin(el, root, "pw")) return;
     e.preventDefault();
     e.stopPropagation();
     setPaywallOpen(true);
   }
 
   function guardFocus(e) {
+    const root = e.currentTarget;
     const t = e.target;
     const isField = t && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName);
-    if ((cloudBlocked || syncPending) && isField && !t.closest("[data-sync-allow]")) {
+    if ((cloudBlocked || syncPending || subBlocked) && isField && !allowedWithin(t, root, "sync")) {
       t.blur();
       e.stopPropagation();
-      if (cloudBlocked) warnReadOnly();
+      if (subBlocked) setPaywallOpen(true);
+      else if (cloudBlocked) warnReadOnly();
       return;
     }
     if (!locked) return;
-    if (isField && !t.closest("[data-pw-allow]")) {
+    if (isField && !allowedWithin(t, root, "pw")) {
       t.blur();
       e.stopPropagation();
       setPaywallOpen(true);
@@ -869,10 +1012,41 @@ export default function App() {
           onClickCapture={guardClick}
           onFocusCapture={guardFocus}
         >
+          {subBlocked && (
+            <div
+              ref={allowRef}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                gap: 12, flexWrap: "wrap",
+                background: "linear-gradient(135deg, rgba(245,158,11,.14), rgba(220,38,38,.12))",
+                border: "1.5px solid rgba(217,119,6,.45)",
+                borderRadius: 14, padding: "10px 16px", marginBottom: 16,
+              }}
+            >
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#b45309", lineHeight: 1.55 }}>
+                💳 <b>Obuna faol emas</b> — server o'zgarishlarni qabul qilmayapti,
+                shuning uchun tahrirlash to'xtatildi. Bulutdagi ma'lumotingiz
+                joyida turibdi va obunani faollashtirgan zahoti jadvalingiz
+                aynan qolgan joyidan ochiladi.
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPayPage(true)}
+                style={{
+                  border: "none", borderRadius: 11, height: 38, padding: "0 16px",
+                  background: "linear-gradient(135deg,#16a34a,#059669)", color: "#fff",
+                  fontSize: 13.5, fontWeight: 800, cursor: "pointer",
+                  boxShadow: "0 5px 14px rgba(22,163,74,.32)", whiteSpace: "nowrap",
+                }}
+              >
+                💳 To'lov qilish
+              </button>
+            </div>
+          )}
+
           {cloudBlocked && (
             <div
-              data-sync-allow
-              data-pw-allow
+              ref={allowRef}
               style={{
                 display: "flex", alignItems: "center", justifyContent: "space-between",
                 gap: 12, flexWrap: "wrap",
@@ -902,9 +1076,12 @@ export default function App() {
             </div>
           )}
 
-          {locked && (
+          {/* Yuqoridagi tasma FAQAT demo hisobiga ko'rinadi: oddiy
+              foydalanuvchida quyidagi to'liq qulf paneli chiqadi va
+              ikkita bir xil "To'lov qilish" tugmasi kerak emas. */}
+          {locked && !contentLocked && (
             <div
-              data-pw-allow
+              ref={pwAllowRef}
               style={{
                 display: "flex", alignItems: "center", justifyContent: "space-between",
                 gap: 12, flexWrap: "wrap",
@@ -914,7 +1091,7 @@ export default function App() {
               }}
             >
               <div style={{ fontSize: 14, fontWeight: 700, color: "#b45309" }}>
-                👀 Mehmon rejimi — platformani ko'rishingiz mumkin, foydalanish uchun obunani faollashtiring.
+                🔒 Obuna faol emas — platformadan foydalanish uchun obunani faollashtiring.
               </div>
               <button
                 type="button"
@@ -930,7 +1107,51 @@ export default function App() {
               </button>
             </div>
           )}
-          {renderPage()}
+
+          {/* Obunasiz — sahifa MAZMUNI umuman chizilmaydi.
+              Qarang: "OBUNASIZ FOYDALANUVCHIGA SAHIFALAR RENDER
+              QILINMAYDI" izohi. */}
+          {contentLocked ? (
+            <div
+              ref={pwAllowRef}
+              style={{
+                display: "flex", flexDirection: "column", alignItems: "center",
+                justifyContent: "center", textAlign: "center", gap: 14,
+                minHeight: "58vh", padding: "32px 20px",
+              }}
+            >
+              <div style={{ fontSize: 54, lineHeight: 1 }}>🔒</div>
+              <div style={{ fontSize: 21, fontWeight: 800, color: "#0f172a" }}>
+                Obuna faol emas
+              </div>
+              <div style={{
+                fontSize: 14.5, fontWeight: 600, color: "#64748b",
+                maxWidth: 460, lineHeight: 1.65,
+              }}>
+                Ma'lumotlaringiz saqlanib turibdi va bulutdan hech qayerga
+                yo'qolmaydi. Obunani faollashtirganingizdan so'ng jadvalingiz
+                aynan qolgan joyidan ochiladi.
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPayPage(true)}
+                style={{
+                  marginTop: 6, border: "none", borderRadius: 13,
+                  height: 48, padding: "0 30px",
+                  background: "linear-gradient(135deg,#16a34a,#059669)", color: "#fff",
+                  fontSize: 15.5, fontWeight: 800, cursor: "pointer",
+                  boxShadow: "0 8px 20px rgba(22,163,74,.34)",
+                }}
+              >
+                💳 Obunani faollashtirish
+              </button>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#94a3b8" }}>
+                Savollar bo'lsa: <b>+998 90 000 00 00</b>
+              </div>
+            </div>
+          ) : (
+            renderPage()
+          )}
         </main>
       </div>
 

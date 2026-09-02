@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useCallback, useMemo, useState } from "react";
 import { DAYS } from "../utils/constants";
 import { isTeachingSlot } from "../utils/scheduleGenerator";
 import { groupSlotsByShift, shiftSlotNumbers } from "../utils/shiftSlots";
@@ -142,9 +142,10 @@ export default function TeacherAvailabilityPage({
   }
 
   // ——— Statistika: talab qilinadigan soat (hovuz/parallel dedup bilan) ———
-  const requiredHours = useMemo(() => {
-    if (!teacher) return 0;
-    const tid = teacher.id;
+  // Funksiya HAR BIR ustoz uchun chaqiriladi: tanlangani uchun statistikada,
+  // qolganlari uchun esa yuqoridagi «muammoli ustozlar» ro'yxatida.
+  const requiredHoursFor = useCallback((tid) => {
+    if (!tid) return 0;
     let total = 0;
     const seen = new Set();
     classes.forEach((cls) => {
@@ -198,7 +199,44 @@ export default function TeacherAvailabilityPage({
       });
     });
     return total;
-  }, [teacher, classes, classSubjects]);
+  }, [classes, classSubjects]);
+
+  const requiredHours = useMemo(
+    () => (teacher ? requiredHoursFor(teacher.id) : 0),
+    [teacher, requiredHoursFor]
+  );
+
+  // Ustozning ochiq (qulflanmagan, dam kuni bo'lmagan) kataklari soni
+  const openCellsFor = useCallback((t) => {
+    if (!t) return 0;
+    const off = new Set(Array.isArray(t.offDays) ? t.offDays : []);
+    const bs = normalizeBlocked(t.blockedSlots);
+    let n = 0;
+    DAYS.forEach((day) => {
+      if (off.has(day)) return;
+      const bl = new Set(Array.isArray(bs[day]) ? bs[day] : []);
+      teachingTs.forEach((ts) => { if (!bl.has(ts.id)) n += 1; });
+    });
+    return n;
+  }, [teachingTs]);
+
+  // ——— MUAMMOLI USTOZLAR ———
+  // «Nega dars jadvalga tushmayapti?» degan savolning eng ko'p uchraydigan
+  // javobi shu ro'yxatda: ustozga kerakli soat uning ochiq kataklaridan ko'p.
+  // Ilgari bu faqat TANLANGAN ustoz uchun ko'rinardi — 40 ta ustozni birma-bir
+  // ochib chiqmasa, sabab topilmasdi.
+  const problemTeachers = useMemo(() => {
+    if (!teachingTs.length) return [];
+    return sortedTeachers
+      .map((t) => {
+        const need = requiredHoursFor(t.id);
+        const open = openCellsFor(t);
+        const locked = Math.max(0, DAYS.filter((d) => !(t.offDays || []).includes(d)).length * teachingTs.length - open);
+        return { id: t.id, name: t.name, need, open, locked };
+      })
+      .filter((r) => r.need > 0 && r.open < r.need)
+      .sort((a, b) => (b.need - b.open) - (a.need - a.open));
+  }, [sortedTeachers, teachingTs, requiredHoursFor, openCellsFor]);
 
   const stats = useMemo(() => {
     if (!teacher) return { locked: 0, available: 0, totalCells: 0 };
@@ -237,6 +275,33 @@ export default function TeacherAvailabilityPage({
           </p>
         </div>
       </div>
+
+      {problemTeachers.length > 0 && (
+        <div className="card tav-problems">
+          <div className="tav-problems-title">
+            ⛔ {problemTeachers.length} ta ustozning ochiq kataklari kerakli soatdan KAM
+          </div>
+          <div className="tav-problems-note">
+            Bu ustozlarning darslari jadvalga <b>hech qanday algoritm bilan</b> to'liq tushmaydi —
+            qulflangan katakka dars qo'yilmaydi. Ismini bosing va ortiqcha qulflarni oching
+            (yoki «🔓 Hammasini ochish»).
+          </div>
+          {problemTeachers.map((r) => (
+            <button
+              key={r.id}
+              type="button"
+              className="tav-problem-row"
+              onClick={() => setTeacherId(r.id)}
+            >
+              <span className="tav-problem-name">{r.name}</span>
+              <span className="tav-problem-num">
+                kerak {r.need} soat · ochiq {r.open} katak · qulflangan {r.locked} ta
+              </span>
+              <span className="tav-problem-gap">−{r.need - r.open} soat</span>
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="card tav-card">
         <div className="tav-toolbar">

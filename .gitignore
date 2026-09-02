@@ -22,3 +22,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Dvigatelning alohida buildi (Edge Function ichiga joylanadi)
+build
+
+# Dvigatelning base64 nusxasi — npm run build:engine bilan yaratiladi
+supabase/functions/schedule-engine/engine.gen.ts
+
+# Supabase CLI vaqtinchalik fayllari
+supabase/.temp

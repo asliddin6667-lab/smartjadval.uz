@@ -148,8 +148,15 @@ function setMeta(userId, patch) {
 // ---------------------------------------------------------------------
 //  SINXRONIZATSIYA HOLATI — UI da ko'rsatish uchun
 //  state: "idle" | "pending" | "saving" | "saved" | "error" | "offline"
+//         | "denied"
 //
 //  "offline" va "error" — ilova FAQAT O'QISH rejimiga o'tadi (App.jsx).
+//
+//  "denied" — server yozishni RAD ETDI (RLS: obuna faol emas). Bu
+//  ALOHIDA holat bo'lishi SHART: ilgari u ham "offline" deb ko'rsatilar,
+//  foydalanuvchi esa internetini bekorga tekshirardi. Endi App.jsx
+//  to'lov bannerini chiqaradi. Qayta urinishning ma'nosi yo'q — obuna
+//  faollashmaguncha javob o'zgarmaydi.
 // ---------------------------------------------------------------------
 let syncState = { state: "idle", message: "", at: 0, savedAt: 0 };
 const stateListeners = new Set();
@@ -407,6 +414,30 @@ export async function pullFromCloud(userId) {
 //  va `stale` qaytaramiz. Chaqiruvchi (pushWithRetry) birlashtirishga
 //  o'tadi.
 // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+//  SERVER YOZISHNI RAD ETDIMI? (RLS — obuna faol emas)
+//
+//  subscription_rls_setup.sql dagi has_active_sub() obunasiz
+//  foydalanuvchiga schools jadvaliga yozishni taqiqlaydi. PostgREST
+//  buni IKKI XIL ko'rsatadi:
+//    • INSERT/UPSERT -> 42501 "new row violates row-level security policy"
+//    • UPDATE        -> xato YO'Q, shunchaki 0 qator o'zgaradi
+//  Ikkinchisi "bulut oldinga ketdi" (stale) holatiga aynan o'xshaydi,
+//  shuning uchun uni pushToCloud versiya raqami bo'yicha ajratadi.
+// ---------------------------------------------------------------------
+function isDeniedError(err) {
+  if (!err) return false;
+  if (err.code === "42501") return true;
+  return /row-level security|permission denied|not authorized/i.test(
+    String(err.message || err)
+  );
+}
+
+// Rad etilgandan keyin shu muddat ichida serverga qayta urinmaymiz.
+// Busiz "qorovul" har 10 soniyada bekorga so'rov yuborardi.
+const DENIED_GAP = 60000;
+let deniedAt = 0;
+
 async function casUpdate(userId, payload, baseRev) {
   try {
     const { data, error } = await supabase
@@ -417,7 +448,12 @@ async function casUpdate(userId, payload, baseRev) {
       .select("updated_at")
       .maybeSingle();
 
-    if (error) return { ok: false, reason: "error", message: error.message };
+    if (error) {
+      if (isDeniedError(error)) {
+        return { ok: false, reason: "denied", message: error.message };
+      }
+      return { ok: false, reason: "error", message: error.message };
+    }
     if (!data) return { ok: false, reason: "no-row" };
     return { ok: true, updatedAt: data.updated_at };
   } catch (e) {
@@ -445,7 +481,12 @@ async function guardedUpsert(userId, payload, meta, overwrite) {
     .select("updated_at")
     .maybeSingle();
 
-  if (error) return { ok: false, reason: "error", message: error.message };
+  if (error) {
+    if (isDeniedError(error)) {
+      return { ok: false, reason: "denied", message: error.message };
+    }
+    return { ok: false, reason: "error", message: error.message };
+  }
   return { ok: true, updatedAt: data?.updated_at };
 }
 
@@ -456,6 +497,17 @@ export async function pushToCloud(userId, { force = false, overwrite = false } =
   if (isLocalOnly()) {
     emitState("idle");
     return { ok: true, reason: "local-only" };
+  }
+
+  // OBUNA RAD ETGAN: "qorovul" tikida serverga bekorga urilmaymiz —
+  // javob obuna faollashmaguncha o'zgarmaydi. Qo'lda "Qayta urinish"
+  // (forceSyncNow) hisoblagichni nolga tushiradi.
+  if (!force && deniedAt && Date.now() - deniedAt < DENIED_GAP) {
+    // Holatni QAYTA e'lon qilamiz: schedulePush() bu paytda allaqachon
+    // "pending" qo'ygan bo'lishi mumkin va nishon "Saqlanmoqda..." da
+    // qotib qolardi.
+    emitState("denied", "Obuna faol emas — o'zgarishlar bulutga saqlanmadi");
+    return { ok: false, reason: "denied" };
   }
 
   const blob = collectLocal(userId);
@@ -492,9 +544,19 @@ export async function pushToCloud(userId, { force = false, overwrite = false } =
     if (!res.ok && res.reason === "no-row") {
       // Qator yo'qmi yoki versiya boshqami?
       const head = await readCloudHead(userId);
-      if (!head.ok) res = { ok: false, reason: "error", message: head.message };
-      else if (head.exists) res = { ok: false, reason: "stale", head };
-      else res = await guardedUpsert(userId, payload, meta, true);
+      if (!head.ok) {
+        res = { ok: false, reason: "error", message: head.message };
+      } else if (head.exists) {
+        // Bulut AYNAN biz asos qilgan versiyada turibdi, lekin UPDATE
+        // bironta qatorga ham tegmadi — demak nusxa eskirgani emas, RLS
+        // yozishni rad etdi. Ajratmasak, reconcile bekorga aylanib,
+        // oxirida "internet yo'q" degan noto'g'ri xabar chiqadi.
+        res = (head.rev || 0) === baseRev
+          ? { ok: false, reason: "denied" }
+          : { ok: false, reason: "stale", head };
+      } else {
+        res = await guardedUpsert(userId, payload, meta, true);
+      }
     } else if (!res.ok && res.reason === "error") {
       // CAS so'rovining o'zi rad etildi (masalan PostgREST JSON filtrni
       // qo'llab-quvvatlamasa). Ma'lumot saqlanmay qolmasin: himoyalangan
@@ -507,6 +569,13 @@ export async function pushToCloud(userId, { force = false, overwrite = false } =
   }
 
   if (!res.ok) {
+    if (res.reason === "denied") {
+      // Ma'lumot mahalliy nusxada QOLADI (dirty bayrog'i o'chirilmaydi) —
+      // obuna faollashgach o'zi yuboriladi, hech narsa yo'qolmaydi.
+      deniedAt = Date.now();
+      emitState("denied", "Obuna faol emas — o'zgarishlar bulutga saqlanmadi");
+      return { ok: false, reason: "denied" };
+    }
     if (res.reason === "stale") {
       emitState("pending", "Bulutda yangiroq nusxa bor");
       return { ok: false, reason: "stale", head: res.head };
@@ -529,6 +598,7 @@ export async function pushToCloud(userId, { force = false, overwrite = false } =
     cloudUpdatedAt: res.updatedAt || payload.updated_at,
     dirty: false,
   });
+  deniedAt = 0;
   emitState("saved");
 
   // Versiya tarixiga nusxa (o'zi tezlikni tekshiradi, xatosi jim yutiladi)
@@ -650,6 +720,10 @@ async function pushWithRetry(userId, opts = {}) {
     }
 
     if (res.ok) return res;
+
+    // Obuna rad etgan — qayta urinish javobni o'zgartirmaydi, aksincha
+    // oxirida holatni "offline" ga almashtirib yuborardi.
+    if (res.reason === "denied") return res;
 
     if (res.reason === "stale") {
       const rec = await reconcile(userId);
@@ -887,6 +961,7 @@ export async function syncOnLogin(user) {
 
     const res = await pushWithRetry(userId);
     if (res.ok) return { action: "recovered" };
+    if (res.reason === "denied") return { action: "denied" };
     emitState("offline", res.message || "Yuborilmagan o'zgarishlar bor");
     return { action: "offline", message: "Yuborilmagan o'zgarishlar bor" };
   } catch (e) {
@@ -1065,6 +1140,9 @@ export function stopAutoSync() {
 // Qo'lda "Qayta ulanish" tugmasi uchun
 export async function forceSyncNow(userId) {
   if (!userId || isLocalOnly()) return { ok: true, reason: "skip" };
+  // Qo'lda urinish — kutish oralig'ini nolga tushiramiz (foydalanuvchi
+  // hozirgina to'lagan bo'lishi mumkin).
+  deniedAt = 0;
   if (hasUnsyncedChanges(userId)) {
     const res = await pushWithRetry(userId);
     return { ok: res.ok, action: "push", message: res.message };
