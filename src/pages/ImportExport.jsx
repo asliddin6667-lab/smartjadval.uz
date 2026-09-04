@@ -4,6 +4,7 @@ import { loadXLSX, splitNames, normalizeText, findByName, makeSubject, worksheet
 import { exportColoredSchedule } from '../utils/coloredScheduleExport';
 import { exportAnalysisExcel } from '../utils/analysisExport';
 import { exportHourGridExcel } from '../utils/hourGridExport';
+import { exportTeacherGrids } from '../utils/teacherGridExport';
 
 function teacherSubjectIds(teacher) {
   return Array.isArray(teacher.subjectIds) ? teacher.subjectIds : (teacher.subjectId ? [teacher.subjectId] : []);
@@ -19,6 +20,7 @@ export default function ImportExportPage({
   rooms, timeslots, lunchGroups, schedule,
   classSubjects = {},
   settings = {},
+  shifts = [],
   schoolName = '',
   toast,
 }) {
@@ -164,6 +166,16 @@ export default function ImportExportPage({
     });
   }
 
+  // Ustozlar setkasi — har ustozga alohida varaq + ro'yxat (havolalar bilan) +
+  // avtofiltrli «Barcha darslar» varag'i. Ustoz Excelda o'zini shu uch yo'lning
+  // istalganidan tanlaydi (teacherGridExport.js dagi izohga qarang).
+  async function exportTeacherGrid() {
+    await exportTeacherGrids({
+      teachers, classes, subjects, rooms, timeslots, shifts,
+      schedule, classSubjects, settings, schoolName, toast,
+    });
+  }
+
   // Dars soat setkasi — fan × sinf matritsasi (tuman admin varag'i bilan bir xil).
   // Sarlavhadagi maktab nomi Sozlamalar sahifasidan (settings.schoolName) olinadi.
   async function exportHourGrid() {
@@ -210,6 +222,21 @@ export default function ImportExportPage({
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button className="btn btn-success" onClick={() => exportColoredMatrix(false)}>🎨 Rangli jadval (sinflar ustun)</button>
               <button className="btn btn-secondary" onClick={() => exportColoredMatrix(true)}>🖨️ Rangsiz jadval</button>
+            </div>
+          </div></div>
+
+          <div className="card"><div className="card-body">
+            <div style={{ fontSize: 28, marginBottom: 10 }}>👨‍🏫</div>
+            <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 6 }}>Ustozlar setkasi</div>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 14 }}>
+              Har bir ustozga <b>alohida varaq</b> — haftalik setka (kunlar ustun, fan rangida,
+              sinf · fan · xona) va ostida reja/joylashgan soat jadvali. Bundan tashqari
+              «📋 Ustozlar» ro'yxati (ismni bosish → o'sha ustoz varag'i) va «🔎 Barcha darslar»
+              varag'i — <b>«Ustoz» ustunidagi filtrdan har kim o'zini tanlab</b> faqat o'z
+              darslarini ko'radi.
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button className="btn btn-primary" onClick={exportTeacherGrid} disabled={!teachers.length}>👨‍🏫 Ustozlar setkasi (Excel)</button>
             </div>
           </div></div>
 

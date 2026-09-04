@@ -12,8 +12,8 @@
 import { Fragment, useMemo, useState } from "react";
 import { DAYS } from "../utils/constants";
 import { isTeachingSlot } from "../utils/scheduleGenerator";
-import { pairSideGroups } from "../utils/pairGroups";
-import { swapTeacherIds } from "../utils/swapGroups";
+import { teacherAssignments, placedSubjectHours } from "../utils/teacherAssignments";
+import { exportTeacherGrids } from "../utils/teacherGridExport";
 import {
   classIdsOf, teacherIdsOf, collectCardEntries, unitOf, resolveMove, applyActions, sameCard,
   softWarnings, checkPlace, findAutoPartner, onlyBusyReasons, unitLabel, slotLabel,
@@ -44,11 +44,13 @@ export default function TeacherGrid({
   lunchGroups = [],
   schedule = {},
   classSubjects = {},
+  settings = {},
   setSchedule,
   toast,
   onResolve,        // (data) => void — MoveResolveModal ni ochadi
 }) {
   const [teacherId, setTeacherId] = useState(teachers[0]?.id || "");
+  const [exporting, setExporting] = useState(false);
   const [drag, setDrag] = useState(null);
   const [picked, setPicked] = useState(null);   // bosib tanlangan dars (drag ishlamasa)
   const active = drag || picked;                // hozir ko'chirilayotgan dars
@@ -97,70 +99,18 @@ export default function TeacherGrid({
   };
 
   // ——— Ustozning biriktirilgan sinf+fan juftliklari va soatlari ———
-  const assignments = useMemo(() => {
-    if (!teacherId) return [];
-    const out = [];
-    classes.forEach((cls) => {
-      (classSubjects?.[cls.id] || []).forEach((a) => {
-        if (!a?.subjectId) return;
-
-        // Bir vaqtda bir nechta fan — 2-, 3-, 4-guruh ustozi o'z fani
-        // bilan alohida qator bo'lib chiqadi
-        if (a.pairEnabled) {
-          const own = pairSideGroups(a).find((g) => g.teacherId === teacherId);
-          if (own) {
-            out.push({
-              classId: cls.id,
-              className: cls.name,
-              subjectId: own.subjectId,
-              subjectName: subjectMap.get(own.subjectId)?.name || "Fan",
-              need: Number(a.weeklyHours || 0),
-              roomId: own.roomId || "",
-              roles: ["2 fan birga"],
-              simple: false,
-            });
-            return;
-          }
-        }
-
-        const roles = [];
-        if (a.teacherId === teacherId) roles.push("asosiy");
-        if (a.teacherId2 === teacherId) roles.push("2-guruh");
-        // Almashinuvda 2-soat ustozi boshqa bo'lishi mumkin — u ham shu qatorda
-        if (a.swapEnabled && a.teacherId !== teacherId && swapTeacherIds(a).includes(teacherId)) roles.push("almashinuv");
-        if (a.weekAltEnabled && a.weekAltTeacherId === teacherId) roles.push("juft/toq");
-        if (a.pairEnabled && a.teacherId === teacherId) roles.push("2 fan birga");
-        if ((a.levelGroups || []).some((g) => g.teacherId === teacherId)) roles.push("daraja guruhi");
-        if (!roles.length) return;
-        const simple = a.teacherId === teacherId && !a.levelGroupEnabled && !a.splitEnabled && !a.swapEnabled;
-        out.push({
-          classId: cls.id,
-          className: cls.name,
-          subjectId: a.subjectId,
-          subjectName: subjectMap.get(a.subjectId)?.name || "Fan",
-          need: Number(a.weeklyHours || 0),
-          roomId: a.roomId || "",
-          roles,
-          simple,
-        });
-      });
-    });
-    return out.sort((a, b) => String(a.className).localeCompare(String(b.className), "uz", { numeric: true }));
-  }, [teacherId, classes, classSubjects, subjectMap]);
-
-  function placedHours(classId, subjectId) {
-    let n = 0;
-    DAYS.forEach((day) => {
-      sortedTimeslots.forEach((slot) => {
-        const cell = schedule?.[day]?.[slot.id];
-        if (Array.isArray(cell) && cell.some((l) => l.subjectId === subjectId && classIdsOf(l).includes(classId))) n += 1;
-      });
-    });
-    return n;
-  }
+  // Mantiq [teacherAssignments.js](../utils/teacherAssignments.js) da — Excel
+  // eksporti ham AYNI ro'yxatni ko'rsatadi, shuning uchun yagona manba.
+  const assignments = useMemo(
+    () => teacherAssignments({ teacherId, classes, classSubjects, subjects }),
+    [teacherId, classes, classSubjects, subjects]
+  );
 
   const load = useMemo(() => {
-    const rows = assignments.map((a) => ({ ...a, got: placedHours(a.classId, a.subjectId) }));
+    const rows = assignments.map((a) => ({
+      ...a,
+      got: placedSubjectHours(schedule, sortedTimeslots, a.classId, a.subjectId),
+    }));
     const total = DAYS.reduce((sum, day) => sum + sortedTimeslots.reduce((s, slot) => {
       const cell = schedule?.[day]?.[slot.id] || [];
       return s + (cell.some((l) => teacherIdsOf(l).includes(teacherId)) ? 1 : 0);
@@ -428,6 +378,24 @@ export default function TeacherGrid({
     toast?.(form.lock ? "Dars qo'shildi va qulflandi 🔒" : "Dars qo'shildi ✓", "success");
   }
 
+  // ——— Excelga yuklash ———
+  // `only` — true: faqat tanlangan ustoz varag'i; false: barcha ustozlar
+  // (ro'yxat + avtofiltrli «Barcha darslar» + har ustozga alohida varaq).
+  async function downloadExcel(only) {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      await exportTeacherGrids({
+        teachers, classes, subjects, rooms, timeslots, shifts,
+        schedule, classSubjects, settings,
+        teacherId: only ? teacherId : null,
+        toast,
+      });
+    } finally {
+      setExporting(false);
+    }
+  }
+
   if (!sortedTeachers.length) {
     return (
       <div className="card empty-state">
@@ -449,12 +417,32 @@ export default function TeacherGrid({
             </select>
           </div>
         </div>
-        {setSchedule && (
-          <div className="tgr-head-actions">
-            <button type="button" className="tgr-btn tgr-btn-lock" onClick={() => lockAll(true)}>🔒 Barchasini qulflash</button>
-            <button type="button" className="tgr-btn tgr-btn-unlock" onClick={() => lockAll(false)}>🔓 Qulfni ochish</button>
-          </div>
-        )}
+        <div className="tgr-head-actions">
+          <button
+            type="button"
+            className="tgr-btn tgr-btn-excel"
+            disabled={exporting || !teacherId}
+            title="Tanlangan ustozning haftalik setkasi — chiroyli, chop etishga tayyor Excel"
+            onClick={() => downloadExcel(true)}
+          >
+            {exporting ? "⏳ Yuklanmoqda…" : "📥 Bu ustoz — Excel"}
+          </button>
+          <button
+            type="button"
+            className="tgr-btn tgr-btn-excel-all"
+            disabled={exporting}
+            title="Har bir ustozga alohida varaq + ro'yxat + «Ustoz» ustunidan filtrlanadigan umumiy varaq"
+            onClick={() => downloadExcel(false)}
+          >
+            {exporting ? "⏳ Yuklanmoqda…" : "📚 Barcha ustozlar — Excel"}
+          </button>
+          {setSchedule && (
+            <>
+              <button type="button" className="tgr-btn tgr-btn-lock" onClick={() => lockAll(true)}>🔒 Barchasini qulflash</button>
+              <button type="button" className="tgr-btn tgr-btn-unlock" onClick={() => lockAll(false)}>🔓 Qulfni ochish</button>
+            </>
+          )}
+        </div>
       </div>
 
       {teacher && (

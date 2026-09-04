@@ -71,6 +71,9 @@
 }
 
 .tgr-btn:hover { filter: brightness(1.05); transform: translateY(-1px); }
+.tgr-btn:disabled { opacity: .55; cursor: default; transform: none; filter: none; }
+.tgr-btn-excel { background: rgba(16, 185, 129, .12); border-color: rgba(16, 185, 129, .34); color: #047857; }
+.tgr-btn-excel-all { background: rgba(99, 102, 241, .12); border-color: rgba(99, 102, 241, .34); color: #4338ca; }
 .tgr-btn-lock { background: rgba(37, 99, 235, .10); border-color: rgba(37, 99, 235, .28); color: #1d4ed8; }
 .tgr-btn-unlock { background: var(--bg-secondary, #f1f5f9); border-color: var(--card-border, #e2e8f0); color: var(--text-secondary, #475569); }
 
@@ -504,6 +507,8 @@ body.dark-mode .tgr-offnote { color: #fcd34d; }
 body.dark-mode .tgr-cell-off .tgr-blocked { color: #fbbf24; }
 body.dark-mode .tgr-card-cls { color: #a5b4fc; }
 body.dark-mode .tgr-btn-lock { color: #93c5fd; }
+body.dark-mode .tgr-btn-excel { color: #6ee7b7; }
+body.dark-mode .tgr-btn-excel-all { color: #a5b4fc; }
 body.dark-mode .tgr-left { color: #fbbf24; }
 body.dark-mode .tgr-done { color: #4ade80; }
 body.dark-mode .tgr-check { color: #93c5fd; }
@@ -518,6 +523,8 @@ body.dark-mode .schd-tools button { background: rgba(15, 23, 42, .6); }
 [data-theme="dark"] .tgr-time { background: rgba(255, 255, 255, .03); }
 [data-theme="dark"] .tgr-card-cls { color: #a5b4fc; }
 [data-theme="dark"] .tgr-btn-lock { color: #93c5fd; }
+[data-theme="dark"] .tgr-btn-excel { color: #6ee7b7; }
+[data-theme="dark"] .tgr-btn-excel-all { color: #a5b4fc; }
 [data-theme="dark"] .mvr-reason { color: #fca5a5; }
 [data-theme="dark"] .mvr-warn { color: #fcd34d; }
 [data-theme="dark"] .schd-tools button { background: rgba(15, 23, 42, .6); }

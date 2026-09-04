@@ -1047,7 +1047,34 @@ Ya'ni konsolda qulfni ochgan odam ham ma'lumotini bulutga saqlay olmaydi.
 dagi `loadXLSX()` / `loadStyledXLSX()` orqali olinadi (uslubli kutubxona dinamik import,
 o'rnatilmagan bo'lsa faqat rangli eksport ishlamaydi).
 Eksport modullari: `coloredScheduleExport` (rangli dars jadvali), `hourGridExport`
-(soat setkasi), `analysisExport` (tahlil), `districtExcelService` (tuman moduli).
+(soat setkasi), `analysisExport` (tahlil), `teacherGridExport` (ustozlar setkasi,
+pastga qarang), `districtExcelService` (tuman moduli).
+
+**USTOZLAR SETKASI** ([teacherGridExport.js](src/utils/teacherGridExport.js)) —
+`exportTeacherGrids()`. Ikki joydan chaqiriladi: «Dars jadvali → Ustoz setkasi»
+sarlavhasidagi «📥 Bu ustoz» / «📚 Barcha ustozlar» tugmalari
+([TeacherGrid.jsx](src/components/TeacherGrid.jsx)) va Excel bo'limidagi
+«Ustozlar setkasi» kartasi ([ImportExport.jsx](src/pages/ImportExport.jsx)).
+
+`teacherId` berilsa — bitta varaq; berilmasa uchta qatlam:
+
+| Varaq | Nima uchun |
+|---|---|
+| `📋 Ustozlar` | ro'yxat: fanlari, kun bo'yicha soat, jami. Ism — o'z varag'iga **ichki havola** |
+| `🔎 Barcha darslar` | yassi ro'yxat + **avtofiltr**: ustoz «Ustoz» ustunidan o'zini belgilaydi |
+| har ustozga bitta varaq | haftalik setka (kunlar ustun, fan rangida) + «JAMI» qatori + reja/joylashgan jadvali |
+
+⚠️ **Ochiluvchi ro'yxat (data validation) ISHLATILMAYDI** — `xlsx-js-style`
+yozuvchisida bunday kod umuman yo'q, sozlama jimgina yo'qolib ketardi. Ustozni
+tanlash uchun varaq yorliqlari, ichki havolalar va avtofiltr ishlatiladi
+(uchalasi ham yoziladi — Node'da tekshirilgan).
+
+⚠️ Ustozning REJASI ([teacherAssignments.js](src/utils/teacherAssignments.js) dagi
+`teacherAssignments()`) — **yagona manba**: ekrandagi yon panel ham, Excel ham
+shundan oladi. Ilgari bu mantiq TeacherGrid.jsx ichida edi; nusxa ko'chirilsa
+soat hisobi ikki joyda ajralib ketardi. Ustozning tayyor setkadagi darsi esa
+`teacherIdsOf` + `sameCard` ([moveResolver.js](src/utils/moveResolver.js)) bilan
+aniqlanadi — ekrandagi setka bilan AYNI qoida.
 
 ### Deploy
 

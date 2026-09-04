@@ -957,7 +957,7 @@ export default function App() {
       );
       case "teacherReplace": return <TeacherReplacePage {...pageProps} setSchedule={setSchedule} setClassSubjects={setClassSubjects} />;
       case "analytics": return <AnalyticsPage {...pageProps} shifts={shifts} />;
-      case "importExport": return <ImportExportPage {...pageProps} settings={settings} setSubjects={setSubjects} setTeachers={setTeachers} />;
+      case "importExport": return <ImportExportPage {...pageProps} settings={settings} shifts={shifts} setSubjects={setSubjects} setTeachers={setTeachers} />;
       case "users": return currentUser.role === "superadmin" ? <UsersPage {...pageProps} /> : <DashboardPage {...pageProps} setActivePage={handleNavigate} />;
       case "standardHours": return currentUser.role === "superadmin" ? <StandardHoursPage {...pageProps} /> : <DashboardPage {...pageProps} setActivePage={handleNavigate} />;
       case "settings": return (
@@ -1146,7 +1146,7 @@ export default function App() {
                 💳 Obunani faollashtirish
               </button>
               <div style={{ fontSize: 13, fontWeight: 600, color: "#94a3b8" }}>
-                Savollar bo'lsa: <b>+998 90 000 00 00</b>
+                Savollar bo'lsa: <b>+998 94 136 66 67</b>
               </div>
             </div>
           ) : (

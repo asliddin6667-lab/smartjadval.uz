@@ -3444,6 +3444,7 @@ export default function SchedulePage({
           lunchGroups={lunchGroups}
           schedule={schedule}
           classSubjects={classSubjects}
+          settings={settings}
           setSchedule={setSchedule}
           toast={toast}
           onResolve={setMoveData}
