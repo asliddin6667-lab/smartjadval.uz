@@ -17,7 +17,7 @@
 // =====================================================================
 import { supabase } from "./supabaseClient";
 import { loadData, saveData } from "./storageService";
-import { DEFAULT_CURRICULUM, normalizeCurriculum } from "../utils/curriculum";
+import { DEFAULT_CURRICULUM, normalizeCurriculum, withCurriculumDefaults } from "../utils/curriculum";
 
 const CACHE_KEY = "standard_hours";
 const ROW_ID = "global";
@@ -25,7 +25,8 @@ const ROW_ID = "global";
 // Keshdagi (yoki ichki) reja — sinxron, sahifa ochilishi bilan ishlatiladi
 export function getCachedCurriculum() {
   const cached = normalizeCurriculum(loadData(CACHE_KEY, null));
-  return cached || DEFAULT_CURRICULUM;
+  // Bo'sh qolgan til (odatda `ru`) ichki rejadan to'ldiriladi
+  return cached ? withCurriculumDefaults(cached) : DEFAULT_CURRICULUM;
 }
 
 /**
@@ -44,15 +45,17 @@ export async function fetchStandardHours() {
 
     const clean = normalizeCurriculum(data?.data);
     if (clean) {
+      // Keshga bulutdagi holat AYNAN yoziladi; zaxira faqat qaytariladigan
+      // qiymatga qo'llanadi, aks holda ichki reja bazadagidek ko'rinardi.
       saveData(CACHE_KEY, clean);
-      return { data: clean, updatedAt: data?.updated_at || null, source: "cloud" };
+      return { data: withCurriculumDefaults(clean), updatedAt: data?.updated_at || null, source: "cloud" };
     }
   } catch {
     // jadval yo'q / internet yo'q — keshga tushamiz
   }
 
   const cached = normalizeCurriculum(loadData(CACHE_KEY, null));
-  if (cached) return { data: cached, updatedAt: null, source: "cache" };
+  if (cached) return { data: withCurriculumDefaults(cached), updatedAt: null, source: "cache" };
   return { data: DEFAULT_CURRICULUM, updatedAt: null, source: "default" };
 }
 

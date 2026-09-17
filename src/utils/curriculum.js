@@ -58,6 +58,62 @@ export const CURRICULUM_UZ = [
   { name: "Chaqiruvga qadar boshlang'ich tayyorgarlik", aliases: ["chaqiruvga qadar boshlang'ich tayyorgarlik", "chqbt", "chaqiruvgacha boshlang'ich tayyorgarlik"], h: { 10: 2, 11: 2 } },
 ];
 
+/* ===================================================================
+   SHU REJANING RUS SINFLARI UCHUN NUSXASI
+
+   Soatlar O'ZBEK SINFLARI BILAN AYNAN BIR XIL — har qatorning `h` i
+   yuqoridagi CURRICULUM_UZ dagi mos qatordan ko'chirilgan. Farq faqat
+   fan NOMIDA: rus sinfida fanlar ruscha nomlanadi.
+
+   Ikki qatorda til roli almashadi (rus maktabidagi odatiy holat):
+     - "Ona tili"  -> "Русский язык"   (sinfning o'z tili)
+     - "Rus tili"  -> "Узбекский язык" (ikkinchi davlat tili)
+   Qolgan hamma fan — oddiy tarjima.
+
+   ⚠️ CURRICULUM_UZ dagi soat o'zgarsa — SHU YERDA HAM o'zgartiring,
+   aks holda ikki til ajralib ketadi.
+=================================================================== */
+export const CURRICULUM_RU = [
+  // I. Filologiya fanlari
+  { name: "Русский язык", aliases: ["русский язык", "русский язык и грамотность чтения", "родной язык"], h: { 1: 4, 2: 4, 3: 4, 4: 4, 5: 4, 6: 4, 7: 3, 8: 3, 9: 3, 10: 2, 11: 2 } },
+  { name: "Грамотность чтения", aliases: ["грамотность чтения", "азбука", "чтение", "литературное чтение"], h: { 1: 4, 2: 3, 3: 3, 4: 3 } },
+  { name: "Литература", aliases: ["литература"], h: { 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 2, 11: 2 } },
+  { name: "Узбекский язык", aliases: ["узбекский язык", "государственный язык"], h: { 2: 2, 3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 2, 11: 2 } },
+  { name: "Иностранный язык", aliases: ["иностранный язык", "английский язык", "немецкий язык", "французский язык"], h: { 1: 1, 2: 2, 3: 2, 4: 2, 5: 4, 6: 4, 7: 4, 8: 3, 9: 3, 10: 2, 11: 2 } },
+
+  // II. Ijtimoiy fanlar
+  { name: "Рассказы по истории", aliases: ["рассказы по истории"], h: { 5: 2 } },
+  { name: "История древнего мира", aliases: ["история древнего мира"], h: { 6: 2 } },
+  { name: "История Узбекистана", aliases: ["история узбекистана"], h: { 7: 2, 8: 2, 9: 2, 10: 1, 11: 1 } },
+  { name: "Всемирная история", aliases: ["всемирная история"], h: { 7: 1, 8: 1, 9: 1, 10: 1, 11: 1 } },
+  { name: "Основы государства и права", aliases: ["основы государства и права", "основы права"], h: { 8: 1, 9: 1, 10: 1, 11: 1 } },
+  { name: "Воспитание", aliases: ["воспитание"], h: { 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1, 8: 1, 9: 1, 10: 1, 11: 1 } },
+
+  // III. Aniq fanlar
+  { name: "Математика", aliases: ["математика"], h: { 1: 5, 2: 5, 3: 5, 4: 5, 5: 5, 6: 5, 7: 5 } },
+  { name: "Алгебра", aliases: ["алгебра"], h: { 8: 3, 9: 3, 10: 3, 11: 3 } },
+  { name: "Геометрия", aliases: ["геометрия"], h: { 8: 2, 9: 2, 10: 2, 11: 2 } },
+  { name: "Информатика и информационные технологии", aliases: ["информатика и информационные технологии", "информатика", "информационные технологии", "информатика и ит"], h: { 1: 1, 2: 1, 3: 1, 5: 1, 6: 1, 7: 1, 8: 1, 9: 2, 10: 2, 11: 2 } },
+
+  // IV. Tabiiy va iqtisodiy fanlar
+  { name: "Физика", aliases: ["физика"], h: { 7: 2, 8: 2, 9: 2, 10: 2, 11: 2 } },
+  { name: "Астрономия", aliases: ["астрономия"], h: { 11: 1 } },
+  { name: "Химия", aliases: ["химия"], h: { 7: 2, 8: 2, 9: 2, 10: 2, 11: 2 } },
+  { name: "Биология", aliases: ["биология"], h: { 7: 2, 8: 2, 9: 2, 10: 2, 11: 2 } },
+  { name: "География", aliases: ["география"], h: { 7: 2, 8: 1.5, 9: 1.5, 10: 2 } },
+  { name: "Основы экономических знаний", aliases: ["основы экономических знаний", "основы экономики"], h: { 8: 0.5, 9: 0.5 } },
+  { name: "Основы предпринимательства", aliases: ["основы предпринимательства"], h: { 11: 1 } },
+  { name: "Естествознание", aliases: ["естествознание", "естествознание science", "science", "природоведение", "естественные науки"], h: { 1: 1, 2: 1, 3: 1, 4: 2, 5: 2, 6: 3 } },
+
+  // V. Amaliy fanlar
+  { name: "Музыкальная культура", aliases: ["музыкальная культура", "музыка"], h: { 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1 } },
+  { name: "Изобразительное искусство", aliases: ["изобразительное искусство", "изо"], h: { 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1 } },
+  { name: "Черчение", aliases: ["черчение"], h: { 8: 1, 9: 1 } },
+  { name: "Технология", aliases: ["технология", "труд", "трудовое обучение"], h: { 1: 1, 2: 1, 3: 1, 4: 1, 5: 2, 6: 2, 7: 2, 8: 1, 9: 1 } },
+  { name: "Физическая культура", aliases: ["физическая культура", "физкультура", "физическое воспитание"], h: { 1: 1, 2: 2, 3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 2, 11: 2 } },
+  { name: "Начальная допризывная подготовка", aliases: ["начальная допризывная подготовка", "ндп", "допризывная подготовка"], h: { 10: 2, 11: 2 } },
+];
+
 // Fan nomlarini solishtirish uchun: apostroflar, katta-kichik harf,
 // ortiqcha bo'shliq va qavslar hisobga olinmaydi.
 export function normName(v) {
@@ -70,9 +126,9 @@ export function normName(v) {
 }
 
 
-// Standart holat: o'zbek maktablari uchun to'ldirilgan, rus maktablari
-// uchun bo'sh (superadmin to'ldirmaguncha eski usul ishlaydi).
-export const DEFAULT_CURRICULUM = { uz: CURRICULUM_UZ, ru: [] };
+// Standart holat: IKKALA til ham to'ldirilgan — soatlar bir xil,
+// rus sinflarida fanlar ruscha nomlanadi.
+export const DEFAULT_CURRICULUM = { uz: CURRICULUM_UZ, ru: CURRICULUM_RU };
 
 export const CURRICULUM_LANGS = [
   { key: "uz", label: "O'zbek sinflari" },
@@ -107,6 +163,24 @@ export function normalizeCurriculum(raw) {
     if (out[lang].length) any = true;
   });
   return any ? out : null;
+}
+
+/* Bo'sh qolgan tilni ichki reja bilan to'ldiradi.
+   NIMA UCHUN KERAK: bulutdagi `standard_hours` qatori superadmin
+   tomonidan `{ uz: [...], ru: [] }` ko'rinishida saqlangan bo'lishi
+   mumkin (rus rejasi ilgari umuman yo'q edi). Bunday yozuv
+   `normalizeCurriculum` dan o'tadi va ichki rejani BOSIB YUBORARDI —
+   natijada rus sinflari baribir zaxira usulga tushib, soatni fanning
+   umumiy `weeklyHours` idan olardi.
+   Faqat O'QISH yo'lida qo'llanadi; saqlashda ishlatilmaydi, aks holda
+   superadmin yozmagan ma'lumot jimgina bazaga tushib qolardi. */
+export function withCurriculumDefaults(c) {
+  const out = { uz: [], ru: [] };
+  ["uz", "ru"].forEach((lang) => {
+    const rows = Array.isArray(c?.[lang]) ? c[lang] : [];
+    out[lang] = rows.length ? rows : DEFAULT_CURRICULUM[lang];
+  });
+  return out;
 }
 
 // Fan nomi (va uning muqobil nomlari) -> reja qatori
