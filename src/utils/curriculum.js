@@ -213,15 +213,69 @@ export function withCurriculumDefaults(c) {
 
 // Ikki tildagi ro'yxatni qator-qator bog'laydi: `key` bo'lsa o'sha
 // bo'yicha, bo'lmasa (bulutdagi eski yozuv) tartib bo'yicha.
+// Qoida `pairIndexMap` da — nom indeksi va soat ko'chirish BIR XIL
+// juftlikka tayanishi shart, aks holda fan bir joyda A qatorga, boshqa
+// joyda B qatorga tushib, soat jimgina chalkashardi.
 function pairRows(rows, other) {
   const juft = new Map();
-  const kalitli = new Map();
-  (rows || []).forEach((r) => { if (r?.key) kalitli.set(r.key, r); });
+  const idx = pairIndexMap(other || [], rows || []);   // otherIndex → rowsIndex
   (other || []).forEach((o, i) => {
-    const mos = (o?.key && kalitli.get(o.key)) || rows?.[i] || null;
-    if (mos) juft.set(o, mos);
+    const j = idx.get(i);
+    if (j != null && rows?.[j]) juft.set(o, rows[j]);
   });
   return juft;
+}
+
+/* `rows` dagi har qatorning `base` dagi jufti — INDEKS bo'yicha.
+   Qaytadi Map(rowsIndex → baseIndex).
+
+   ⚠️ TARTIB BO'YICHA JUFTLASH — FAQAT KALIT UMUMAN BO'LMAGANDA.
+   `key` bulutdagi eski (kalitsiz) yozuvda yo'q, shuning uchun zaxira
+   yo'l kerak. Lekin uni kalitli ma'lumotga ham qo'llasak, superadmin
+   bir tilga YANGI (kalitsiz) fan qo'shishi bilan indekslar siljib,
+   begona qator juft deb olinardi — soat esa juft bo'yicha ko'chiriladi,
+   ya'ni xato JIMGINA tarqalardi. Shuning uchun: kalit bor → faqat
+   kalit bo'yicha; ikkala tomonda ham kalit yo'q → tartib bo'yicha. */
+export function pairIndexMap(rows, base) {
+  const kalitli = new Map();
+  (base || []).forEach((r, i) => { if (r?.key && !kalitli.has(r.key)) kalitli.set(r.key, i); });
+  const out = new Map();
+  (rows || []).forEach((r, i) => {
+    let j = -1;
+    if (r?.key) j = kalitli.has(r.key) ? kalitli.get(r.key) : -1;
+    else if (base?.[i] && !base[i].key) j = i;
+    if (j >= 0) out.set(i, j);
+  });
+  return out;
+}
+
+/* ⚠️ RUS VA O'ZBEK SINFIDA SOAT BIR XIL — MANBA BITTA.
+
+   Tayanch o'quv reja ta'lim tiliga qarab o'zgarmaydi: 3-sinf matematikasi
+   rus sinfida ham, o'zbek sinfida ham 5 soat. Ikki ro'yxatda soat ALOHIDA
+   turgani uchun ular ajralib ketishi mumkin edi — ichki rejada bu
+   `CURRICULUM_RU` ni `UZ_ROWS` ning AYNI `h` obyektiga bog'lash bilan
+   yopilgan, lekin BULUTDAGI yozuvda emas: superadmin «Standart soatlar»
+   sahifasida ikki tilni mustaqil tahrirlagan bo'lishi (yoki eski,
+   bog'lanishsiz yozuv qolgan bo'lishi) mumkin. O'shanda rus sinflari
+   o'zbek sinflaridan boshqa soat olardi.
+
+   Shuning uchun O'QISH yo'lida rus qatori soatini har doim o'zbek
+   juftidan oladi. Juft topilmasa (rejaga faqat rus tilida qo'shilgan
+   fan) qator o'z soati bilan qoladi. */
+export function syncCurriculumHours(c) {
+  const uz = Array.isArray(c?.uz) ? c.uz : [];
+  const ru = Array.isArray(c?.ru) ? c.ru : [];
+  if (!uz.length || !ru.length) return { uz, ru };
+  const juft = pairIndexMap(ru, uz);
+  return {
+    uz,
+    ru: ru.map((r, i) => {
+      const j = juft.get(i);
+      const mos = j == null ? null : uz[j];
+      return mos ? { ...r, h: { ...mos.h } } : r;
+    }),
+  };
 }
 
 /* Fan nomi (va uning muqobil nomlari) -> reja qatori.

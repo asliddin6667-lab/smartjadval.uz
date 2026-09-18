@@ -31,14 +31,14 @@ import { PRIMARY_MAX_GRADE } from "./homeroom";
 // nomni kichik harfga keltiradi — naqshlar shu shaklga yozilgan.
 const SPECIALIST_RE = [
   // ——— Chet tili ———
-  /(chet|xorijiy)\s*til|ingliz|nemis|fransuz/,
-  /иностранн|английск|немецк|французск|инглиз|чет тил/,
+  /(chet|xorijiy)\s*til|ingliz|ingiliz|nemis|fransuz|franzuz|english|deutsch|francais/,
+  /иностранн|английск|немецк|французск|инглиз|чет тил|хорижий тил/,
   // ——— Jismoniy tarbiya ———
   /jismoniy|jismon\b/,
-  /физическ|физкультур|жисмоний/,
+  /физическ|физкультур|физ ра|жисмоний/,
   // ——— Informatika ———
-  /informatika|axborot texnologiya/,
-  /информатик|информационны[ех] технологи|ахборот технология/,
+  /informatika|informatsion texnologiya|axborot texnologiya|\bikt\b/,
+  /информатик|информационны[ех] технологи|ахборот технология|\bикт\b/,
 ];
 
 /** Fan mutaxassis ustozniki (sinf rahbariga biriktirilmaydi)mi? */

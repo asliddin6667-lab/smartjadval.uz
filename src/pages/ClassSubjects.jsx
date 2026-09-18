@@ -4,7 +4,7 @@ import {
   PRIMARY_SUBJECT_NAMES_RU, MIDDLE_SUBJECT_NAMES_RU, HIGH_SUBJECT_NAMES_RU
 } from "../utils/constants";
 import { sortByName, cmpName } from "../utils/sortHelpers";
-import { normName, buildCurriculumIndex, hoursFromRow, namesForGrade as curriculumNamesForGrade } from "../utils/curriculum";
+import { normName, buildCurriculumIndex, hoursFromRow } from "../utils/curriculum";
 import { getCachedCurriculum, fetchStandardHours } from "../services/standardHoursService";
 import { removeSubjectLessons, removeClassesLessons, removeAssignmentsLessons } from "../utils/scheduleCleanup";
 import { LANG_BOTH, classLangOf, subjectLangOf, subjectFitsLang, langIcon, langLabel } from "../utils/eduLang";
@@ -292,7 +292,7 @@ function computeTeacherHours(classSubjects) {
   return load;
 }
 
-export default function ClassSubjectsPage({ classes, subjects, teachers, setTeachers, rooms, classSubjects, setClassSubjects, schedule, setSchedule, toast, currentUser }) {
+export default function ClassSubjectsPage({ classes, subjects, setSubjects, teachers, setTeachers, rooms, classSubjects, setClassSubjects, schedule, setSchedule, toast, currentUser }) {
   // "4 soat blok" — FAQAT superadmin uchun. Boshqa rollarda bu sozlama
   // umuman ko'rinmaydi (mavjud yozuvda yoqilgan bo'lsa ham tegilmaydi).
   const isSuperadmin = currentUser?.role === "superadmin";
@@ -313,9 +313,6 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, setTeac
   }), [curriculum]);
   function curriculumRowFor(subjectName, lang) {
     return curriculumIndex[lang]?.get(normName(subjectName)) || null;
-  }
-  function curriculumHours(subjectName, grade, lang) {
-    return hoursFromRow(curriculumRowFor(subjectName, lang), grade);
   }
 
   const [selectedClassId, setSelectedClassId] = useState(classes[0]?.id || "");
@@ -460,6 +457,28 @@ Davom etamizmi?`;
     setClassSubjects(next);
     const tail = cleaned?.removed ? ` · jadvaldan ${cleaned.removed} ta dars olib tashlandi` : "";
     toast?.(`${langMismatch.entries} ta mos kelmaydigan biriktirma o'chirildi (${langMismatch.hours} soat)${tail}`, "success");
+  }
+
+  /* ——— Mos kelmaydigan fanlarni «🌐 Umumiy» qilish ———
+     Mos kelmaslikning eng ko'p uchraydigan sababi — fan ATAYLAB emas,
+     BELGILANMAGANI uchun boshqa tilda: eMaktabdan import qilingan
+     fanlar tilsiz keladi va standart «uz» bo'lib qoladi, rus sinfida
+     esa shu fan «begona» bo'lib ko'rinadi. O'chirish bunday holatda
+     noto'g'ri javob: fan kerak, faqat belgisi yo'q.
+     «Umumiy» — fan ikkala tildagi sinfda BITTA fan sifatida ishlaydi
+     (utils/eduLang.js), ya'ni ustozi ham ikkalasida bir xil bo'ladi. */
+  function markLangMismatchBoth() {
+    if (!setSubjects || !langMismatch.entries) return;
+    const ids = new Set(langMismatch.pairs.map(p => p.subjectId));
+    let n = 0;
+    const next = subjects.map((s) => {
+      if (!ids.has(s.id) || subjectLangOf(s) === LANG_BOTH) return s;
+      n += 1;
+      return { ...s, lang: LANG_BOTH };
+    });
+    if (!n) return;
+    setSubjects(next);
+    toast?.(`${n} ta fan «🌐 Umumiy» qilib belgilandi — endi o'zbek va rus sinflarida ham ishlaydi`, "success");
   }
 
   // Hovuz (daraja guruhi) tez yaratish: tanlangan sinflarga bir xil guruh biriktiriladi
@@ -1117,25 +1136,63 @@ Fan bilan birga ular ham o'chsinmi?`;
   /* ——— Sinf uchun reja: qaysi fan, necha soat ———
      Soatlar superadminning 'Standart soatlar' sahifasidan keladi (bulut);
      bulut ochilmasa — kesh, u ham bo'lmasa ichki 2025-2026 TAYANCH O'QUV REJA.
-     Reja qamramagan holatlarda eski usul (fanning o'z haftalik soati). */
+     Reja qamramagan holatlarda eski usul (fanning o'z haftalik soati).
+
+     ⚠️ SIKL REJA QATORLARIDAN BORADI, FANLAR RO'YXATIDAN EMAS.
+
+     Ilgari sikl maktabning fanlar ro'yxatidan boshlanar va faqat SINF
+     TILIGA mos fanlarni olardi. Natijada yig'indi maktab ma'lumotiga
+     bog'lanib qolardi: fan «rus» deb belgilanmagan bo'lsa rus sinfi
+     uchun umuman ko'rinmas, rejadagi o'sha qator esa jimgina tushib
+     qolardi — jonli maktabda 3-B (rus) 8 fan / 14 soat, 3-V (o'zbek)
+     esa 13 fan / 25 soat chiqdi. Holbuki TAYANCH O'QUV REJA ikkala
+     tilda AYNI ([curriculum.js](../utils/curriculum.js): rus qatori
+     o'zbek qatoridan AYNI `h` obyektini oladi), ya'ni bir xil sinfda
+     soat farq qila OLMAYDI.
+
+     Endi har reja qatoriga bitta fan tanlanadi:
+       1) sinf tiliga mos (yoki «umumiy») fan — ustun;
+       2) topilmasa — nomi shu qatorga tushadigan HAR QANDAY fan,
+          tili boshqa deb belgilangan bo'lsa ham.
+     Ikkinchi qadam ataylab: maktabning fanlar ro'yxati ko'pincha
+     eMaktabdan import qilingan va tili umuman belgilanmagan bo'ladi.
+     Rejadagi soatni SHU SABABLI tashlab ketish — ma'lumotdagi
+     belgini jadvaldagi kamomadga aylantirish bo'lardi. Nechta shunday
+     fan olingani `offLang` da qaytadi va foydalanuvchiga aytiladi. */
   function planForClass(cls) {
     const lang = classLangOf(cls);
     const grade = getGradeFromClassName(cls?.name);
+    const plan = curriculum[lang] || [];
 
-    if (grade >= 1 && grade <= 11 && (curriculum[lang] || []).length) {
-      const rows = [];
-      const usedRows = new Set();
-      sortByName(subjects.filter(s => subjectFitsLang(s, lang))).forEach(s => {
-        const hours = curriculumHours(s.name, grade, lang);
-        if (hours == null) return;
+    if (grade >= 1 && grade <= 11 && plan.length) {
+      // Reja qatori → fan. Bir qatorga bir nechta fan tushishi mumkin
+      // («Букварь» ham, «O'qish savodxonligi» ham) — birinchisi olinadi;
+      // ro'yxat alifbo tartibida bo'lgani uchun tanlov barqaror.
+      const oz = new Map();      // sinf tiliga mos (yoki umumiy) fanlar
+      const begona = new Map();  // boshqa til deb belgilangan fanlar — zaxira
+      sortByName(subjects).forEach((s) => {
         const row = curriculumRowFor(s.name, lang);
-        if (usedRows.has(row.name)) return; // bir xil fanning ikkinchi varianti
-        usedRows.add(row.name);
+        if (!row) return;
+        const m = subjectFitsLang(s, lang) ? oz : begona;
+        if (!m.has(row.name)) m.set(row.name, s);
+      });
+
+      const rows = [];
+      const missing = [];
+      let offLang = 0;
+      plan.forEach((row) => {
+        const hours = hoursFromRow(row, grade);
+        if (hours == null) return;            // bu fan shu sinfda o'qitilmaydi
+        const mos = oz.get(row.name);
+        const s = mos || begona.get(row.name);
+        if (!s) { missing.push(row.name); return; }
+        if (!mos) offLang += 1;
         rows.push({ subject: s, hours });
       });
+
       if (rows.length) {
-        const missing = curriculumNamesForGrade(curriculum[lang], grade).filter(n => !usedRows.has(n));
-        return { rows: withHomeroomHour(rows, grade, lang), missing, source: "reja" };
+        rows.sort((a, b) => cmpName(a.subject?.name, b.subject?.name));
+        return { rows: withHomeroomHour(rows, grade, lang), missing, offLang, source: "reja" };
       }
     }
 
@@ -1143,7 +1200,7 @@ Fan bilan birga ular ham o'chsinmi?`;
     const names = fallbackNamesForGrade(grade, lang);
     const rows = sortByName(subjects.filter(s => names.includes(s.name) && subjectFitsLang(s, lang)))
       .map(s => ({ subject: s, hours: Math.max(1, Number(s.weeklyHours || 1)) }));
-    return { rows: withHomeroomHour(rows, grade, lang), missing: [], source: "standart" };
+    return { rows: withHomeroomHour(rows, grade, lang), missing: [], offLang: 0, source: "standart" };
   }
 
   /* ——— «Kelajak soati» rejaga o'zi qo'shiladi ———
@@ -1152,11 +1209,17 @@ Fan bilan birga ular ham o'chsinmi?`;
      va sinf rahbarida turadi. Reja qo'llanganda sinf fanlari butunlay
      almashadi — qatorni o'zimiz qo'shmasak, «Kelajak soati» har safar
      o'chib ketardi.
-     Fanlar bo'limida bunday fan bo'lmasa — qo'shadigan narsa yo'q. */
+     Fanlar bo'limida bunday fan bo'lmasa — qo'shadigan narsa yo'q.
+
+     Til bo'yicha izlash `planForClass` dagidek: avval sinf tiliga mos
+     fan, topilmasa har qanday. Aks holda tili belgilanmagan maktabda
+     rus sinfi «Kelajak soati» siz qolar va yana o'zbek sinfidan bir
+     soat kam olardi. */
   function withHomeroomHour(rows, grade, lang) {
     if (!(grade >= 1 && grade <= 11)) return rows;
     if (rows.some(r => isFixedMondaySubject(r.subject))) return rows;
-    const s = subjects.find(x => isFixedMondaySubject(x) && subjectFitsLang(x, lang));
+    const s = subjects.find(x => isFixedMondaySubject(x) && subjectFitsLang(x, lang))
+      || subjects.find(x => isFixedMondaySubject(x));
     if (!s) return rows;
     return [...rows, { subject: s, hours: Math.max(1, Number(s.weeklyHours || 1)) }]
       .sort((a, b) => cmpName(a.subject?.name, b.subject?.name));
@@ -1220,7 +1283,7 @@ Fan bilan birga ular ham o'chsinmi?`;
 
   function applySmartForSelected() {
     if (!selectedClass) return;
-    const { rows, missing, source } = planForClass(selectedClass);
+    const { rows, missing, offLang, source } = planForClass(selectedClass);
     if (!rows.length) {
       toast(classLang === "ru"
         ? "Avval Fanlar bo'limida ruscha standart fanlarni qo'shing"
@@ -1250,6 +1313,13 @@ Fan bilan birga ular ham o'chsinmi?`;
       toast(`${selectedClass.name}: ${rows.length} fan · ${total} soat biriktirildi ✓${headPart}${source === "reja" ? " (tayanch o'quv reja)" : ""}`, "success");
     }
 
+    // Tili boshqa deb belgilangan fan ishlatilgan bo'lsa — aytamiz.
+    // Soat rejadagicha to'liq, lekin «Fanlar» bo'limida til belgisini
+    // to'g'rilash kerakligini bilib turgani yaxshi.
+    if (offLang) {
+      toast(`${selectedClass.name}: ${offLang} ta fanning tili sinf tiliga mos emas — soat rejadagicha qo'yildi, «Fanlar» bo'limida tilni to'g'rilang`, "warning");
+    }
+
     // Rahbarsiz sinfda fanlar ustozsiz qoladi — buni aytmasak,
     // foydalanuvchi «nega biriktirilmadi?» deb qoladi
     if (!headId) {
@@ -1268,9 +1338,11 @@ Fan bilan birga ular ham o'chsinmi?`;
     const headAdd = new Map();
     let headRows = 0;
     const noHead = [];
+    const offLangClasses = [];
 
     classes.forEach(cls => {
-      const { rows, missing } = planForClass(cls);
+      const { rows, missing, offLang } = planForClass(cls);
+      if (offLang) offLangClasses.push(cls.name);
       if (!rows.length) {
         if (classLangOf(cls) === "ru") missingRu = true; else missingUz = true;
         return; // fanlar hali qo'shilmagan tildagi sinfga tegmaymiz
@@ -1310,6 +1382,15 @@ Fan bilan birga ular ham o'chsinmi?`;
     // aks holda «nega ustoz qo'yilmadi?» degan savol tug'iladi
     if (noHead.length) {
       toast(`Sinf rahbari belgilanmagan: ${noHead.slice(0, 5).join(", ")}${noHead.length > 5 ? ` va yana ${noHead.length - 5} ta` : ""} — «Sinflar» bo'limida tanlab, qayta qo'llang`, "warning");
+    }
+
+    // Tili sinf tiliga mos kelmaydigan fan ishlatilgan sinflar. Soat
+    // rejadagicha to'liq qo'yildi (uz va ru sinflari bir xil bo'lsin
+    // uchun), lekin «Fanlar» bo'limidagi til belgisi to'g'rilanishi
+    // kerak — aks holda ro'yxatlarda fan ogohlantirish nishoni bilan
+    // chiqaveradi.
+    if (offLangClasses.length) {
+      toast(`Til belgisi mos emas: ${offLangClasses.slice(0, 5).join(", ")}${offLangClasses.length > 5 ? ` va yana ${offLangClasses.length - 5} ta` : ""} — soat rejadagicha qo'yildi, «Fanlar» bo'limida tilni to'g'rilang`, "warning");
     }
   }
 
@@ -1643,9 +1724,16 @@ Fan bilan birga ular ham o'chsinmi?`;
                         Sinflar: {langMismatch.classNames.join(", ")}
                       </div>
                       <div style={{ fontSize: 12, opacity: .85, marginTop: 4 }}>
-                        Fan haqiqatan kerak bo'lsa — «Fanlar» bo'limida uning tilini «🌐 Umumiy» qilib belgilang.
+                        Fan haqiqatan kerak bo'lsa — tilini «🌐 Umumiy» qiling (pastdagi tugma yoki «Fanlar» bo'limi).
+                        Standart soatlar shu fanlarni ataylab ishlatgan bo'lishi mumkin: reja o'zbek va rus sinfida bir xil,
+                        shuning uchun soat tushib qolmasligi uchun tili mos kelmagan fan ham olinadi.
                       </div>
                     </div>
+                    {setSubjects && (
+                      <button className="btn btn-success btn-sm" style={{ marginRight: 6 }} onClick={markLangMismatchBoth}>
+                        🌐 Tilini «Umumiy» qilish
+                      </button>
+                    )}
                     <button className="btn btn-danger btn-sm" onClick={cleanLangMismatch}>🧹 Hammasini o'chirish</button>
                   </div>
                 )}

@@ -17,16 +17,26 @@
 // =====================================================================
 import { supabase } from "./supabaseClient";
 import { loadData, saveData } from "./storageService";
-import { DEFAULT_CURRICULUM, normalizeCurriculum, withCurriculumDefaults } from "../utils/curriculum";
+import { DEFAULT_CURRICULUM, normalizeCurriculum, withCurriculumDefaults, syncCurriculumHours } from "../utils/curriculum";
 
 const CACHE_KEY = "standard_hours";
 const ROW_ID = "global";
+
+/* O'QISH yo'lining yagona tayyorlovchisi:
+     1) bo'sh qolgan til ichki rejadan to'ldiriladi (`withCurriculumDefaults`);
+     2) rus qatorlarining soati o'zbek juftidan olinadi (`syncCurriculumHours`).
+   Ikkinchisi tufayli rus va o'zbek sinflari BIR XIL soat oladi, bulutda
+   qanday yozuv turgan bo'lsa ham. Saqlashda qo'llanmaydi — bazaga
+   superadmin yozgan narsa boradi. */
+function forUse(c) {
+  return syncCurriculumHours(withCurriculumDefaults(c));
+}
 
 // Keshdagi (yoki ichki) reja — sinxron, sahifa ochilishi bilan ishlatiladi
 export function getCachedCurriculum() {
   const cached = normalizeCurriculum(loadData(CACHE_KEY, null));
   // Bo'sh qolgan til (odatda `ru`) ichki rejadan to'ldiriladi
-  return cached ? withCurriculumDefaults(cached) : DEFAULT_CURRICULUM;
+  return cached ? forUse(cached) : DEFAULT_CURRICULUM;
 }
 
 /**
@@ -48,14 +58,14 @@ export async function fetchStandardHours() {
       // Keshga bulutdagi holat AYNAN yoziladi; zaxira faqat qaytariladigan
       // qiymatga qo'llanadi, aks holda ichki reja bazadagidek ko'rinardi.
       saveData(CACHE_KEY, clean);
-      return { data: withCurriculumDefaults(clean), updatedAt: data?.updated_at || null, source: "cloud" };
+      return { data: forUse(clean), updatedAt: data?.updated_at || null, source: "cloud" };
     }
   } catch {
     // jadval yo'q / internet yo'q — keshga tushamiz
   }
 
   const cached = normalizeCurriculum(loadData(CACHE_KEY, null));
-  if (cached) return { data: withCurriculumDefaults(cached), updatedAt: null, source: "cache" };
+  if (cached) return { data: forUse(cached), updatedAt: null, source: "cache" };
   return { data: DEFAULT_CURRICULUM, updatedAt: null, source: "default" };
 }
 

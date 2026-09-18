@@ -7,7 +7,7 @@
 //  to'ldiriladi.  Ma'lumot Supabase'dagi `standard_hours` jadvalida.
 // =====================================================================
 import { useEffect, useMemo, useState } from "react";
-import { CURRICULUM_LANGS, GRADES, DEFAULT_CURRICULUM } from "../utils/curriculum";
+import { CURRICULUM_LANGS, GRADES, DEFAULT_CURRICULUM, pairIndexMap } from "../utils/curriculum";
 import { fetchStandardHours, saveStandardHours } from "../services/standardHoursService";
 
 const EMPTY = { uz: [], ru: [] };
@@ -64,16 +64,36 @@ export default function StandardHoursPage({ toast }) {
     setDirty(true);
   }
 
+  /* ⚠️ SOAT IKKALA TILGA BIRDAN YOZILADI.
+
+     Tayanch o'quv reja ta'lim tiliga qarab o'zgarmaydi: 3-sinf
+     matematikasi rus sinfida ham, o'zbek sinfida ham 5 soat. Ilgari
+     ikki ro'yxat mustaqil tahrirlanardi va ajralib ketishi mumkin edi —
+     jonli maktabda aynan shunday bo'ldi (3-B 14 soat, 3-V 25 soat).
+
+     Endi o'qish yo'li rus soatini o'zbek juftidan oladi
+     (`syncCurriculumHours`), ya'ni faqat rus tilida qilingan tahrir
+     baribir yo'qolardi. Shuning uchun yozuv HAR IKKI tilning juft
+     qatoriga tushadi — qaysi ilovada turgan bo'lsangiz ham natija bir xil.
+     Juft topilmasa (faqat bitta tilda mavjud fan) shu til o'zgaradi. */
   function setHours(idx, grade, raw) {
-    const next = rows.map((r, i) => {
-      if (i !== idx) return r;
+    const v = Number(String(raw).replace(",", "."));
+    const yoz = (r) => {
       const h = { ...r.h };
-      const v = Number(String(raw).replace(",", "."));
       if (!raw || !v || v <= 0) delete h[grade];
       else h[grade] = Math.min(20, v);
       return { ...r, h };
-    });
-    updateRows(next);
+    };
+    const other = lang === "uz" ? "ru" : "uz";
+    const juftIdx = pairIndexMap(curriculum[lang] || [], curriculum[other] || []).get(idx);
+    setCurriculum((prev) => ({
+      ...prev,
+      [lang]: (prev[lang] || []).map((r, i) => (i === idx ? yoz(r) : r)),
+      [other]: juftIdx == null
+        ? (prev[other] || [])
+        : (prev[other] || []).map((r, i) => (i === juftIdx ? yoz(r) : r)),
+    }));
+    setDirty(true);
   }
 
   function setName(idx, value) {
@@ -155,6 +175,12 @@ export default function StandardHoursPage({ toast }) {
           📋 Har bir katakka <b>haftalik soat</b> yoziladi. Bo'sh katak — bu fan o'sha sinfda o'qitilmaydi.
           Fan nomi maktabdagi fan nomi bilan solishtiriladi; nom har xil yozilishi mumkin bo'lsa,
           <b> "Boshqa nomlari"</b> ustuniga vergul bilan qo'shing (masalan: <i>ingliz tili, nemis tili</i>).
+        </div>
+
+        <div className="alert alert-warning" style={{ marginTop: 10 }}>
+          🔗 <b>Soat ikkala tilda bir xil.</b> Tayanch o'quv reja ta'lim tiliga qarab o'zgarmaydi,
+          shuning uchun katakni qaysi tilda o'zgartirsangiz ham juft qatorga (o'zbek ↔ rus) birdan yoziladi.
+          Tillar orasida faqat <b>fan nomi</b> va <b>"Boshqa nomlari"</b> farq qiladi.
         </div>
 
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", margin: "14px 0" }}>
