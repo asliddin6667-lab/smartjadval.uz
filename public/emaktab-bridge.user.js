@@ -43,7 +43,18 @@
 (function () {
   "use strict";
 
-  if (window.__SJ_BRIDGE__) { window.__SJ_BRIDGE__.ochish(); return; }
+  // ⚠️ SKRIPT IKKINCHI MARTA QO'YILGANDA JADVAL O'QILISHI SHART.
+  //
+  //  «⚡ Hammasi birga» matni `window.__SJ_JADVAL__ = {...}` bilan
+  //  boshlanadi va keyin shu skript keladi. Panel allaqachon qurilgan
+  //  bo'lsa oddiygina `return` qilish YETMAYDI — yangi jadval
+  //  o'zgaruvchiga yozilgan bo'lsa ham e'tiborsiz qolar va foydalanuvchi
+  //  «nega eski jadval turibdi?» deb qolardi.
+  if (window.__SJ_BRIDGE__) {
+    window.__SJ_BRIDGE__.ochish();
+    window.__SJ_BRIDGE__.yangiJadval();
+    return;
+  }
 
   // Qabul qilinadigan jadval formati versiyalari (emaktabExport.js dagi
   // `EMAKTAB_FORMAT_VERSION`). 2 — `emaktab` id xaritasi bilan, 1 — usiz
@@ -1401,9 +1412,21 @@
     log("💾 «Yuklamalar» papkasiga dump.json saqlandi ✓", "ok");
   };
 
+  // Smartjadval «⚡ Hammasi birga» tugmasi jadvalni shu o'zgaruvchiga
+  // qo'yadi. Skript qayta qo'yilganda ham shu funksiya chaqiriladi
+  // (yuqoridagi qorovulga qarang).
+  function yangiJadval() {
+    if (!window.__SJ_JADVAL__) return false;
+    $("json").value = JSON.stringify(window.__SJ_JADVAL__);
+    const ok = parse();
+    panel.classList.add("ochiq");
+    return ok;
+  }
+
   // Console'dan qo'lda tekshirish uchun (nosozlik qidirilganda asqotadi)
   window.__SJ_BRIDGE__ = {
     ochish: () => panel.classList.add("ochiq"),
+    yangiJadval,
     setka: findGrid,
     hisobot: gridReport,
     oyna: findOpenForm,
@@ -1411,12 +1434,7 @@
     paket: () => paket,
   };
 
-  // Smartjadval «hammasi birga» tugmasi jadvalni shu o'zgaruvchiga qo'yadi
-  if (window.__SJ_JADVAL__) {
-    $("json").value = JSON.stringify(window.__SJ_JADVAL__);
-    parse();
-    panel.classList.add("ochiq");
-  }
+  yangiJadval();
 
   // Setka holati DARROV ko'rinsin: foydalanuvchi to'g'ri sahifada
   // turganini JSON kutmasdan bilishi kerak.
