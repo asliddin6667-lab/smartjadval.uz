@@ -1345,6 +1345,18 @@ natijaviy URL'dan yangi `schedule` id'sini oladi.
 almashtiradigan amalni o'rganish kerak bo'lsa — URL'lar zanjiriga qarang,
 yozuv tanasi bo'sh chiqadi.
 
+⚠️ **EKSPORT SMENAGA SIG'MAGAN DARSNI JIMGINA TASHLAB KETARDI.**
+`buildEmaktabPayload()` sinfning vaqt bandlarini faqat `ts.classIds`
+(smena) bo'yicha olardi. Jadval smena o'zgartirilishidan OLDIN tuzilgan
+bo'lsa, dars endi «ruxsat etilmagan» bandda turadi va eksport uni
+ko'rmasdi: sahifada sinf tanlangan ko'rinar, paketda esa `0 dars` bo'lib
+chiqardi — «🏫 Hamma sinfga» jonli maktabda `1/1` bo'lib tugadi.
+Endi `slotsWithLessons()` sinfda HAQIQATAN darsi bor bandlarni ham
+qo'shadi (faqat qo'shadi, hech narsa yo'qotmaydi). **Ekrandagi
+«N dars» hisobi (`darsSoni`) jadvaldan to'g'ridan-to'g'ri sanaydi,
+eksport esa bandlar bo'ylab yuradi — ikkisi ajralib ketsa dars
+yo'qoladi; yangi eksport yo'li qo'shsangiz shu juftlikni tekshiring.**
+
 ⚠️ **`view=new` SAHIFASIDA BIR NECHTA FORMA BOR.** `doc.querySelector("form")`
 birinchisini — sarlavhadagi qidiruv formasini — olardi, unda matn maydoni
 yo'q va HAMMA sinf «formada nom maydoni topilmadi» deb rad etilardi
