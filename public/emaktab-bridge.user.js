@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Smartjadval → eMaktab ko'prigi
 // @namespace    https://smartjadval.uz/
-// @version      1.3.0
+// @version      1.4.0
 // @description  Smartjadval.uz da tuzilgan dars jadvalini eMaktab (kundalik.com) «Darslar jadvali sxemasi» setkasiga joylashtiradi
 // @author       smartjadval.uz
 // @match        https://schools.emaktab.uz/*
@@ -81,6 +81,21 @@
   const V = [1, 2];
   const LS_MAP = "sj_emaktab_map_v1";       // qo'lda moslashtirilgan nomlar
   const LS_JADVAL = "sj_emaktab_jadval_v1"; // oxirgi jadval (sinflar bo'ylab yuriladi)
+  const LS_OCHIQ = "sj_emaktab_panel_ochiq"; // panel ochiq turganmi
+
+  // ⚠️ eMAKTAB — KLASSIK KO'P SAHIFALI SAYT.
+  //
+  //  Har bosilgan havola butun sahifani qaytadan yuklaydi, ya'ni skript
+  //  ham noldan ishga tushadi va panel yopiq holatga qaytadi. 40+ sinfni
+  //  birma-bir o'tkazayotganda buni har safar qayta ochish zerikarli.
+  //  Sahifa yangilanishini to'xtatib bo'lmaydi — lekin panelning holatini
+  //  eslab qolish mumkin.
+  const ochiqEdi = (() => {
+    try { return localStorage.getItem(LS_OCHIQ) === "1"; } catch { return false; }
+  })();
+  const ochiqYoz = (v) => {
+    try { localStorage.setItem(LS_OCHIQ, v ? "1" : "0"); } catch { /* e'tiborsiz */ }
+  };
 
   // ===================================================================
   //  1-QISM. NOM MOSLASHTIRISH
@@ -1220,8 +1235,8 @@
     el.scrollTop = el.scrollHeight;
   }
 
-  $("fab").onclick = () => panel.classList.toggle("ochiq");
-  $("yopish").onclick = () => panel.classList.remove("ochiq");
+  $("fab").onclick = () => ochiqYoz(panel.classList.toggle("ochiq"));
+  $("yopish").onclick = () => { panel.classList.remove("ochiq"); ochiqYoz(false); };
   $("fayl").onclick = () => $("fileinp").click();
   $("fileinp").onchange = (e) => {
     const f = e.target.files[0]; if (!f) return;
@@ -1545,6 +1560,9 @@
 
   // Avval «Hammasi birga» dan kelgan jadval, bo'lmasa oxirgi saqlangani
   const yuklandi = yangiJadval() || saqlanganJadval();
+
+  // Oldingi sahifada panel ochiq turgan bo'lsa — ochiq qoldiramiz
+  if (ochiqEdi) panel.classList.add("ochiq");
 
   // Setka holati DARROV ko'rinsin: foydalanuvchi to'g'ri sahifada
   // turganini JSON kutmasdan bilishi kerak.
