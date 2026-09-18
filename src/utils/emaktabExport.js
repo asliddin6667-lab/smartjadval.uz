@@ -45,6 +45,23 @@ function slotsOfClass(timeslots, classId) {
     .sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime));
 }
 
+// Sinfning vaqt bandlari: smena bo'yicha ruxsat etilganlari + o'sha
+// sinfda HAQIQATAN dars turgan bandlar. Ikkinchisi zaxira: smena
+// sozlamasi jadval tuzilgandan keyin o'zgargan bo'lsa ham dars
+// yo'qolmaydi (yuqoridagi izohga qarang).
+function slotsWithLessons(timeslots, schedule, classId) {
+  const chosen = new Map(slotsOfClass(timeslots, classId).map((ts) => [ts.id, ts]));
+  timeslots.forEach((ts) => {
+    if (chosen.has(ts.id) || !isTeachingSlot(ts)) return;
+    const bor = DAYS.some((day) =>
+      (schedule?.[day]?.[ts.id] || []).some((l) => classIdsOf(l).includes(classId))
+    );
+    if (bor) chosen.set(ts.id, ts);
+  });
+  return [...chosen.values()]
+    .sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime));
+}
+
 // Soat raqami — eMaktab setkasidagi QATOR raqami.
 //   "smena"  — smena ichidagi raqam (2-smena ham 1-dan boshlanadi)
 //   "umumiy" — maktab bo'ylab uzluksiz raqam (2-smena 7, 8, 9…)
@@ -85,7 +102,18 @@ export function buildEmaktabPayload({
   const xonaNomlari = new Set();
 
   const sinflar = targetClasses.map((cls) => {
-    const slots = slotsOfClass(timeslots, cls.id);
+    // ⚠️ DARS TURGAN VAQT BANDI HAR DOIM QO'SHILADI.
+    //
+    //  `slotsOfClass()` smena sozlamasiga (`ts.classIds`) tayanadi. Agar
+    //  jadval smena o'zgartirilishidan OLDIN tuzilgan bo'lsa, sinfning
+    //  darsi endi unga «ruxsat etilmagan» bandda turadi va eksport uni
+    //  KO'RMASDAN o'tib ketardi: sinf ro'yxatda «0 dars» bo'lib chiqar,
+    //  sababi esa hech qayerda aytilmasdi (jonli maktabda 43 sinfdan
+    //  faqat bittasi yuklandi, 18.09.2026).
+    //
+    //  Shuning uchun sinfda HAQIQATAN darsi bor bandlar ham qo'shiladi.
+    //  Bu faqat qo'shadi — mavjud darsni yo'qota olmaydi.
+    const slots = slotsWithLessons(timeslots, schedule, cls.id);
     const noById = new Map();
     slots.forEach((ts, i) => noById.set(ts.id, lessonNoOf(ts, i, numbering)));
 
