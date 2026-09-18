@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         Smartjadval → eMaktab ko'prigi
 // @namespace    https://smartjadval.uz/
-// @version      1.2.0
+// @version      1.3.0
 // @description  Smartjadval.uz da tuzilgan dars jadvalini eMaktab (kundalik.com) «Darslar jadvali sxemasi» setkasiga joylashtiradi
 // @author       smartjadval.uz
 // @match        https://schools.emaktab.uz/*
 // @match        https://*.emaktab.uz/*
 // @match        https://*.kundalik.com/*
 // @grant        none
+// @noframes
 // @run-at       document-idle
 // @updateURL    https://smartjadval.uz/emaktab-bridge.user.js
 // @downloadURL  https://smartjadval.uz/emaktab-bridge.user.js
@@ -63,6 +64,16 @@
     window.__SJ_BRIDGE__.yangiJadval();
     return;
   }
+
+  // ⚠️ FAQAT DARS JADVALI BO'LIMIDA ISHLAYDI.
+  //
+  //  `@match` butun `*.emaktab.uz` ni qamraydi (URL oldindan ma'lum
+  //  emas edi), lekin panel jurnallarda, hisobotlarda, sinflar
+  //  ro'yxatida — hech qayerda kerak emas. U yerlarda «SJ» tugmasi
+  //  faqat xalaqit beradi. Konsolga qo'lda qo'yilganda esa cheklov
+  //  ishlamasligi kerak: foydalanuvchi ataylab ishga tushirgan bo'ladi.
+  const QOLDA = typeof GM_info === "undefined";   // Tampermonkeysiz — Console
+  if (!QOLDA && !/\/v2\/schedules/i.test(location.pathname)) return;
 
   // Qabul qilinadigan jadval formati versiyalari (emaktabExport.js dagi
   // `EMAKTAB_FORMAT_VERSION`). 2 — `emaktab` id xaritasi bilan, 1 — usiz
