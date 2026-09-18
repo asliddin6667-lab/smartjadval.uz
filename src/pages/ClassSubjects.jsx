@@ -15,6 +15,10 @@ import {
 } from "../utils/pairGroups";
 // Fan almashinuvi: 2-soatda ustoz/xona boshqa bo'lishi mumkin
 import { swapActive, swapSides, swapTeacherHours } from "../utils/swapGroups";
+// Standart soatlar qo'llanganda fanlarni sinf rahbariga biriktirish uchun
+import { homeroomIdOf } from "../utils/homeroom";
+import { homeroomTakesSubject } from "../utils/homeroomSubjects";
+import { isFixedMondaySubject } from "../utils/scheduleCore";
 import "../styles/cs-mobile.css";
 
 function teacherSubjectIds(teacher) {
@@ -288,7 +292,7 @@ function computeTeacherHours(classSubjects) {
   return load;
 }
 
-export default function ClassSubjectsPage({ classes, subjects, teachers, rooms, classSubjects, setClassSubjects, schedule, setSchedule, toast, currentUser }) {
+export default function ClassSubjectsPage({ classes, subjects, teachers, setTeachers, rooms, classSubjects, setClassSubjects, schedule, setSchedule, toast, currentUser }) {
   // "4 soat blok" — FAQAT superadmin uchun. Boshqa rollarda bu sozlama
   // umuman ko'rinmaydi (mavjud yozuvda yoqilgan bo'lsa ham tegilmaydi).
   const isSuperadmin = currentUser?.role === "superadmin";
@@ -1127,7 +1131,7 @@ Fan bilan birga ular ham o'chsinmi?`;
       });
       if (rows.length) {
         const missing = curriculumNamesForGrade(curriculum[lang], grade).filter(n => !usedRows.has(n));
-        return { rows, missing, source: "reja" };
+        return { rows: withHomeroomHour(rows, grade, lang), missing, source: "reja" };
       }
     }
 
@@ -1135,14 +1139,79 @@ Fan bilan birga ular ham o'chsinmi?`;
     const names = fallbackNamesForGrade(grade, lang);
     const rows = sortByName(subjects.filter(s => names.includes(s.name) && subjectFitsLang(s, lang)))
       .map(s => ({ subject: s, hours: Math.max(1, Number(s.weeklyHours || 1)) }));
-    return { rows, missing: [], source: "standart" };
+    return { rows: withHomeroomHour(rows, grade, lang), missing: [], source: "standart" };
   }
 
-  function assignmentsFromPlan(rows) {
-    return rows.map(({ subject, hours }) => ({
-      ...makeAssignment(subject), // ustoz bo'sh — o'zingiz tanlaysiz
-      weeklyHours: hours,
-    }));
+  /* ——— «Kelajak soati» rejaga o'zi qo'shiladi ———
+     U tayanch o'quv rejada YO'Q (vazirlik ro'yxatida fan sifatida
+     turmaydi), lekin maktabda 1-sinfdan 11-sinfgacha har sinfda bo'ladi
+     va sinf rahbarida turadi. Reja qo'llanganda sinf fanlari butunlay
+     almashadi — qatorni o'zimiz qo'shmasak, «Kelajak soati» har safar
+     o'chib ketardi.
+     Fanlar bo'limida bunday fan bo'lmasa — qo'shadigan narsa yo'q. */
+  function withHomeroomHour(rows, grade, lang) {
+    if (!(grade >= 1 && grade <= 11)) return rows;
+    if (rows.some(r => isFixedMondaySubject(r.subject))) return rows;
+    const s = subjects.find(x => isFixedMondaySubject(x) && subjectFitsLang(x, lang));
+    if (!s) return rows;
+    return [...rows, { subject: s, hours: Math.max(1, Number(s.weeklyHours || 1)) }]
+      .sort((a, b) => cmpName(a.subject?.name, b.subject?.name));
+  }
+
+  /* ——— SINF RAHBARI KIM? ———
+     Avval «Sinflar» bo'limida qo'lda belgilangani (`headTeacherId`),
+     bo'lmasa boshlang'ich sinf uchun avtomatik aniqlangani
+     (`homeroomIdOf` — eng ko'p fan bergan ustoz), u ham bo'lmasa eski
+     MATN maydoni (`headTeacher`) ustoz ismi bilan solishtiriladi. */
+  function headTeacherIdOf(cls) {
+    const byId = homeroomIdOf(cls, classSubjects);
+    if (byId) return byId;
+    const nm = normName(cls?.headTeacher);
+    return nm ? (teachers.find(t => normName(t.name) === nm)?.id || "") : "";
+  }
+
+  /* ——— Reja qatorlari → sinf fanlari ———
+     Sinf rahbari o'zi beradigan fanlarga ustoz AVTOMATIK qo'yiladi:
+     1–4 sinfning chet tili, jismoniy tarbiya va informatikadan boshqa
+     hamma fani + har sinfdagi «Kelajak soati»
+     ([homeroomSubjects.js](../utils/homeroomSubjects.js)).
+     Qolgan fanlarda ustoz bo'sh qoladi — o'zingiz tanlaysiz. */
+  function assignmentsFromPlan(rows, cls) {
+    const headId = headTeacherIdOf(cls);
+    const grade = getGradeFromClassName(cls?.name);
+    const headSubjectIds = [];
+    const list = rows.map(({ subject, hours }) => {
+      const mine = Boolean(headId) && homeroomTakesSubject(subject, grade);
+      if (mine) headSubjectIds.push(subject.id);
+      return {
+        ...makeAssignment(subject, mine ? headId : ""),
+        weeklyHours: hours,
+      };
+    });
+    return { list, headId, headSubjectIds };
+  }
+
+  /* ⚠️ USTOZ KARTOCHKASIDA FAN YOQILMASA — BIRIKTIRMA KO'RINMAY QOLADI.
+     Fan qatoridagi ustoz ro'yxati `teachersForSubject()` bilan, ya'ni
+     ustozning O'Z fanlari (`subjectIds`) bo'yicha filtrlanadi. Sinf
+     rahbariga «Matematika» qo'yilsa-yu, ustozda o'sha fan yoqilmagan
+     bo'lsa — u ro'yxatda umuman chiqmaydi va tanlov bo'sh ko'rinadi.
+     Shuning uchun avtomatik biriktirilgan fanlar ustozga ham yoziladi.
+     `addMap` — Map(ustozId → Set(fanId)). */
+  function enableTeacherSubjects(addMap) {
+    if (!setTeachers || !addMap.size) return 0;
+    let touched = 0;
+    const next = teachers.map(t => {
+      const add = addMap.get(t.id);
+      if (!add || !add.size) return t;
+      const cur = teacherSubjectIds(t);
+      const merged = [...new Set([...cur, ...add])];
+      if (merged.length === cur.length) return t;
+      touched += 1;
+      return { ...t, subjectIds: merged };
+    });
+    if (touched) setTeachers(next);
+    return touched;
   }
 
   function applySmartForSelected() {
@@ -1154,16 +1223,33 @@ Fan bilan birga ular ham o'chsinmi?`;
         : "Avval Fanlar bo'limida standart fanlarni qo'shing", "warning");
       return;
     }
+    const { list, headId, headSubjectIds } = assignmentsFromPlan(rows, selectedClass);
     const next = { ...classSubjects };
-    next[selectedClassId] = assignmentsFromPlan(rows);
+    next[selectedClassId] = list;
     setClassSubjects(next);
+    if (headId && headSubjectIds.length) {
+      enableTeacherSubjects(new Map([[headId, new Set(headSubjectIds)]]));
+    }
     setOpenSettings(null);
+
+    // Sinf rahbari haqidagi xabar asosiy toastga qo'shiladi — uchta
+    // ketma-ket bildirishnoma o'qilmaydi
+    const headName = teachers.find(t => t.id === headId)?.name || "";
+    const headPart = headSubjectIds.length
+      ? ` · ${headSubjectIds.length} fan rahbarga (${headName})`
+      : "";
 
     const total = rows.reduce((sum, r) => sum + r.hours, 0);
     if (missing.length) {
-      toast(`${selectedClass.name}: ${rows.length} fan · ${total} soat ✓ — Fanlar bo'limida yo'q: ${missing.slice(0, 3).join(", ")}${missing.length > 3 ? ` va yana ${missing.length - 3} ta` : ""}`, "warning");
+      toast(`${selectedClass.name}: ${rows.length} fan · ${total} soat ✓${headPart} — Fanlar bo'limida yo'q: ${missing.slice(0, 3).join(", ")}${missing.length > 3 ? ` va yana ${missing.length - 3} ta` : ""}`, "warning");
     } else {
-      toast(`${selectedClass.name}: ${rows.length} fan · ${total} soat biriktirildi ✓${source === "reja" ? " (tayanch o'quv reja)" : ""}`, "success");
+      toast(`${selectedClass.name}: ${rows.length} fan · ${total} soat biriktirildi ✓${headPart}${source === "reja" ? " (tayanch o'quv reja)" : ""}`, "success");
+    }
+
+    // Rahbarsiz sinfda fanlar ustozsiz qoladi — buni aytmasak,
+    // foydalanuvchi «nega biriktirilmadi?» deb qoladi
+    if (!headId) {
+      toast(`${selectedClass.name}: sinf rahbari belgilanmagan — «Sinflar» bo'limida tanlab, qayta qo'llang`, "warning");
     }
   }
 
@@ -1173,6 +1259,11 @@ Fan bilan birga ular ham o'chsinmi?`;
     let done = 0, totalHoursAll = 0;
     let missingRu = false, missingUz = false;
     const missingNames = new Set();
+    // Sinf rahbariga biriktirilgan fanlar — Map(ustozId → Set(fanId)).
+    // Hammasi yig'ilib, oxirida BITTA `setTeachers` bilan yoziladi.
+    const headAdd = new Map();
+    let headRows = 0;
+    const noHead = [];
 
     classes.forEach(cls => {
       const { rows, missing } = planForClass(cls);
@@ -1180,22 +1271,41 @@ Fan bilan birga ular ham o'chsinmi?`;
         if (classLangOf(cls) === "ru") missingRu = true; else missingUz = true;
         return; // fanlar hali qo'shilmagan tildagi sinfga tegmaymiz
       }
-      next[cls.id] = assignmentsFromPlan(rows);
+      const { list, headId, headSubjectIds } = assignmentsFromPlan(rows, cls);
+      next[cls.id] = list;
+      if (headId && headSubjectIds.length) {
+        if (!headAdd.has(headId)) headAdd.set(headId, new Set());
+        const set = headAdd.get(headId);
+        headSubjectIds.forEach(id => set.add(id));
+        headRows += headSubjectIds.length;
+      } else if (!headId) {
+        noHead.push(cls.name);
+      }
       done += 1;
       totalHoursAll += rows.reduce((sum, r) => sum + r.hours, 0);
       missing.forEach(n => missingNames.add(n));
     });
 
     setClassSubjects(next);
+    enableTeacherSubjects(headAdd);
     setOpenSettings(null);
+
+    // Sinf rahbari haqidagi hisob asosiy toastga qo'shiladi
+    const headPart = headRows ? ` · rahbarlarga ${headRows} fan` : "";
 
     if (missingRu) toast("Rus sinflari o'tkazib yuborildi: Fanlar bo'limida ruscha standart fanlarni qo'shing", "warning");
     else if (missingUz) toast("O'zbek sinflari o'tkazib yuborildi: Fanlar bo'limida standart fanlarni qo'shing", "warning");
     else if (missingNames.size) {
       const list = [...missingNames];
-      toast(`${done} ta sinfga · jami ${totalHoursAll} soat biriktirildi ✓ — Fanlar bo'limida yo'q: ${list.slice(0, 3).join(", ")}${list.length > 3 ? ` va yana ${list.length - 3} ta` : ""}`, "warning");
+      toast(`${done} ta sinfga · jami ${totalHoursAll} soat biriktirildi ✓${headPart} — Fanlar bo'limida yo'q: ${list.slice(0, 3).join(", ")}${list.length > 3 ? ` va yana ${list.length - 3} ta` : ""}`, "warning");
     } else {
-      toast(`${done} ta sinfga tayanch o'quv reja bo'yicha ${totalHoursAll} soat biriktirildi ✓`, "success");
+      toast(`${done} ta sinfga tayanch o'quv reja bo'yicha ${totalHoursAll} soat biriktirildi ✓${headPart}`, "success");
+    }
+
+    // Rahbarsiz sinflarda fanlar ustozsiz qoldi — alohida aytiladi,
+    // aks holda «nega ustoz qo'yilmadi?» degan savol tug'iladi
+    if (noHead.length) {
+      toast(`Sinf rahbari belgilanmagan: ${noHead.slice(0, 5).join(", ")}${noHead.length > 5 ? ` va yana ${noHead.length - 5} ta` : ""} — «Sinflar» bo'limida tanlab, qayta qo'llang`, "warning");
     }
   }
 
@@ -2735,6 +2845,14 @@ Fan bilan birga ular ham o'chsinmi?`;
               <h3 style={{ margin: "0 0 4px" }}>⚡ Standart soatlarni qo'llash</h3>
               <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 14 }}>
                 Barcha <b>{classes.length} ta sinfga</b> tayanch o'quv reja bo'yicha fanlar va haftalik soatlar biriktiriladi.
+              </div>
+
+              <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 12, padding: "12px 14px", marginBottom: 14, fontSize: 13, lineHeight: 1.6, color: "#1e40af" }}>
+                🎓 <b>1–4 sinfda</b> fanlar <b>sinf rahbariga</b> avtomatik biriktiriladi —
+                chet tili, jismoniy tarbiya va informatikadan tashqari (ular mutaxassis ustozniki).
+                <b> «Kelajak soati»</b> esa 1–11 sinfda sinf rahbarida bo'ladi.
+                Biriktirilgan fanlar ustozning o'z fanlari ro'yxatiga ham qo'shiladi.
+                Rahbari belgilanmagan sinfda ustoz bo'sh qoladi.
               </div>
 
               {filled.length > 0 && (

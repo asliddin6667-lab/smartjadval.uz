@@ -985,6 +985,33 @@ tugmasi shu rejani qo'llaydi (fan nomi `aliases` orqali solishtiriladi).
 Jadval SQL i: [standard_hours_setup.sql](standard_hours_setup.sql) — Supabase SQL
 Editor'da bir marta ishga tushiriladi.
 
+**Qo'llanganda ustoz ham qo'yiladi — sinf rahbari.** «⚡ Standart soatlar» va
+«⚡ Mos fanlar» reja bo'yicha fan+soat yozadi va USTOZNI o'zi tanlaydi
+([homeroomSubjects.js](src/utils/homeroomSubjects.js)):
+
+| Qoida | Qaysi sinfda |
+|---|---|
+| Rejadagi hamma fan sinf rahbariga | 1–4 |
+| Chet tili, jismoniy tarbiya, informatika — TEGILMAYDI (mutaxassis ustozniki) | 1–4 |
+| «Kelajak soati» sinf rahbariga | 1–11 |
+
+Rahbar `homeroomIdOf()` bilan topiladi (qo'lda belgilangan `headTeacherId` →
+boshlang'ich sinf uchun avtomatik aniqlash → eski `headTeacher` MATN maydonini
+ustoz ismi bilan solishtirish). **Rahbar topilmasa ustoz bo'sh qoladi** va
+ekranda ogohlantirish chiqadi — sinflar ro'yxati rahbarsiz kelsa (yangi maktab)
+avval «Sinflar» bo'limida rahbar tanlanadi.
+
+⚠️ Biriktirilgan fan USTOZ KARTOCHKASIGA HAM yoziladi (`teachers[].subjectIds`,
+`enableTeacherSubjects()`). Fan qatoridagi ustoz ro'yxati `teachersForSubject()`
+bilan filtrlanadi — ustozda o'sha fan yoqilmagan bo'lsa, u ro'yxatda umuman
+chiqmaydi va avtomatik qo'yilgan ustoz ekranda BO'SH ko'rinardi. Shu sababli
+`ClassSubjects` ga `setTeachers` propi berilgan.
+
+⚠️ «Kelajak soati» tayanch o'quv rejada YO'Q, lekin reja qo'llanganda
+`withHomeroomHour()` uni qatorga o'zi qo'shadi (Fanlar bo'limida shunday fan
+bo'lsa). Aks holda reja har safar uni o'chirib yuborardi — fan nomi
+`isFixedMondaySubject()` bilan tanib olinadi.
+
 ⚠️ [supabase_setup.sql](supabase_setup.sql) faqat `profiles` + admin RPC larini qamraydi.
 Repoda yana ikkita SQL bor: [standard_hours_setup.sql](standard_hours_setup.sql) va
 [school_backups_setup.sql](school_backups_setup.sql) (versiya tarixi).
