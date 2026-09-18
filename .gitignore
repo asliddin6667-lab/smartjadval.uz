@@ -31,3 +31,6 @@ supabase/functions/schedule-engine/engine.gen.ts
 
 # Supabase CLI vaqtinchalik fayllari
 supabase/.temp
+
+# eMaktab o'rganish rejimi natijasi — vaqtinchalik, git'ga tushmasin
+dump.json

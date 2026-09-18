@@ -3394,6 +3394,16 @@ export default function SchedulePage({
               </button>
             )}
             <button className="sch-btn sch-btn-soft-green" onClick={exportExcel} type="button">📥 Excel</button>
+            {setActivePage && (
+              <button
+                className="sch-btn sch-btn-soft-blue"
+                onClick={() => setActivePage("emaktab")}
+                type="button"
+                title="Jadvalni eMaktab (kundalik.com) setkasiga ko'chirish"
+              >
+                🔗 eMaktab
+              </button>
+            )}
             <button className="sch-btn sch-btn-soft-gray" onClick={() => window.print()} type="button">🖨 Chop etish</button>
             {setSchedule && <button className="sch-btn sch-btn-soft-red" onClick={handleClear} type="button">🗑 Tozalash</button>}
           </div>

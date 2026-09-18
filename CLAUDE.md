@@ -1076,6 +1076,156 @@ soat hisobi ikki joyda ajralib ketardi. Ustozning tayyor setkadagi darsi esa
 `teacherIdsOf` + `sameCard` ([moveResolver.js](src/utils/moveResolver.js)) bilan
 aniqlanadi — ekrandagi setka bilan AYNI qoida.
 
+### eMaktab (kundalik.com) ga ko'chirish
+
+Tayyor jadvalni eMaktab «Darslar jadvali sxemasi» setkasiga o'tkazish.
+
+**NEGA BIR TUGMA EMAS:** eMaktab sessiyasi cookie bilan qulflangan va
+`schools.emaktab.uz` — BOSHQA DOMEN. `smartjadval.uz` dan u yerga so'rov
+yuborib bo'lmaydi (CORS). Shuning uchun ko'chirish IKKI BO'LAKKA ajratilgan:
+
+| Qayerda ishlaydi | Fayl | Vazifasi |
+|---|---|---|
+| smartjadval.uz | [emaktabExport.js](src/utils/emaktabExport.js) | jadvaldan JSON paket yasaydi |
+| smartjadval.uz | [EmaktabExport.jsx](src/pages/EmaktabExport.jsx) | sinf tanlash, nusxa olish, ko'rsatma |
+| schools.emaktab.uz | [emaktab-bridge.user.js](public/emaktab-bridge.user.js) | setkani to'ldiradi |
+| ikkalasida | [emaktabNames.js](src/utils/emaktabNames.js) | nom moslashtirish |
+
+⚠️ **Nom moslashtirish mantiqi IKKI JOYDA yashaydi** — `emaktabNames.js` va
+ko'prik skriptining ichidagi nusxasi. Skript boshqa domenda mustaqil ishlaydi,
+shuning uchun import qila olmaydi. Bittasi o'zgarsa — ikkinchisi ham.
+
+Nomlar hech qachon XOM MATN bo'yicha taqqoslanmaydi:
+- sinf — `classKey()`: "3-B" = "3-Б" = "3 б" = `3b` (kirill→lotin, apostrof tashlanadi);
+- ustoz — `sameTeacher()`: "Munavvarov A.M." = "Munavvarov Akmal Murodovich"
+  (familiya + bosh harflar kaliti). Faqat familiya bo'yicha moslik esa
+  BITTA nomzod qolgandagina qabul qilinadi — aks holda ustoz almashib ketadi;
+- fan — `SUBJECT_SYNONYMS`: "Rus tili" ↔ "Русский язык". Ro'yxat QO'LDA tuzilgan:
+  `STANDARD_SUBJECTS` (51 ta) va `STANDARD_SUBJECTS_RU` (50 ta) indeks bo'yicha
+  mos EMAS, avtomatik juftlash noto'g'ri natija beradi.
+
+⚠️ **`normKey()` KIRILLNI LOTINGA O'GIRADI, ya'ni «Математика» va «Matematika»
+BIR XIL kalit beradi.** eMaktab ro'yxatida ikkalasi ham turadi (rus va o'zbek
+sinflari uchun), shuning uchun faqat kalit bo'yicha tanlash birinchi
+uchraganini oladi — rus sinfiga lotincha fan tushadi. Undan keyin ustoz
+ro'yxati ham NOTO'G'RI fan bo'yicha (`tlfe`) so'raladi va «ustoz topilmadi»
+deb chiqadi: bitta xato ikkitasini tug'adi. Shu sababli `bestMatch()` bir xil
+kalitli nomzodlar orasidan `scriptOf()` bo'yicha nishon bilan AYNI yozuvdagisini
+tanlaydi (jonli maktabda aniqlangan, 18.09.2026).
+
+**JSON shakli — ko'prik bilan SHARTNOMA.** `EMAKTAB_FORMAT_VERSION` (hozir 1)
+ikkala tomonda tekshiriladi. Maydon nomini o'zgartirsangiz versiyani oshiring,
+aks holda eski skript yangi faylni jimgina noto'g'ri o'qiydi.
+
+**Ko'prik skripti bitta manbadan yuradi:** sahifa uni `public/` dan `fetch`
+qilib oladi (`import.meta.env.BASE_URL`), ya'ni skript matni React kodiga
+ko'chirilmaydi. «⚡ Hammasi birga» tugmasi `window.__SJ_JADVAL__ = {...}` +
+skriptni bitta matnga qo'shadi — Console'ga bir marta qo'yiladi.
+
+**SKRIPT «NASHR ETISH» NI BOSMAYDI.** U faqat sxemani to'ldiradi. Nashr haqiqiy
+jurnallarga ta'sir qiladi — uni foydalanuvchi ko'zdan kechirib o'zi bosadi.
+Bu qoidani buzmang.
+
+**eMAKTAB API'SI — «🔍 O'rganish» yozuvidan aniqlangan (18.09.2026, jonli
+maktabda).** Ko'prik endi DOM bo'ylab tugma bosib yurmaydi, sahifaning O'Z
+so'rovlarini yuboradi (`API` obyekti, skriptning 5-QISMI):
+
+| So'rov | Beradi |
+|---|---|
+| `GET /v2/AjaxPages/scheduleitemnew?schedule=&day=&lesson=&subject=` | «Yangi dars» formasi HTML: `__RequestVerificationToken`, `#subject` (fan id'lari), `#subgroup` (guruhlar) |
+| `POST /v2/ajax?xss=&a=tlfe&sid=` · tana `subid=<fanId>` | shu fanni o'qitadigan ustozlar `[{pid, pn}]` |
+| `POST /v2/ajax?xss=&a=plfe&sid=` · tana `subject=<fanId>` | xonalar (sinov maktabida bo'sh qaytdi) |
+| `POST /v2/ajax?xss=&a=createScheduleItem&schedule=&__RequestVerificationToken=&day=&lesson=&subject=&subgroup=&teacher=&place=` | **darsni yaratadi** → `{"id","sn","idt"}` |
+
+- Parametrlar QUERY STRING da (tlfe/plfe bundan mustasno — ular tanada).
+  Sessiya cookie bilan, ya'ni `credentials: "same-origin"` SHART.
+- `xss` — sessiya tokeni, sahifa HTML'idan regex bilan olinadi;
+  `schedule`/`group`/`school` — URL parametrlaridan.
+- **Muvaffaqiyat mezoni — javobda `id` borligi.** Xato HTML yoki oddiy matn
+  bilan qaytadi, u teglardan tozalanib jurnalga chiqadi.
+- Fan bo'yicha ro'yxatlar KESHLANADI (`fanKesh`) — busiz har dars uchun
+  3 ta ortiqcha so'rov ketardi.
+- ⚠️ **`scheduleitemnew` FAQAT BO'SH KATAK uchun to'liq forma qaytaradi.**
+  Band katakda u «Jadvalning ushbu katagida boshqa darsni yaratib bo'lmadi»
+  degan xato formasini beradi — ichida `__RequestVerificationToken` BOR,
+  lekin bironta `<select>` yo'q. Ya'ni tokenning borligi forma to'liq
+  degani EMAS. Shuning uchun `boshKatak()` setkadan bo'sh katak topadi va
+  ro'yxatlarni o'shanda so'raydi (setka bo'lmasa kun/soat juftliklarini
+  ketma-ket sinaydi). Ilgari forma doim `day=1&lesson=1` uchun so'ralar
+  va o'sha katak band bo'lsa API umuman ulanmasdi.
+- `#teacher` va `#place` xom HTML da BO'SH — ularni sahifaning o'z JS'i
+  fan tanlanganda `tlfe`/`plfe` bilan to'ldiradi. Shuning uchun ko'prik
+  ham ustozlarni formadan emas, to'g'ridan-to'g'ri `tlfe` dan oladi.
+- **Katak manzili:** setkadagi har bir katakda `id="d<kun>_<soat>"` —
+  kun `1` = Dushanba … `6` = Shanba, `0` = Yakshanba (JS `getDay()` bilan
+  bir xil), soat = qator raqami. Bizning `kun` ham 1 = Dushanba, mos tushadi.
+  `cellAt()` shu id ni ishlatadi; sarlavha bo'yicha ustun indeksi — zaxira
+  (katakka dars tushganda `colspan` indeksni surib yuborardi).
+
+⚠️ **API rejimida setka DOM'i yangilanmaydi** — sahifa o'zi so'rov
+yubormagani uchun kataklar bo'sh ko'rinaveradi. Shuning uchun joylangan
+katak vaqtincha yashil bo'yaladi va oxirida «F5 bosing» deb yoziladi.
+Shu sababli «band katakni o'tkazib yuborish» tekshiruvi faqat OLDINDAN
+turgan darsni ushlaydi — ayni yurishda qo'yilganlari halaqit bermaydi,
+ya'ni guruhli darslar (bitta katakda bir nechta yozuv) ishlayveradi.
+
+**Zaxira DOM drayveri saqlanib qoldi** (6-QISM): API ulanmasa
+(`API.init()` xato bersa) `run()` avtomatik o'sha yo'lga o'tadi.
+«🔍 O'rganish» rejimi ham qoldi — eMaktab so'rov shaklini o'zgartirsa,
+bitta darsni qo'lda qo'shib yangi yozuvni olish mumkin.
+
+#### TESKARI YO'NALISH: eMaktab → Smartjadval (id bilan bog'lash)
+
+Nom bo'yicha taqqoslash printsipial ravishda ishonchsiz. To'liq yechim —
+ma'lumotni eMaktab'dan OLIB KELISH va har yozuvga `emaktabId` yozish:
+
+| Bosqich | Qayerda |
+|---|---|
+| Yig'ish (sinf, fan, ustoz, xona) | ko'prikdagi `collectSchoolData()` (5B-QISM) → JSON fayl |
+| Birlashtirish | [emaktabImport.js](src/utils/emaktabImport.js) `mergeEmaktabData()` |
+| UI | «eMaktab» sahifasidagi «📥 Ma'lumot faylini yuklash» |
+| Ishlatish | eksport paketining `emaktab` xaritasi → ko'prikdagi `byId()` |
+
+- **Ustozlar FAN BO'YICHA yig'iladi** (`tlfe` har bir fan uchun) — natijada
+  `teachers[].emaktabSubjectIds` da eMaktab RUXSAT bergan fanlar turadi.
+  eMaktab boshqa fanga ustozni qabul qilmaydi, shuning uchun bu cheklov
+  jadval TUZAYOTGANDA ko'rinishi kerak, yuklashda emas.
+- `subjectIds` **birlashtiriladi, almashtirilmaydi** — maktab qo'lda
+  kiritgan fan jimgina yo'qolmasin. Ortiqchasi hisobotda ogohlantirish
+  bo'lib chiqadi.
+- Id barqaror: `emk_<tur>_<emaktabId>` — qayta import yangi yozuv
+  yaratmaydi, mavjudini topadi.
+- **Hech narsa o'chirilmaydi.** Import faqat qo'shadi va to'ldiradi.
+- Paket versiyasi `2` ga ko'tarildi (`emaktab` xaritasi qo'shilgani uchun);
+  ko'prik 1 va 2 ni ham qabul qiladi — eski faylda oddiygina nom bo'yicha
+  moslashtirish ishlaydi.
+
+⚠️ **Dars vaqtlari (qo'ng'iroqlar) hali yig'ilmaydi** — endpointi
+aniqlanmagan. Maktab ularni Smartjadval'da o'zi kiritadi.
+
+**JONLI MAKTABDA O'LCHANDI (18.09.2026, 43 sinf / 66 fan / 76 ustoz):**
+
+⚠️ **`tlfe` ning fan biriktiruvi KO'PINCHA MA'LUMOT EMAS.** O'sha maktabda
+HAR BIR fan uchun 76 ustozning HAMMASI qaytdi, bitta ustoz esa 66 fanning
+hammasiga «biriktirilgan» edi. Ya'ni maktab biriktiruvni cheklamagan.
+Shuning uchun `mergeEmaktabData()` ro'yxatni faqat **TANLOVCHAN** bo'lganda
+(`< jamiFan × 0.5`) `subjectIds` ga yozadi; aks holda tegmaydi va hisobotda
+aytadi. Busiz har bir ustoz 66 fan beradigan bo'lib ko'rinar va «Sinf
+fanlari» dagi filtr butunlay buzilardi. **«eMaktab ruxsat bermagan» degan
+xulosani cheklanmagan ro'yxatdan CHIQARMANG.**
+
+⚠️ **eMaktab JSON'ida ismlar qayta-qayta HTML-kodlangan** —
+`"Inomjonov Ortiqjon Iqboljon o&amp;amp;#39;g&amp;amp;#39;li"`. Bitta
+o'tishda yechilmaydi, ko'prikdagi `unesc()` o'zgarish to'xtagunicha
+takrorlaydi. Ba'zi ismlar eMaktabning o'zida KESILIB ham qolgan
+(`…o&amp;amp;amp;am`) — buni tuzatib bo'lmaydi.
+
+⚠️ **Fan nomlari eMaktab'da ~20 belgiga kesiladi**: «Iqtisodiy bilim asos»,
+«Dav-t va huquq asos.», «Ментальная арифметик». Smartjadval'dagi to'liq nom
+bilan aniq moslik bermaydi — bu ham id bo'yicha bog'lashning foydasini
+ko'rsatadi. Ro'yxatda takroriy/xato yozuvlar ham uchraydi
+(«Классный час» va «классый час»).
+
 ### Deploy
 
 `main` ga push → [deploy.yml](.github/workflows/deploy.yml) → `npm run build` → GitHub

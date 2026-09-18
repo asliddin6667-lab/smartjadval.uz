@@ -23,6 +23,7 @@ import TeacherReplacePage from "./pages/TeacherReplace";
 import TeacherAvailabilityPage from "./pages/TeacherAvailability";
 import AnalyticsPage from "./pages/Analytics";
 import ImportExportPage from "./pages/ImportExport";
+import EmaktabExportPage from "./pages/EmaktabExport";
 import UsersPage from "./pages/Users";
 import SettingsPage from "./pages/Settings";
 import DistrictApp from "./pages/DistrictApp";
@@ -65,7 +66,7 @@ const LOCAL_ONLY = isLocalOnly();
 const PAGE_IDS = [
   "dashboard", "classes", "subjects", "teachers", "teacherAvailability", "classSubjects",
   "rooms", "timeslots", "lunchGroups", "schedule", "savedSchedules", "teacherReplace",
-  "analytics", "importExport", "backups", "users", "standardHours", "settings",
+  "analytics", "importExport", "emaktab", "backups", "users", "standardHours", "settings",
 ];
 
 function pageFromHash() {
@@ -958,6 +959,13 @@ export default function App() {
       case "teacherReplace": return <TeacherReplacePage {...pageProps} setSchedule={setSchedule} setClassSubjects={setClassSubjects} />;
       case "analytics": return <AnalyticsPage {...pageProps} shifts={shifts} />;
       case "importExport": return <ImportExportPage {...pageProps} settings={settings} shifts={shifts} setSubjects={setSubjects} setTeachers={setTeachers} />;
+      case "emaktab": return (
+        <EmaktabExportPage
+          {...pageProps} settings={settings}
+          setClasses={setClasses} setSubjects={setSubjects}
+          setTeachers={setTeachers} setRooms={setRooms}
+        />
+      );
       case "users": return currentUser.role === "superadmin" ? <UsersPage {...pageProps} /> : <DashboardPage {...pageProps} setActivePage={handleNavigate} />;
       case "standardHours": return currentUser.role === "superadmin" ? <StandardHoursPage {...pageProps} /> : <DashboardPage {...pageProps} setActivePage={handleNavigate} />;
       case "settings": return (
