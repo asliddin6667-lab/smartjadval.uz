@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Smartjadval → eMaktab ko'prigi
 // @namespace    https://smartjadval.uz/
-// @version      1.7.0
+// @version      1.7.1
 // @description  Smartjadval.uz da tuzilgan dars jadvalini eMaktab (kundalik.com) «Darslar jadvali sxemasi» setkasiga joylashtiradi
 // @author       smartjadval.uz
 // @match        https://schools.emaktab.uz/*
@@ -1713,6 +1713,18 @@
       log(`🏫 eMaktabda ${guruhlar.size} ta sinf topildi`, "dim");
 
       const ishlar = paket.sinflar.filter((s) => s.darslar.length);
+      // ⚠️ JADVAL FAYLIDA FAQAT TANLANGAN SINFLAR BO'LADI.
+      //  Smartjadval «eMaktab» sahifasida sinflar belgilab olinadi va
+      //  ko'prik shu faylni brauzerda eslab qoladi. Bitta sinf tanlangan
+      //  eski fayl qolib ketsa «Hamma sinfga» bitta sinf bilan tugaydi —
+      //  tashqaridan bu nosozlikka o'xshab ko'rinadi. Shuning uchun
+      //  ochiq aytamiz.
+      log(`📄 Jadval faylida ${ishlar.length} ta sinfda dars bor`, "dim");
+      if (ishlar.length < guruhlar.size / 2) {
+        log(`⚠ eMaktabda ${guruhlar.size} sinf bor, faylda esa atigi ${ishlar.length} ta. `
+          + "Smartjadval → «eMaktab» sahifasida «Hammasi» tugmasini bosib, "
+          + "jadvalni QAYTA nusxalang.", "ogoh");
+      }
       let jamiOk = 0, jamiXato = 0, otkazildi = 0;
 
       for (let i = 0; i < ishlar.length; i++) {
