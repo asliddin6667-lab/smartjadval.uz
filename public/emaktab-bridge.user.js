@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Smartjadval → eMaktab ko'prigi
 // @namespace    https://smartjadval.uz/
-// @version      1.1.0
+// @version      1.2.0
 // @description  Smartjadval.uz da tuzilgan dars jadvalini eMaktab (kundalik.com) «Darslar jadvali sxemasi» setkasiga joylashtiradi
 // @author       smartjadval.uz
 // @match        https://schools.emaktab.uz/*
@@ -68,7 +68,8 @@
   // `EMAKTAB_FORMAT_VERSION`). 2 — `emaktab` id xaritasi bilan, 1 — usiz
   // (u holda nomlar bo'yicha moslashtirish ishlaydi).
   const V = [1, 2];
-  const LS_MAP = "sj_emaktab_map_v1"; // qo'lda moslashtirilgan nomlar shu yerda qoladi
+  const LS_MAP = "sj_emaktab_map_v1";       // qo'lda moslashtirilgan nomlar
+  const LS_JADVAL = "sj_emaktab_jadval_v1"; // oxirgi jadval (sinflar bo'ylab yuriladi)
 
   // ===================================================================
   //  1-QISM. NOM MOSLASHTIRISH
@@ -1116,6 +1117,7 @@
           <div class="qator">
             <button class="b b-alt" id="fayl">📂 Fayldan</button>
             <button class="b b-alt" id="oqish">✔ Tekshirish</button>
+            <button class="b b-alt" id="unut" title="Brauzerda saqlangan jadvalni o'chirish">🗑</button>
             <span class="holat" id="holat"></span>
           </div>
           <input type="file" id="fileinp" accept=".json,application/json" style="display:none">
@@ -1260,6 +1262,15 @@
         }
       }
 
+      // ⚠️ JADVAL BRAUZERDA ESLAB QOLINADI.
+      //
+      //  Maktabda 40+ sinf bor, har birining eMaktabdagi sxemasi ALOHIDA
+      //  sahifa (`schedule` id sinfga xos). Ya'ni foydalanuvchi sahifadan
+      //  sahifaga o'tadi va har o'tishda panel noldan quriladi. Faylni
+      //  40 marta qayta tanlash — bekorga sarflangan vaqt, shuning uchun
+      //  jadval shu yerda saqlanadi va keyingi sahifada o'zi yuklanadi.
+      try { localStorage.setItem(LS_JADVAL, raw); } catch { /* kvota to'lsa e'tiborsiz */ }
+
       checkGrid();
       return true;
     } catch (err) {
@@ -1269,6 +1280,15 @@
     }
   }
   $("oqish").onclick = parse;
+
+  $("unut").onclick = () => {
+    try { localStorage.removeItem(LS_JADVAL); } catch { /* e'tiborsiz */ }
+    $("json").value = "";
+    $("sinf").innerHTML = '<option value="">— jadval yo\'q —</option>';
+    $("holat").textContent = "";
+    paket = null;
+    log("🗑 Saqlangan jadval o'chirildi.", "dim");
+  };
 
   function checkGrid() {
     const g = findGrid();
@@ -1489,6 +1509,18 @@
     return ok;
   }
 
+  // Oldingi sahifada yuklangan jadvalni tiklash — 40+ sinfni birma-bir
+  // o'tkazayotganda faylni har safar qayta tanlash kerak bo'lmasin.
+  function saqlanganJadval() {
+    let raw = "";
+    try { raw = localStorage.getItem(LS_JADVAL) || ""; } catch { raw = ""; }
+    if (!raw) return false;
+    $("json").value = raw;
+    const ok = parse();
+    if (!ok) { try { localStorage.removeItem(LS_JADVAL); } catch { /* e'tiborsiz */ } }
+    return ok;
+  }
+
   // Console'dan qo'lda tekshirish uchun (nosozlik qidirilganda asqotadi)
   window.__SJ_BRIDGE__ = {
     ochish: () => panel.classList.add("ochiq"),
@@ -1500,11 +1532,14 @@
     paket: () => paket,
   };
 
-  yangiJadval();
+  // Avval «Hammasi birga» dan kelgan jadval, bo'lmasa oxirgi saqlangani
+  const yuklandi = yangiJadval() || saqlanganJadval();
 
   // Setka holati DARROV ko'rinsin: foydalanuvchi to'g'ri sahifada
   // turganini JSON kutmasdan bilishi kerak.
   checkGrid();
 
-  log("Ko'prik tayyor. Birinchi marta — «🔍 O'rganish» dan boshlang.", "dim");
+  log(yuklandi
+    ? "Ko'prik tayyor — jadval eslab qolingan. Sinfni tekshirib «▶ Joylashtirish» ni bosing."
+    : "Ko'prik tayyor. Jadvalni «📂 Fayldan» bilan yuklang.", "dim");
 })();
