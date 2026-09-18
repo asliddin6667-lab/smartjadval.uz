@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Smartjadval → eMaktab ko'prigi
 // @namespace    https://smartjadval.uz/
-// @version      1.4.0
+// @version      1.5.0
 // @description  Smartjadval.uz da tuzilgan dars jadvalini eMaktab (kundalik.com) «Darslar jadvali sxemasi» setkasiga joylashtiradi
 // @author       smartjadval.uz
 // @match        https://schools.emaktab.uz/*
@@ -82,6 +82,8 @@
   const LS_MAP = "sj_emaktab_map_v1";       // qo'lda moslashtirilgan nomlar
   const LS_JADVAL = "sj_emaktab_jadval_v1"; // oxirgi jadval (sinflar bo'ylab yuriladi)
   const LS_OCHIQ = "sj_emaktab_panel_ochiq"; // panel ochiq turganmi
+  const LS_REC_ON = "sj_emaktab_rec_on";     // «O'rganish» yozuvi yoqiqmi
+  const LS_REC = "sj_emaktab_rec_data";      // yozib olingan so'rovlar
 
   // ⚠️ eMAKTAB — KLASSIK KO'P SAHIFALI SAYT.
   //
@@ -367,7 +369,35 @@
   //  qanday so'rov yuborganini va qanday oyna ochilganini yozib oladi.
   //  Natija dasturchiga beriladi va aniq drayver yoziladi.
   // ===================================================================
-  const REC = { yoniq: false, tarmoq: [], dom: [], obs: null };
+  // ⚠️ YOZUV SAHIFA ALMASHGANDA HAM DAVOM ETISHI SHART.
+  //
+  //  Aniqlanishi kerak bo'lgan amallarning ko'pi (sxema yaratish,
+  //  darslarni nashr etish) sahifani ALMASHTIRADI. Yozuv faqat xotirada
+  //  turgan paytda o'sha almashuv uni o'chirib yuborardi — foydalanuvchi
+  //  «yoqqandim, nima bo'ldi?» degan holatga tushardi.
+  //
+  //  Shuning uchun yozuv holati ham, yozib olingan so'rovlar ham
+  //  localStorage da yuriladi va yangi sahifada davom ettiriladi.
+  //  DOM nusxalari saqlanmaydi — ular og'ir va faqat joriy sahifaga
+  //  tegishli; asosiy qiymat tarmoq so'rovlarida.
+  const REC_MAX = 120;   // so'rovlar chegarasi (kvota to'lib ketmasin)
+
+  const REC = {
+    yoniq: (() => { try { return localStorage.getItem(LS_REC_ON) === "1"; } catch { return false; } })(),
+    tarmoq: (() => {
+      try { return JSON.parse(localStorage.getItem(LS_REC) || "[]") || []; } catch { return []; }
+    })(),
+    dom: [],
+    obs: null,
+  };
+
+  function recSaqla() {
+    if (!REC.yoniq) return;
+    try {
+      if (REC.tarmoq.length > REC_MAX) REC.tarmoq = REC.tarmoq.slice(-REC_MAX);
+      localStorage.setItem(LS_REC, JSON.stringify(REC.tarmoq));
+    } catch { /* kvota to'lsa yozuv xotirada qolaveradi */ }
+  }
 
   (function hookNetwork() {
     const _open = XMLHttpRequest.prototype.open;
@@ -380,9 +410,11 @@
       if (REC.yoniq && this.__sj) {
         const rec = { tur: "xhr", metod: this.__sj.metod, url: this.__sj.url, sorov: cut(typeof body === "string" ? body : (body ? "[" + String(body) + "]" : "")) };
         REC.tarmoq.push(rec);
+        recSaqla();   // so'rov ketishi bilanoq — sahifa almashsa ham qolsin
         this.addEventListener("load", () => {
           rec.holat = this.status;
           try { rec.javob = cut(this.responseText, 2000); } catch { rec.javob = "[o'qib bo'lmadi]"; }
+          recSaqla();
         });
       }
       return _send.apply(this, arguments);
@@ -397,11 +429,14 @@
         if (REC.yoniq) {
           rec = { tur: "fetch", metod, url: String(url), sorov: cut((init && typeof init.body === "string") ? init.body : "") };
           REC.tarmoq.push(rec);
+          recSaqla();
         }
         return _fetch.apply(this, arguments).then((res) => {
           if (rec) {
             rec.holat = res.status;
-            try { res.clone().text().then((t) => { rec.javob = cut(t, 2000); }); } catch { /* oqim o'qilmadi */ }
+            try {
+              res.clone().text().then((t) => { rec.javob = cut(t, 2000); recSaqla(); });
+            } catch { /* oqim o'qilmadi */ }
           }
           return res;
         });
@@ -409,8 +444,14 @@
     }
   })();
 
-  function recStart() {
-    REC.yoniq = true; REC.tarmoq = []; REC.dom = [];
+  function recStart(davom) {
+    REC.yoniq = true;
+    if (!davom) { REC.tarmoq = []; }      // yangi yozuv — eskisi tozalanadi
+    REC.dom = [];
+    try {
+      localStorage.setItem(LS_REC_ON, "1");
+      if (!davom) localStorage.removeItem(LS_REC);
+    } catch { /* e'tiborsiz */ }
     REC.obs = new MutationObserver((muts) => {
       for (const m of muts) {
         for (const n of m.addedNodes) {
@@ -432,6 +473,7 @@
 
   function recStop() {
     REC.yoniq = false;
+    try { localStorage.setItem(LS_REC_ON, "0"); } catch { /* e'tiborsiz */ }
     if (REC.obs) { REC.obs.disconnect(); REC.obs = null; }
   }
 
@@ -1493,8 +1535,9 @@
   };
 
   $("recOn").onclick = () => {
-    recStart();
-    log("⏺ Yozuv yoqildi. Endi setkada BITTA darsni qo'lda qo'shing.", "ok");
+    recStart(false);
+    log("⏺ Yozuv yoqildi. Endi kerakli amalni qo'lda bajaring — sahifa "
+      + "almashsa ham yozuv davom etadi.", "ok");
   };
   $("recOff").onclick = async () => {
     recStop();
@@ -1563,6 +1606,16 @@
 
   // Oldingi sahifada panel ochiq turgan bo'lsa — ochiq qoldiramiz
   if (ochiqEdi) panel.classList.add("ochiq");
+
+  // Yozuv oldingi sahifada yoqilgan bo'lsa — DAVOM ettiramiz.
+  // Aynan shu holat kerak: sxema yaratish, nashr etish va boshqa
+  // muhim amallar sahifani almashtiradi.
+  if (REC.yoniq) {
+    recStart(true);
+    panel.classList.add("ochiq");
+    log(`⏺ Yozuv DAVOM etyapti — ${REC.tarmoq.length} ta so'rov yozildi. `
+      + "Amalni tugatgach «⏹ To'xtatish va nusxalash» ni bosing.", "ogoh");
+  }
 
   // Setka holati DARROV ko'rinsin: foydalanuvchi to'g'ri sahifada
   // turganini JSON kutmasdan bilishi kerak.
