@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Smartjadval → eMaktab ko'prigi
 // @namespace    https://smartjadval.uz/
-// @version      1.8.0
+// @version      1.8.1
 // @description  Smartjadval.uz da tuzilgan dars jadvalini eMaktab (kundalik.com) «Darslar jadvali sxemasi» setkasiga joylashtiradi
 // @author       smartjadval.uz
 // @match        https://schools.emaktab.uz/*
@@ -1099,9 +1099,26 @@
         return;
       }
       if (el === nomEl) { fd.append(n, nom); nomYozildi = true; return; }
-      fd.append(n, el.getAttribute("value") || "");
+      // ⚠️ `getAttribute("value")` EMAS, `el.value`.
+      //  `<select>` da `value` ATRIBUTI umuman yo'q — atribut bo'yicha
+      //  o'qilsa har bir ro'yxat BO'SH ketardi va server formani
+      //  «to'ldirilmagan» deb rad etardi: sxema yaratilmas, biz esa
+      //  «yangi sxema id'si aniqlanmadi» deb yozardik (18.09.2026).
+      //  `el.value` tanlangan variantni, `<textarea>` da esa ichidagi
+      //  matnni to'g'ri qaytaradi.
+      fd.append(n, el.value || "");
     });
     if (!nomYozildi) throw new Error("formada nom maydoni topilmadi");
+
+    // «Yaratish» tugmasining o'zi ham yuboriladi: server ko'pincha
+    // qaysi tugma bosilganini shundan biladi (bekor qilish/saqlash).
+    const yubor = form.querySelector(
+      'input[type="submit"][name], button[type="submit"][name], button[name]:not([type])'
+    );
+    if (yubor) {
+      fd.append(yubor.getAttribute("name"),
+        yubor.getAttribute("value") || txt(yubor) || "");
+    }
 
     const action = form.getAttribute("action");
     const post = (!action || action === "#") ? url : new URL(action, location.origin).href;
@@ -1125,7 +1142,22 @@
     const royxat = await sxemalar(group, period);
     const topildi = royxat.find((x) => normKey(x.nom) === normKey(nom));
     if (topildi) return topildi.id;
-    throw new Error("yangi sxema id'si aniqlanmadi");
+
+    // ⚠️ SERVERNING XATOSINI JURNALGA CHIQARAMIZ.
+    //  Yo'naltirish ham, yangi sxema ham yo'q — demak server formani
+    //  RAD ETDI va sababini javob sahifasiga yozgan (ASP.NET buni
+    //  `validation-summary-errors` / `field-validation-error` bilan
+    //  belgilaydi). Busiz «id aniqlanmadi» degan quruq xabar qolar va
+    //  sabab noma'lum bo'lardi.
+    let sabab = "";
+    try {
+      const jd = new DOMParser().parseFromString(await r2.text(), "text/html");
+      sabab = [...jd.querySelectorAll(
+        ".validation-summary-errors, .field-validation-error, .error, .alert"
+      )].map(txt).filter(Boolean).join("; ");
+    } catch { /* javob o'qilmasa sababsiz qolamiz */ }
+    throw new Error("yangi sxema id'si aniqlanmadi"
+      + (sabab ? ` — server: ${cut(sabab, 160)}` : ` (HTTP ${r2.status})`));
   }
 
   // Sinf nomi → eMaktabdagi `group` id. Jadvallar ro'yxati sahifasidan.
@@ -1883,21 +1915,32 @@
         const g = royxat[i];
         $("hammaHolat").textContent = `${i + 1}/${royxat.length}: ${g.nom}`;
         $("pbar").style.width = Math.round(((i + 1) / royxat.length) * 100) + "%";
-        try {
-          const mavjud = await sxemalar(g.id, period);
-          if (mavjud.some((x) => normKey(x.nom) === normKey(nom))) {
-            bor++;
-            log(`↷ ${g.nom} — «${nom}» allaqachon bor`, "dim");
-            continue;
+        // ⚠️ IKKI URINISH — lekin har safar ro'yxat QAYTA o'qiladi.
+        //  Ketma-ket o'nlab so'rovda eMaktab ba'zan bo'sh/xato sahifa
+        //  qaytaradi. Qayta urinish xavfsiz, chunki sxema allaqachon
+        //  yaratilgan bo'lsa ro'yxatdan topiladi va IKKINCHI marta
+        //  yaratilmaydi — nusxa paydo bo'lmaydi.
+        let holat = "";
+        for (let urinish = 1; urinish <= 2; urinish++) {
+          try {
+            const mavjud = await sxemalar(g.id, period);
+            if (mavjud.some((x) => normKey(x.nom) === normKey(nom))) {
+              holat = urinish === 1 ? "bor" : "yaratildi";
+              break;
+            }
+            await sxemaYarat(g.id, period, nom);
+            holat = "yaratildi";
+            break;
+          } catch (err) {
+            holat = "xato:" + err.message;
+            if (urinish < 2) await sleep(1200);
           }
-          await sxemaYarat(g.id, period, nom);
-          yaratildi++;
-          log(`＋ ${g.nom} — «${nom}» yaratildi`, "ok");
-        } catch (err) {
-          xato++;
-          log(`✖ ${g.nom} — ${err.message}`, "xato");
         }
-        await sleep(250);   // eMaktabni bo'g'ib qo'ymaylik
+        if (holat === "bor") { bor++; log(`↷ ${g.nom} — «${nom}» allaqachon bor`, "dim"); }
+        else if (holat === "yaratildi") { yaratildi++; log(`＋ ${g.nom} — «${nom}» yaratildi`, "ok"); }
+        else { xato++; log(`✖ ${g.nom} — ${holat.slice(5)}`, "xato"); }
+
+        await sleep(400);   // eMaktabni bo'g'ib qo'ymaylik
       }
 
       log(`— YAKUN: ${yaratildi} ta sxema yaratildi`
