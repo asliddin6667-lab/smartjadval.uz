@@ -1123,7 +1123,13 @@ ko'prik skriptining ichidagi nusxasi. Skript boshqa domenda mustaqil ishlaydi,
 shuning uchun import qila olmaydi. Bittasi o'zgarsa — ikkinchisi ham.
 
 Nomlar hech qachon XOM MATN bo'yicha taqqoslanmaydi:
-- sinf — `classKey()`: "3-B" = "3-Б" = "3 б" = `3b` (kirill→lotin, apostrof tashlanadi);
+- sinf — `classKey()`: "3-B" = "3-Б" = "3 б" = `3b` (kirill→lotin, apostrof tashlanadi).
+  ⚠️ **Harf qismi BIR NECHTA so'z bo'lishi mumkin:** eMaktabda «2 A O» va «2A» —
+  ikkita BOSHQA sinf. Ilgari faqat birinchi harf olinar, ikkalasi ham `2a`
+  berar va sinflar to'qnashib biri yo'qolardi (43 sinfdan 41 tasi qolgan).
+  Endi qisqa (≤3 harfli) so'zlar ketma-ket yig'iladi, «sinf»/«(rus)» kabi
+  qo'shimchada to'xtaladi. Sinf topilmasa jurnalga shu darajadagi eMaktab
+  nomlari chiqadi — mos keladigani darhol ko'rinsin;
 - ustoz — `sameTeacher()`: "Munavvarov A.M." = "Munavvarov Akmal Murodovich"
   (familiya + bosh harflar kaliti). Faqat familiya bo'yicha moslik esa
   BITTA nomzod qolgandagina qabul qilinadi — aks holda ustoz almashib ketadi;
@@ -1339,10 +1345,23 @@ natijaviy URL'dan yangi `schedule` id'sini oladi.
 almashtiradigan amalni o'rganish kerak bo'lsa — URL'lar zanjiriga qarang,
 yozuv tanasi bo'sh chiqadi.
 
-⚠️ **«🏫 Hamma sinfga» MAVJUD SXEMANI O'TKAZIB YUBORADI.** Boshqa sinfning
-setka DOM'i bizda yo'q, ya'ni ichida dars bor-yo'qligini ko'ra olmaymiz —
-ustiga yozsak darslar IKKILANADI. Faqat YANGI yaratilgan sxema to'ldiriladi;
-mavjudini to'ldirish alohida belgi bilan yoqiladi.
+⚠️ **`view=new` SAHIFASIDA BIR NECHTA FORMA BOR.** `doc.querySelector("form")`
+birinchisini — sarlavhadagi qidiruv formasini — olardi, unda matn maydoni
+yo'q va HAMMA sinf «formada nom maydoni topilmadi» deb rad etilardi
+(jonli maktabda butun «Hamma sinfga» shu sababdan ishlamadi). Endi forma
+`nomMaydoni()` bo'yicha tanlanadi: nomlangan matn maydoni bori, ular bir
+nechta bo'lsa `__RequestVerificationToken` lisi. Forma topilmasa xato
+xabarining o'ziga sahifadagi formalar va maydonlar ro'yxati qo'shiladi —
+keyingi safar konsolda qidirib o'tirmaslik uchun.
+
+⚠️ **«🏫 Hamma sinfga» MAVJUD SXEMAGA FAQAT ICHI BO'SH BO'LSA YOZADI.**
+Ustiga yozilsa darslar IKKILANADI, shuning uchun `sxemaBoshmi()` sxemaning
+`view=edit` sahifasini o'qib `d<kun>_<soat>` kataklarini tekshiradi.
+**Noaniqlik «bo'sh emas» deb qaraladi**: sahifa ochilmasa yoki setka
+topilmasa `false` qaytadi va sxemaga tegilmaydi. Ilgari mavjud sxema
+SO'ZSIZ o'tkazib yuborilardi — maktab oldindan bo'sh sxema yaratib
+qo'ygan bo'lsa (jonli maktabda aynan shunday edi) birortasi to'lmasdi.
+Darsi bor sxemaga yozish alohida belgi bilan, ONGLI ravishda yoqiladi.
 
 ⚠️ **Sinf almashganda `API.fanKesh` TOZALANISHI SHART** — keshdagi
 `guruhlar` (subgroup) ro'yxati sinfga xos, begona sinfniki ishlatilsa

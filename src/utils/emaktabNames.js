@@ -39,12 +39,24 @@ export function normKey(raw) {
 
 // ——— SINF NOMI ———
 // "3-B", "3 б", "3B", "3-Б sinf" → { daraja: 3, harf: "b", kalit: "3b" }
+//
+// ⚠️ HARF QISMI BIR NECHTA SO'ZDAN IBORAT BO'LISHI MUMKIN. eMaktabda
+//  «2 A O» va «2A» — IKKITA BOSHQA sinf. Ilgari faqat birinchi harf
+//  olinar va ikkalasi ham `2a` kalitini berar, natijada ular to'qnashib
+//  biri yo'qolardi (jonli maktabda 43 sinfdan 41 tasi qolgan edi).
+//  Endi qisqa harf-so'zlar ketma-ket yig'iladi, «sinf», «(rus)» kabi
+//  qo'shimchalarda esa to'xtaymiz — aks holda ular kalitga yopishardi.
 export function parseClassName(raw) {
   const s = String(raw ?? "").replace(APOS, "").trim();
-  const m = s.match(/(\d{1,2})\s*[-–—_. ]?\s*([A-Za-zЀ-ӿ]{0,3})/);
+  const m = s.match(/(\d{1,2})\s*[-–—_. ]?\s*([\s\S]*)$/);
   if (!m) return { daraja: 0, harf: "", kalit: normKey(s) };
   const daraja = Number(m[1]) || 0;
-  const harf = normKey(m[2] || "");
+  let harf = "";
+  for (const soz of String(m[2] || "").split(/[\s\-–—_.]+/)) {
+    if (!soz) continue;
+    if (!/^[A-Za-zЀ-ӿ]{1,3}$/.test(soz)) break;
+    harf += normKey(soz);
+  }
   return { daraja, harf, kalit: daraja ? `${daraja}${harf}` : normKey(s) };
 }
 

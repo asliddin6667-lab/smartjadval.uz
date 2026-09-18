@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Smartjadval → eMaktab ko'prigi
 // @namespace    https://smartjadval.uz/
-// @version      1.6.0
+// @version      1.7.0
 // @description  Smartjadval.uz da tuzilgan dars jadvalini eMaktab (kundalik.com) «Darslar jadvali sxemasi» setkasiga joylashtiradi
 // @author       smartjadval.uz
 // @match        https://schools.emaktab.uz/*
@@ -128,12 +128,27 @@
     return out;
   }
 
+  // ⚠️ HARF QISMI BIR NECHTA SO'ZDAN IBORAT BO'LISHI MUMKIN.
+  //
+  //  eMaktabda «2 A O» va «2A» — IKKITA BOSHQA sinf. Ilgari faqat
+  //  birinchi harf olinardi (`[A-Za-z]{0,3}` bo'shliqda to'xtardi) va
+  //  ikkalasi ham `2a` kalitini berardi — sinflar to'qnashib biri
+  //  yo'qolardi (jonli maktabda 43 sinfdan 41 tasi qolgan edi).
+  //  «sinf», «(rus)» kabi qo'shimchalarda to'xtaymiz.
+  //  ⚠️ src/utils/emaktabNames.js dagi `parseClassName` bilan BIR XIL.
   function classKey(raw) {
     const s = String(raw == null ? "" : raw).replace(APOS, "").trim();
-    const m = s.match(/(\d{1,2})\s*[-–—_. ]?\s*([A-Za-zЀ-ӿ]{0,3})/);
+    const m = s.match(/(\d{1,2})\s*[-–—_. ]?\s*([\s\S]*)$/);
     if (!m) return normKey(s);
     const d = Number(m[1]) || 0;
-    return d ? d + normKey(m[2] || "") : normKey(s);
+    if (!d) return normKey(s);
+    let harf = "";
+    for (const soz of String(m[2] || "").split(/[\s\-–—_.]+/)) {
+      if (!soz) continue;
+      if (!/^[A-Za-zЀ-ӿ]{1,3}$/.test(soz)) break;
+      harf += normKey(soz);
+    }
+    return d + harf;
   }
 
   function teacherKeys(raw) {
@@ -1002,16 +1017,76 @@
     return out;
   }
 
+  // Sxema ICHI BO'SHMI? — mavjud sxemani to'ldirish xavfsizmi shundan
+  //  aniqlanadi. Ilgari mavjud sxema SO'ZSIZ o'tkazib yuborilardi:
+  //  maktab avvaldan bo'sh sxema yaratib qo'ygan bo'lsa (jonli maktabda
+  //  aynan shunday edi) «Hamma sinfga» ularning birortasini to'ldirmasdi.
+  //
+  //  ⚠️ NOANIQLIK — «BO'SH EMAS» deb qaraladi. Sahifa ochilmasa yoki
+  //  setka topilmasa `false` qaytadi, ya'ni sxemaga TEGILMAYDI:
+  //  ustiga yozilsa darslar IKKILANADI.
+  async function sxemaBoshmi(group, period, schedId) {
+    let doc;
+    try {
+      const r = await fetch(sxemaUrl(group, period, `&view=edit&schedule=${enc(schedId)}`),
+        { credentials: "same-origin" });
+      if (!r.ok) return false;
+      doc = new DOMParser().parseFromString(await r.text(), "text/html");
+    } catch { return false; }
+    const kataklar = [...doc.querySelectorAll('[id^="d"]')]
+      .filter((el) => /^d[0-6]_\d+$/.test(el.id));
+    if (!kataklar.length) return false;
+    // Bo'sh katakda faqat «+» qo'shish tugmasi turadi
+    return !kataklar.some((el) => txt(el).replace(/[+\s]/g, ""));
+  }
+
+  // Formadagi «Nomi» maydoni: nomlangan, ko'rinadigan MATN maydoni.
+  //  Qidiruv qutilari (`q`, `search`, `query`) chetlab o'tiladi —
+  //  aks holda sarlavhadagi qidiruv formasi «sxema formasi» deb
+  //  qabul qilinardi.
+  function nomMaydoni(form) {
+    const els = [...form.querySelectorAll("input, textarea")];
+    return els.find((el) => {
+      const n = String(el.getAttribute("name") || "");
+      if (!n) return false;
+      if (/^(q|search|query|term)$/i.test(n)) return false;
+      if (/token/i.test(n)) return false;
+      const t = String(el.getAttribute("type") || "").toLowerCase();
+      if (el.tagName === "TEXTAREA") return true;
+      return t === "text" || t === "";
+    }) || null;
+  }
+
   async function sxemaYarat(group, period, nom) {
     const url = sxemaUrl(group, period, "&view=new");
     const r = await fetch(url, { credentials: "same-origin" });
     if (!r.ok) throw new Error(`sxema formasi HTTP ${r.status}`);
     const doc = new DOMParser().parseFromString(await r.text(), "text/html");
-    const form = doc.querySelector("form");
-    if (!form) throw new Error("sxema formasi topilmadi");
+
+    // ⚠️ SAHIFADA BIR NECHTA FORMA BOR (yuqoridagi qidiruv, tildan
+    //  chiqish va h.k.). `querySelector("form")` BIRINCHISINI oladi —
+    //  unda matn maydoni yo'q va «nom maydoni topilmadi» chiqadi
+    //  (jonli maktabda hamma sinfda shu xato bergan, 18.09.2026).
+    //  Kerakli forma — ichida MATN maydoni borisi; ular bir nechta
+    //  bo'lsa yashirin token'lisi ustun (sxema formasi shunday).
+    const formalar = [...doc.querySelectorAll("form")]
+      .filter((f) => nomMaydoni(f));
+    const form = formalar.find((f) => f.querySelector('input[name*="Token" i]'))
+      || formalar[0];
+    if (!form) {
+      // Xato xabari TASHXIS bilan: sahifada qanday forma borligini
+      // ko'rsatadi, aks holda sababini konsolda qidirish kerak bo'ladi.
+      const tashxis = [...doc.querySelectorAll("form")]
+        .map((f, i) => `#${i}[` + [...f.querySelectorAll("input, select, textarea")]
+          .map((e) => `${(e.getAttribute("name") || "?")}:${e.getAttribute("type") || e.tagName.toLowerCase()}`)
+          .join(",") + "]")
+        .join(" ") || "forma umuman yo'q";
+      throw new Error(`sxema formasi topilmadi (matn maydoni yo'q) — ${tashxis}`);
+    }
 
     // Formadagi HAMMA maydon qaytariladi (jumladan yashirin token),
-    // faqat birinchi matn maydoniga sxema nomi yoziladi.
+    // faqat nom maydoniga sxema nomi yoziladi.
+    const nomEl = nomMaydoni(form);
     const fd = new URLSearchParams();
     let nomYozildi = false;
     form.querySelectorAll("input, select, textarea").forEach((el) => {
@@ -1023,23 +1098,24 @@
         if (el.hasAttribute("checked")) fd.append(n, el.getAttribute("value") || "on");
         return;
       }
-      if (!nomYozildi && (t === "text" || t === "" || el.tagName === "TEXTAREA")) {
-        fd.append(n, nom);
-        nomYozildi = true;
-        return;
-      }
+      if (el === nomEl) { fd.append(n, nom); nomYozildi = true; return; }
       fd.append(n, el.getAttribute("value") || "");
     });
     if (!nomYozildi) throw new Error("formada nom maydoni topilmadi");
 
     const action = form.getAttribute("action");
     const post = (!action || action === "#") ? url : new URL(action, location.origin).href;
-    const r2 = await fetch(post, {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
-      body: fd.toString(),
-    });
+    const metod = String(form.getAttribute("method") || "post").toLowerCase() === "get"
+      ? "GET" : "POST";
+    const r2 = metod === "GET"
+      ? await fetch(post + (post.includes("?") ? "&" : "?") + fd.toString(),
+        { credentials: "same-origin" })
+      : await fetch(post, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+        body: fd.toString(),
+      });
 
     // Yo'naltirilgan manzilda yangi id turadi
     const m = String(r2.url || "").match(/[?&]schedule=(\d+)/);
@@ -1328,7 +1404,7 @@
               style="width:110px;background:#020617;border:1px solid #1e293b;border-radius:6px;color:#cbd5e1;padding:3px 6px;"></label>
           </div>
           <div class="qator">
-            <label><input type="checkbox" id="mavjudHam"> mavjud sxemani ham to'ldirish</label>
+            <label><input type="checkbox" id="mavjudHam"> DARSI BOR sxemaga ham yozish (darslar ikkilanadi!)</label>
           </div>
           <div class="qator">
             <button class="b b-main" id="hamma">🏫 Hamma sinfga</button>
@@ -1646,19 +1722,39 @@
         $("pbar").style.width = Math.round(((i + 1) / ishlar.length) * 100) + "%";
 
         const g = guruhlar.get(classKey(sinf.nom));
-        if (!g) { log(`✖ ${sinf.nom} — eMaktabda bunday sinf yo'q`, "xato"); jamiXato++; continue; }
+        if (!g) {
+          // Shu darajadagi eMaktab nomlarini ko'rsatamiz — foydalanuvchi
+          // qaysi biri mos kelishini darhol ko'radi («1-F» yo'q, lekin
+          // «1 G» bor kabi holatlar ko'p uchraydi).
+          const dj = String(sinf.nom).match(/\d{1,2}/);
+          const yaqin = dj
+            ? [...guruhlar.values()]
+              .filter((x) => (String(x.nom).match(/\d{1,2}/) || [])[0] === dj[0])
+              .map((x) => x.nom).join(", ")
+            : "";
+          log(`✖ ${sinf.nom} — eMaktabda bunday sinf yo'q`
+            + (yaqin ? ` (shu darajada: ${yaqin})` : ""), "xato");
+          jamiXato++;
+          continue;
+        }
 
         let schedId;
         try {
           const royxat = await sxemalar(g.id, period);
           const bor = royxat.find((x) => normKey(x.nom) === normKey(chorakNomi));
-          if (bor && !opt.mavjudHam) {
+          // Mavjud sxema ICHI BO'SH bo'lsa to'ldiriladi — darslar
+          // ikkilanmaydi. Ichida dars bo'lsa (yoki bilib bo'lmasa)
+          // tegilmaydi; «mavjud sxemani ham to'ldirish» belgisi shu
+          // to'siqni ONGLI ravishda ochadi.
+          if (bor && !opt.mavjudHam && !(await sxemaBoshmi(g.id, period, bor.id))) {
             otkazildi++;
-            log(`↷ ${sinf.nom} — «${chorakNomi}» sxemasi allaqachon bor, tegilmadi`, "dim");
+            log(`↷ ${sinf.nom} — «${chorakNomi}» sxemasida dars bor, tegilmadi`, "dim");
             continue;
           }
           schedId = bor ? bor.id : await sxemaYarat(g.id, period, chorakNomi);
-          if (!bor) log(`＋ ${sinf.nom} — «${chorakNomi}» sxemasi yaratildi`, "dim");
+          log(bor
+            ? `＝ ${sinf.nom} — mavjud «${chorakNomi}» sxemasi to'ldiriladi`
+            : `＋ ${sinf.nom} — «${chorakNomi}» sxemasi yaratildi`, "dim");
         } catch (err) {
           jamiXato++;
           log(`✖ ${sinf.nom} — sxema: ${err.message}`, "xato");
