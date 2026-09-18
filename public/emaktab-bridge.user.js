@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Smartjadval → eMaktab ko'prigi
 // @namespace    https://smartjadval.uz/
-// @version      1.5.0
+// @version      1.6.0
 // @description  Smartjadval.uz da tuzilgan dars jadvalini eMaktab (kundalik.com) «Darslar jadvali sxemasi» setkasiga joylashtiradi
 // @author       smartjadval.uz
 // @match        https://schools.emaktab.uz/*
@@ -970,6 +970,105 @@
   }
 
   // ===================================================================
+  //  5V-QISM. SXEMALAR — ro'yxat va yaratish
+  //
+  //  ⚠️ SXEMA YARATISH XHR EMAS, ODDIY FORMA YUBORISHI.
+  //  «🔍 O'rganish» yozuvi uni ushlay olmadi: brauzer navigatsiyasi
+  //  `fetch`/`XMLHttpRequest` hook'lariga tushmaydi. Lekin URL'lar
+  //  hammasini aytdi (18.09.2026 yozuvi):
+  //
+  //    …/generator?school=&group=&view=new&period=       ← forma sahifasi
+  //    …/generator?school=&group=&view=edit&schedule=<YANGI>&message=schedulecreated
+  //
+  //  Shuning uchun formani o'zimiz o'qiymiz, maydonlarini o'zimiz
+  //  yuboramiz va natijaviy URL'dan yangi `schedule` id'sini olamiz.
+  // ===================================================================
+  function sxemaUrl(group, period, qoshimcha) {
+    return `/v2/schedules/generator?school=${enc(API.schoolId)}`
+      + `&group=${enc(group)}&period=${enc(period)}${qoshimcha || ""}`;
+  }
+
+  // Sinfning mavjud sxemalari: [{ id, nom }]
+  async function sxemalar(group, period) {
+    const r = await fetch(sxemaUrl(group, period), { credentials: "same-origin" });
+    if (!r.ok) throw new Error(`sxemalar ro'yxati HTTP ${r.status}`);
+    const doc = new DOMParser().parseFromString(await r.text(), "text/html");
+    const out = [];
+    doc.querySelectorAll('a[href*="schedule="]').forEach((a) => {
+      const m = String(a.getAttribute("href") || "").match(/[?&]schedule=(\d+)/);
+      const nom = txt(a);
+      if (m && nom && !out.some((x) => x.id === m[1])) out.push({ id: m[1], nom });
+    });
+    return out;
+  }
+
+  async function sxemaYarat(group, period, nom) {
+    const url = sxemaUrl(group, period, "&view=new");
+    const r = await fetch(url, { credentials: "same-origin" });
+    if (!r.ok) throw new Error(`sxema formasi HTTP ${r.status}`);
+    const doc = new DOMParser().parseFromString(await r.text(), "text/html");
+    const form = doc.querySelector("form");
+    if (!form) throw new Error("sxema formasi topilmadi");
+
+    // Formadagi HAMMA maydon qaytariladi (jumladan yashirin token),
+    // faqat birinchi matn maydoniga sxema nomi yoziladi.
+    const fd = new URLSearchParams();
+    let nomYozildi = false;
+    form.querySelectorAll("input, select, textarea").forEach((el) => {
+      const n = el.getAttribute("name");
+      if (!n) return;
+      const t = String(el.getAttribute("type") || "").toLowerCase();
+      if (t === "submit" || t === "button" || t === "image") return;
+      if (t === "checkbox" || t === "radio") {
+        if (el.hasAttribute("checked")) fd.append(n, el.getAttribute("value") || "on");
+        return;
+      }
+      if (!nomYozildi && (t === "text" || t === "" || el.tagName === "TEXTAREA")) {
+        fd.append(n, nom);
+        nomYozildi = true;
+        return;
+      }
+      fd.append(n, el.getAttribute("value") || "");
+    });
+    if (!nomYozildi) throw new Error("formada nom maydoni topilmadi");
+
+    const action = form.getAttribute("action");
+    const post = (!action || action === "#") ? url : new URL(action, location.origin).href;
+    const r2 = await fetch(post, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+      body: fd.toString(),
+    });
+
+    // Yo'naltirilgan manzilda yangi id turadi
+    const m = String(r2.url || "").match(/[?&]schedule=(\d+)/);
+    if (m) return m[1];
+
+    // Yo'naltirish bo'lmasa — ro'yxatdan nomi bo'yicha qidiramiz
+    const royxat = await sxemalar(group, period);
+    const topildi = royxat.find((x) => normKey(x.nom) === normKey(nom));
+    if (topildi) return topildi.id;
+    throw new Error("yangi sxema id'si aniqlanmadi");
+  }
+
+  // Sinf nomi → eMaktabdagi `group` id. Jadvallar ro'yxati sahifasidan.
+  async function sinfGuruhlari() {
+    const r = await fetch(`/v2/schedules/?school=${enc(API.schoolId)}`, { credentials: "same-origin" });
+    if (!r.ok) throw new Error(`sinflar ro'yxati HTTP ${r.status}`);
+    const doc = new DOMParser().parseFromString(await r.text(), "text/html");
+    const map = new Map();
+    doc.querySelectorAll('a[href*="group="]').forEach((a) => {
+      const m = String(a.getAttribute("href") || "").match(/[?&]group=(\d+)/);
+      const nom = txt(a);
+      if (!m || !nom) return;
+      const k = classKey(nom);
+      if (k && !map.has(k)) map.set(k, { id: m[1], nom });
+    });
+    return map;
+  }
+
+  // ===================================================================
   //  6-QISM. ZAXIRA DRAYVER (DOM orqali)
   //
   //  API yo'li ishlamay qolsa (eMaktab so'rov shaklini o'zgartirsa)
@@ -1215,6 +1314,26 @@
             <button class="b b-warn" id="toxta" style="display:none">■ To'xtatish</button>
           </div>
           <div class="pb"><i id="pbar"></i></div>
+        </div>
+
+        <div class="qadam">
+          <b>🏫 Hamma sinfga (ketma-ket)</b>
+          <div class="dim" style="font-size:11px;margin-bottom:6px;">
+            Har sinf uchun sxema yaratib, darslarni to'ldiradi. Sxemasi
+            allaqachon bor sinf O'TKAZIB YUBORILADI — ikkilanish bo'lmasin.
+            «Nashr etish» baribir qo'lda qoladi.
+          </div>
+          <div class="qator">
+            <label>sxema nomi <input type="text" id="chorakNom" value="1 chorak"
+              style="width:110px;background:#020617;border:1px solid #1e293b;border-radius:6px;color:#cbd5e1;padding:3px 6px;"></label>
+          </div>
+          <div class="qator">
+            <label><input type="checkbox" id="mavjudHam"> mavjud sxemani ham to'ldirish</label>
+          </div>
+          <div class="qator">
+            <button class="b b-main" id="hamma">🏫 Hamma sinfga</button>
+            <span class="holat" id="hammaHolat"></span>
+          </div>
         </div>
 
         <div class="qadam">
@@ -1473,6 +1592,131 @@
   $("yur").onclick = () => run(false);
   $("sinov").onclick = () => run(true);
   $("toxta").onclick = () => { toxtat = true; };
+
+  // ===================================================================
+  //  HAMMA SINFGA — ketma-ket
+  //
+  //  Har sinfning eMaktabdagi sxemasi ALOHIDA (`schedule` id sinfga xos),
+  //  shuning uchun sinfma-sinf yuriladi: sxema yaratiladi, `API` o'sha
+  //  sxemaga qayta sozlanadi va darslar joylanadi.
+  //
+  //  ⚠️ MAVJUD SXEMA O'TKAZIB YUBORILADI. Ichida allaqachon dars bo'lishi
+  //  mumkin va biz uni ko'ra olmaymiz (boshqa sinfning DOM'i bizda yo'q) —
+  //  ustiga yozsak darslar IKKILANADI. Shuning uchun faqat YANGI yaratilgan
+  //  sxema to'ldiriladi; mavjudini to'ldirish alohida belgi bilan yoqiladi.
+  //
+  //  ⚠️ TIZIMLI XATODA TO'XTAYMIZ. Bir sinfda hech narsa joylashmasa,
+  //  qolgan 42 sinfda ham joylashmaydi — 43 marta xato yozib chiqishning
+  //  ma'nosi yo'q, sababini darrov ko'rsatgan afzal.
+  async function hammaSinf() {
+    if (!paket && !parse()) { log("✖ Avval jadvalni yuklang", "xato"); return; }
+    const period = new URLSearchParams(location.search).get("period") || "";
+    if (!period) {
+      log("✖ URL da `period` yo'q — istalgan sinfning chorak sxemasi sahifasidan boshlang", "xato");
+      return;
+    }
+    const chorakNomi = String($("chorakNom").value || "").trim();
+    if (!chorakNomi) { log("✖ Sxema nomi bo'sh", "xato"); return; }
+
+    const opt = {
+      tanaffus: Number($("tanaffus").value) || 350,
+      xona: $("xona").checked,
+      mavjudHam: $("mavjudHam").checked,
+      sinov: false,
+    };
+
+    toxtat = false;
+    $("toxta").style.display = "";
+    $("hamma").disabled = true; $("yur").disabled = true; $("sinov").disabled = true;
+
+    try {
+      if (!API.tayyor) await API.init();
+      log(`✔ API tayyor — ${API.fanlar.length} ta fan`, "ok");
+
+      const guruhlar = await sinfGuruhlari();
+      log(`🏫 eMaktabda ${guruhlar.size} ta sinf topildi`, "dim");
+
+      const ishlar = paket.sinflar.filter((s) => s.darslar.length);
+      let jamiOk = 0, jamiXato = 0, otkazildi = 0;
+
+      for (let i = 0; i < ishlar.length; i++) {
+        if (toxtat) { log("■ To'xtatildi", "ogoh"); break; }
+        const sinf = ishlar[i];
+        $("hammaHolat").textContent = `${i + 1}/${ishlar.length}: ${sinf.nom}`;
+        $("pbar").style.width = Math.round(((i + 1) / ishlar.length) * 100) + "%";
+
+        const g = guruhlar.get(classKey(sinf.nom));
+        if (!g) { log(`✖ ${sinf.nom} — eMaktabda bunday sinf yo'q`, "xato"); jamiXato++; continue; }
+
+        let schedId;
+        try {
+          const royxat = await sxemalar(g.id, period);
+          const bor = royxat.find((x) => normKey(x.nom) === normKey(chorakNomi));
+          if (bor && !opt.mavjudHam) {
+            otkazildi++;
+            log(`↷ ${sinf.nom} — «${chorakNomi}» sxemasi allaqachon bor, tegilmadi`, "dim");
+            continue;
+          }
+          schedId = bor ? bor.id : await sxemaYarat(g.id, period, chorakNomi);
+          if (!bor) log(`＋ ${sinf.nom} — «${chorakNomi}» sxemasi yaratildi`, "dim");
+        } catch (err) {
+          jamiXato++;
+          log(`✖ ${sinf.nom} — sxema: ${err.message}`, "xato");
+          continue;
+        }
+
+        // API ni SHU sinfga sozlaymiz. Kesh tozalanishi SHART: `guruhlar`
+        // (subgroup) ro'yxati sinfga xos, eski kesh begona sinfniki bo'ladi.
+        API.scheduleId = schedId;
+        API.groupId = g.id;
+        API.band = new Set();
+        API.bosh = null;
+        API.fanKesh = new Map();
+        try {
+          const f0 = await API.formaBoshda(0);
+          if (f0.token) API.token = f0.token;
+          if (!API.bosh) API.bosh = { kun: 1, soat: 1 };
+        } catch (err) {
+          jamiXato++;
+          log(`✖ ${sinf.nom} — forma: ${err.message}`, "xato");
+          continue;
+        }
+
+        let ok = 0, xato = 0;
+        for (const d of sinf.darslar) {
+          if (toxtat) break;
+          let r;
+          try { r = await placeLessonApi(d, paket, xarita, opt); }
+          catch (err) { r = { ok: false, sabab: "kutilmagan xato: " + err.message }; }
+          if (r.ok) { ok++; if (r.ogoh) log(`   ⚠ ${sinf.nom} ${d.kun}/${d.soat}: ${r.ogoh}`, "ogoh"); }
+          else { xato++; log(`   ✖ ${sinf.nom} ${d.kun}-kun ${d.soat}-soat ${d.fan} — ${r.sabab}`, "xato"); }
+          await sleep(opt.tanaffus);
+        }
+        jamiOk += ok; jamiXato += xato;
+        log(`${ok === sinf.darslar.length ? "✔" : "⚠"} ${sinf.nom}: ${ok}/${sinf.darslar.length} joylandi`,
+          xato ? "ogoh" : "ok");
+
+        // Tizimli nosozlik — davom etishning ma'nosi yo'q
+        if (ok === 0 && xato > 0) {
+          log("✖ Bu sinfda birorta dars joylashmadi — to'xtatildi. "
+            + "Sababini yuqoridagi xatolardan ko'ring.", "xato");
+          break;
+        }
+      }
+
+      log(`— YAKUN: ${jamiOk} dars joylandi, ${jamiXato} xato`
+        + `${otkazildi ? `, ${otkazildi} sinf o'tkazib yuborildi` : ""} —`, jamiXato ? "ogoh" : "ok");
+      log("🔄 Har sinfni ochib ko'zdan kechiring va «Nashr etish» ni O'ZINGIZ bosing.", "dim");
+    } catch (err) {
+      log("✖ " + err.message, "xato");
+    }
+
+    $("toxta").style.display = "none";
+    $("hamma").disabled = false; $("yur").disabled = false; $("sinov").disabled = false;
+    $("hammaHolat").textContent = "";
+  }
+
+  $("hamma").onclick = hammaSinf;
 
   // ——— Qo'lda moslashtirilgan nomlar ———
   // Tur (fan/ustoz/xona) so'ralmaydi: juftlik uchalasiga ham yoziladi.

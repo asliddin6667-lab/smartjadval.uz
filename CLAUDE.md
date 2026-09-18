@@ -1318,3 +1318,35 @@ nusxasi edi** — «Tabiiy fan (Science)» unda yo'q edi va o'sha dars
 
 eMaktabda uchragan qo'shimcha yozilishlar sinonimlarga kiritildi:
 «Естественные науки», «Букварь», «Изо», «Чтение», «Физическое воспитание».
+
+#### Sxema yaratish va «Hamma sinfga» (18.09.2026)
+
+⚠️ **SXEMA YARATISH XHR EMAS, ODDIY FORMA YUBORISHI.** «🔍 O'rganish»
+yozuvi uni ushlay olmadi — brauzer navigatsiyasi `fetch`/`XMLHttpRequest`
+hook'lariga tushmaydi, yozuvda faqat Yandex metrikasi qoldi. Lekin
+URL'lar hammasini oshkor qildi:
+
+```
+…/generator?school=&group=&view=new&period=      ← forma sahifasi
+…/generator?school=&group=&view=edit&schedule=<YANGI>&message=schedulecreated
+```
+
+Shuning uchun `sxemaYarat()` formani o'zi o'qiydi (barcha maydon, jumladan
+yashirin token, qaytariladi; birinchi matn maydoniga nom yoziladi) va
+natijaviy URL'dan yangi `schedule` id'sini oladi.
+
+**Bundan chiqadigan qoida:** yozuvchi faqat AJAX'ni ko'radi. Sahifa
+almashtiradigan amalni o'rganish kerak bo'lsa — URL'lar zanjiriga qarang,
+yozuv tanasi bo'sh chiqadi.
+
+⚠️ **«🏫 Hamma sinfga» MAVJUD SXEMANI O'TKAZIB YUBORADI.** Boshqa sinfning
+setka DOM'i bizda yo'q, ya'ni ichida dars bor-yo'qligini ko'ra olmaymiz —
+ustiga yozsak darslar IKKILANADI. Faqat YANGI yaratilgan sxema to'ldiriladi;
+mavjudini to'ldirish alohida belgi bilan yoqiladi.
+
+⚠️ **Sinf almashganda `API.fanKesh` TOZALANISHI SHART** — keshdagi
+`guruhlar` (subgroup) ro'yxati sinfga xos, begona sinfniki ishlatilsa
+dars noto'g'ri guruhga tushadi. `band` va `bosh` ham shu bilan tozalanadi.
+
+**Tizimli xatoda to'xtaydi:** bir sinfda birorta dars joylashmasa qolgan
+42 sinfda ham joylashmaydi, shuning uchun sikl uziladi.
