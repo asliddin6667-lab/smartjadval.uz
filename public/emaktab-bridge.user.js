@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Smartjadval → eMaktab ko'prigi
 // @namespace    https://smartjadval.uz/
-// @version      1.0.0
+// @version      1.1.0
 // @description  Smartjadval.uz da tuzilgan dars jadvalini eMaktab (kundalik.com) «Darslar jadvali sxemasi» setkasiga joylashtiradi
 // @author       smartjadval.uz
 // @match        https://schools.emaktab.uz/*
@@ -9,7 +9,15 @@
 // @match        https://*.kundalik.com/*
 // @grant        none
 // @run-at       document-idle
+// @updateURL    https://smartjadval.uz/emaktab-bridge.user.js
+// @downloadURL  https://smartjadval.uz/emaktab-bridge.user.js
 // ==/UserScript==
+
+// ⚠️ SKRIPTGA TEGSANGIZ `@version` NI OSHIRING.
+//
+//  Tampermonkey yangilanishni FAQAT versiya raqami bo'yicha aniqlaydi:
+//  fayl o'zgarsa-yu raqam o'sha qolsa, o'rnatilgan nusxa eski holicha
+//  ishlab yuraveradi va tuzatishlar foydalanuvchiga yetib bormaydi.
 
 // =====================================================================
 //  SMARTJADVAL → eMAKTAB KO'PRIGI
