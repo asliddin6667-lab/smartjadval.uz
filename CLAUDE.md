@@ -985,6 +985,25 @@ tugmasi shu rejani qo'llaydi (fan nomi `aliases` orqali solishtiriladi).
 Jadval SQL i: [standard_hours_setup.sql](standard_hours_setup.sql) — Supabase SQL
 Editor'da bir marta ishga tushiriladi.
 
+⚠️ **RUS VA O'ZBEK SINFLARIDA SOAT AYNAN BIR XIL — TUZILISHI BILAN.**
+Ilgari `CURRICULUM_RU` ning `h` qiymatlari `CURRICULUM_UZ` dan QO'LDA
+ko'chirilar va «o'zgartirsangiz ikkinchisini ham o'zgartiring» degan
+izohga tayanardi. Jonli maktabda ular ajralib ketdi: 3-B (rus) 14 soat,
+3-V (o'zbek) 25 soat. Endi rus qatori o'zbek qatoridan AYNI `h`
+obyektini oladi (`CURRICULUM_RU = RU_ROWS.map((r, i) => …UZ_ROWS[i].h)`),
+ya'ni ajralishi mumkin emas. RU_ROWS dagi `h` faqat zaxira.
+**Rus ro'yxatining QATOR TARTIBI o'zbeknikiga mos turishi shart** —
+soat shu tartib (va `key`) bo'yicha bog'lanadi.
+
+⚠️ **NOM IKKALA TILDA QIDIRILADI.** Maktabning fanlar ro'yxati aralash
+bo'ladi: eMaktabdan import qilinganlari ruscha («Букварь», «Изо»,
+«Естественные науки»), qo'lda kiritilganlari o'zbekcha. `buildCurriculumIndex(rows, other)`
+endi ikkinchi tildagi nomlarni ham SHU tildagi qatorga bog'laydi, ya'ni
+fan qaysi tilda nomlangan bo'lsa ham rejadagi o'z soatini oladi.
+O'z tilidagi nom ustun. `key` (o'zbekcha nom) ikki qatorni bog'laydi va
+`normalizeCurriculum` / StandardHours `cloneCurriculum` uni SAQLAYDI —
+tushirib qoldirilsa juftlik faqat tartibga qolib, tahrirda siljib ketadi.
+
 **Qo'llanganda ustoz ham qo'yiladi — sinf rahbari.** «⚡ Standart soatlar» va
 «⚡ Mos fanlar» reja bo'yicha fan+soat yozadi va USTOZNI o'zi tanlaydi
 ([homeroomSubjects.js](src/utils/homeroomSubjects.js)):

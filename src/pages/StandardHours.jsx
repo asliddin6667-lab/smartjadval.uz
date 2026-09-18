@@ -12,10 +12,20 @@ import { fetchStandardHours, saveStandardHours } from "../services/standardHours
 
 const EMPTY = { uz: [], ru: [] };
 
+// ⚠️ `key` SAQLANADI. U o'zbek va rus qatorini bog'laydi — shu bog'lanish
+//  tufayli fan qaysi tilda nomlangan bo'lsa ham rejadagi o'z soatini
+//  topadi (curriculum.js dagi `buildCurriculumIndex` ga qarang).
+//  Tushirib qoldirilsa juftlik faqat qator TARTIBIGA qolardi va tahrirda
+//  qator qo'shilsa ikki til siljib ketardi.
 function cloneCurriculum(c) {
+  const qator = (r) => {
+    const out = { name: r.name, aliases: [...(r.aliases || [])], h: { ...r.h } };
+    if (r.key) out.key = r.key;
+    return out;
+  };
   return {
-    uz: (c?.uz || []).map((r) => ({ name: r.name, aliases: [...(r.aliases || [])], h: { ...r.h } })),
-    ru: (c?.ru || []).map((r) => ({ name: r.name, aliases: [...(r.aliases || [])], h: { ...r.h } })),
+    uz: (c?.uz || []).map(qator),
+    ru: (c?.ru || []).map(qator),
   };
 }
 

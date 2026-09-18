@@ -17,10 +17,10 @@
    h = { sinf: haftalik soat }.  Kasr soatlar (1,5 / 0,5) generator uchun
    butun songa yaxlitlanadi (Math.round) — quyidagi curriculumHours() ga qarang.
 =================================================================== */
-export const CURRICULUM_UZ = [
+const UZ_ROWS = [
   // I. Filologiya fanlari
   { name: "Ona tili", aliases: ["ona tili"], h: { 1: 4, 2: 4, 3: 4, 4: 4, 5: 4, 6: 4, 7: 3, 8: 3, 9: 3, 10: 2, 11: 2 } },
-  { name: "O'qish savodxonligi", aliases: ["o'qish savodxonligi", "alifbe", "o'qish"], h: { 1: 4, 2: 3, 3: 3, 4: 3 } },
+  { name: "O'qish savodxonligi", aliases: ["o'qish savodxonligi", "alifbe", "o'qish", "ona tili va o'qish savodxonligi"], h: { 1: 4, 2: 3, 3: 3, 4: 3 } },
   { name: "Adabiyot", aliases: ["adabiyot"], h: { 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 2, 11: 2 } },
   { name: "Rus tili", aliases: ["rus tili"], h: { 2: 2, 3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 2, 11: 2 } },
   { name: "Chet tili", aliases: ["chet tili", "ingliz tili", "nemis tili", "fransuz tili", "xorijiy til"], h: { 1: 1, 2: 2, 3: 2, 4: 2, 5: 4, 6: 4, 7: 4, 8: 3, 9: 3, 10: 2, 11: 2 } },
@@ -70,13 +70,15 @@ export const CURRICULUM_UZ = [
      - "Rus tili"  -> "Узбекский язык" (ikkinchi davlat tili)
    Qolgan hamma fan — oddiy tarjima.
 
-   ⚠️ CURRICULUM_UZ dagi soat o'zgarsa — SHU YERDA HAM o'zgartiring,
-   aks holda ikki til ajralib ketadi.
+   ⚠️ QATOR TARTIBI O'ZBEK RO'YXATI BILAN BIR XIL BO'LISHI SHART —
+   soat shu tartib bo'yicha bog'lanadi (pastdagi CURRICULUM_RU ga
+   qarang). Bu yerdagi `h` faqat ZAXIRA; haqiqiy soat o'zbek qatoridan
+   olinadi, shuning uchun uni qo'lda yangilash kerak emas.
 =================================================================== */
-export const CURRICULUM_RU = [
+const RU_ROWS = [
   // I. Filologiya fanlari
   { name: "Русский язык", aliases: ["русский язык", "русский язык и грамотность чтения", "родной язык"], h: { 1: 4, 2: 4, 3: 4, 4: 4, 5: 4, 6: 4, 7: 3, 8: 3, 9: 3, 10: 2, 11: 2 } },
-  { name: "Грамотность чтения", aliases: ["грамотность чтения", "азбука", "чтение", "литературное чтение"], h: { 1: 4, 2: 3, 3: 3, 4: 3 } },
+  { name: "Грамотность чтения", aliases: ["грамотность чтения", "азбука", "букварь", "чтение", "литературное чтение", "выразительное чтение"], h: { 1: 4, 2: 3, 3: 3, 4: 3 } },
   { name: "Литература", aliases: ["литература"], h: { 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 2, 11: 2 } },
   { name: "Узбекский язык", aliases: ["узбекский язык", "государственный язык"], h: { 2: 2, 3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 2, 11: 2 } },
   { name: "Иностранный язык", aliases: ["иностранный язык", "английский язык", "немецкий язык", "французский язык"], h: { 1: 1, 2: 2, 3: 2, 4: 2, 5: 4, 6: 4, 7: 4, 8: 3, 9: 3, 10: 2, 11: 2 } },
@@ -113,6 +115,29 @@ export const CURRICULUM_RU = [
   { name: "Физическая культура", aliases: ["физическая культура", "физкультура", "физическое воспитание"], h: { 1: 1, 2: 2, 3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 2, 11: 2 } },
   { name: "Начальная допризывная подготовка", aliases: ["начальная допризывная подготовка", "ндп", "допризывная подготовка"], h: { 10: 2, 11: 2 } },
 ];
+
+/* ===================================================================
+   IKKI TIL — BITTA SOAT MANBAI
+
+   ⚠️ SOAT FAQAT O'ZBEK JADVALIDAN OLINADI. Ilgari `h` ikkala ro'yxatda
+   QO'LDA takrorlanardi va «o'zgartirsangiz ikkinchisini ham o'zgartiring»
+   degan izohga tayanardi — jonli maktabda ular ajralib ketdi: 3-B (rus)
+   14 soat, 3-V (o'zbek) 25 soat bo'lib qoldi. Endi rus qatori o'zbek
+   qatoridan AYNI `h` obyektini oladi, ya'ni ajralishi MUMKIN EMAS.
+   RU_ROWS dagi `h` faqat zaxira (juftlik topilmasa).
+
+   `key` — ikki tildagi qatorni bog'lovchi barqaror kalit (o'zbekcha nom).
+   U nom bo'yicha KESIShGAN qidiruv uchun kerak: «Букварь» deb nomlangan
+   fan o'zbek sinfida ham «O'qish savodxonligi» qatorini topsin.
+=================================================================== */
+export const CURRICULUM_UZ = UZ_ROWS.map((r) => ({ ...r, key: r.name }));
+
+export const CURRICULUM_RU = RU_ROWS.map((r, i) => ({
+  name: r.name,
+  aliases: r.aliases,
+  key: UZ_ROWS[i]?.name || r.name,
+  h: UZ_ROWS[i]?.h || r.h,
+}));
 
 // Fan nomlarini solishtirish uchun: apostroflar, katta-kichik harf,
 // ortiqcha bo'shliq va qavslar hisobga olinmaydi.
@@ -157,7 +182,10 @@ export function normalizeCurriculum(raw) {
         const aliases = Array.isArray(r?.aliases)
           ? r.aliases.map((a) => String(a).trim()).filter(Boolean)
           : [];
-        return { name, aliases, h };
+        // `key` — ikki tildagi qatorni bog'lovchi kalit. Saqlangan
+        // yozuvda bo'lmasa juftlik tartib bo'yicha topiladi.
+        const key = String(r?.key || "").trim();
+        return key ? { name, aliases, h, key } : { name, aliases, h };
       })
       .filter(Boolean);
     if (out[lang].length) any = true;
@@ -183,14 +211,46 @@ export function withCurriculumDefaults(c) {
   return out;
 }
 
-// Fan nomi (va uning muqobil nomlari) -> reja qatori
-export function buildCurriculumIndex(rows) {
+// Ikki tildagi ro'yxatni qator-qator bog'laydi: `key` bo'lsa o'sha
+// bo'yicha, bo'lmasa (bulutdagi eski yozuv) tartib bo'yicha.
+function pairRows(rows, other) {
+  const juft = new Map();
+  const kalitli = new Map();
+  (rows || []).forEach((r) => { if (r?.key) kalitli.set(r.key, r); });
+  (other || []).forEach((o, i) => {
+    const mos = (o?.key && kalitli.get(o.key)) || rows?.[i] || null;
+    if (mos) juft.set(o, mos);
+  });
+  return juft;
+}
+
+/* Fan nomi (va uning muqobil nomlari) -> reja qatori.
+
+   ⚠️ NOM IKKALA TILDA HAM QIDIRILADI. Maktabning fanlar ro'yxati
+   aralash bo'lishi odatiy hol: eMaktabdan import qilingan fanlar
+   ruscha nomlangan («Букварь», «Изо», «Естественные науки»), qo'lda
+   kiritilganlari — o'zbekcha. Ilgari indeks faqat O'Z tilidagi
+   nomlarni bilardi va aralash ro'yxatda rejaning yarmi tushmay
+   qolardi: jonli maktabda 3-B (rus) 8 fan / 14 soat, 3-V (o'zbek)
+   esa 13 fan / 25 soat chiqdi.
+
+   Endi boshqa tildagi nom ham SHU tildagi qatorga olib boradi, ya'ni
+   fan qaysi tilda nomlangan bo'lsa ham rejadagi o'z soatini oladi.
+   O'z tilidagi nom USTUN — avval u yoziladi. */
+export function buildCurriculumIndex(rows, other) {
   const m = new Map();
+  const yoz = (alias, row) => {
+    const k = normName(alias);
+    if (k && !m.has(k)) m.set(k, row);
+  };
   (rows || []).forEach((row) => {
-    [row.name, ...(row.aliases || [])].forEach((alias) => {
-      const k = normName(alias);
-      if (k && !m.has(k)) m.set(k, row);
-    });
+    [row.name, ...(row.aliases || [])].forEach((a) => yoz(a, row));
+  });
+  const juft = pairRows(rows, other);
+  (other || []).forEach((o) => {
+    const mos = juft.get(o);
+    if (!mos) return;
+    [o.name, ...(o.aliases || [])].forEach((a) => yoz(a, mos));
   });
   return m;
 }

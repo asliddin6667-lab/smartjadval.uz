@@ -303,9 +303,13 @@ export default function ClassSubjectsPage({ classes, subjects, teachers, setTeac
     fetchStandardHours().then((res) => { if (alive && res?.data) setCurriculum(res.data); });
     return () => { alive = false; };
   }, []);
+  // ⚠️ HAR BIR INDEKS IKKINCHI TILNI HAM BILADI. Maktabning fanlar
+  //  ro'yxati aralash nomlangan bo'lishi odatiy hol (eMaktabdan
+  //  import qilinganlari ruscha). Busiz rejaning yarmi tushmay qolardi
+  //  va rus sinfi o'zbek sinfidan kam soat olardi.
   const curriculumIndex = useMemo(() => ({
-    uz: buildCurriculumIndex(curriculum.uz),
-    ru: buildCurriculumIndex(curriculum.ru),
+    uz: buildCurriculumIndex(curriculum.uz, curriculum.ru),
+    ru: buildCurriculumIndex(curriculum.ru, curriculum.uz),
   }), [curriculum]);
   function curriculumRowFor(subjectName, lang) {
     return curriculumIndex[lang]?.get(normName(subjectName)) || null;
