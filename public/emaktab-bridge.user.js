@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Smartjadval → eMaktab ko'prigi
 // @namespace    https://smartjadval.uz/
-// @version      1.7.2
+// @version      1.8.0
 // @description  Smartjadval.uz da tuzilgan dars jadvalini eMaktab (kundalik.com) «Darslar jadvali sxemasi» setkasiga joylashtiradi
 // @author       smartjadval.uz
 // @match        https://schools.emaktab.uz/*
@@ -1395,9 +1395,11 @@
         <div class="qadam">
           <b>🏫 Hamma sinfga (ketma-ket)</b>
           <div class="dim" style="font-size:11px;margin-bottom:6px;">
-            Har sinf uchun sxema yaratib, darslarni to'ldiradi. Sxemasi
-            allaqachon bor sinf O'TKAZIB YUBORILADI — ikkilanish bo'lmasin.
-            «Nashr etish» baribir qo'lda qoladi.
+            <b style="color:#93c5fd;">🗂</b> — shu nomli sxemani HAMMA sinfga
+            yaratadi (dars yozmaydi, jadval fayli ham kerak emas).<br>
+            <b style="color:#93c5fd;">🏫</b> — sxemani yaratib, darslarni ham
+            to'ldiradi. Ichida allaqachon dars bor sxemaga TEGILMAYDI.<br>
+            «Nashr etish» ikkalasida ham bosilmaydi — u sizda qoladi.
           </div>
           <div class="qator">
             <label>sxema nomi <input type="text" id="chorakNom" value="1 chorak"
@@ -1407,7 +1409,11 @@
             <label><input type="checkbox" id="mavjudHam"> DARSI BOR sxemaga ham yozish (darslar ikkilanadi!)</label>
           </div>
           <div class="qator">
-            <button class="b b-main" id="hamma">🏫 Hamma sinfga</button>
+            <button class="b b-alt" id="sxemaHamma"
+              title="Faqat sxema yaratadi, dars yozmaydi">🗂 Hammasiga shu nomli sxema</button>
+          </div>
+          <div class="qator">
+            <button class="b b-main" id="hamma">🏫 Hamma sinfga (sxema + darslar)</button>
             <span class="holat" id="hammaHolat"></span>
           </div>
         </div>
@@ -1834,6 +1840,82 @@
   }
 
   $("hamma").onclick = hammaSinf;
+
+  // ===================================================================
+  //  HAMMASIGA SHU NOMLI SXEMA — faqat yaratadi, dars yozmaydi
+  //
+  //  eMaktabda «Darslar jadvalining yangi sxemasi» tugmasi bitta sinfga
+  //  bitta sxema yaratadi: 43 sinf uchun 43 marta nom yozib chiqish
+  //  kerak bo'ladi. Bu tugma o'sha ishni bir bosishda bajaradi.
+  //
+  //  ⚠️ JADVAL FAYLI KERAK EMAS. Sinflar eMaktabning O'Z ro'yxatidan
+  //  olinadi, ya'ni Smartjadval jadvali hali tayyor bo'lmasa ham
+  //  sxemalarni oldindan yaratib qo'yish mumkin.
+  //
+  //  ⚠️ SHU NOMLI SXEMASI BORI TEGILMAYDI — nusxa ko'paymasin.
+  async function hammagaSxema() {
+    const q = new URLSearchParams(location.search);
+    const period = q.get("period") || "";
+    const school = q.get("school") || API.schoolId || "";
+    if (!period || !school) {
+      log("✖ URL da `period` yoki `school` yo'q — istalgan sinfning "
+        + "chorak sxemasi sahifasidan boshlang", "xato");
+      return;
+    }
+    API.schoolId = school;
+
+    const nom = String($("chorakNom").value || "").trim();
+    if (!nom) { log("✖ Sxema nomi bo'sh", "xato"); return; }
+
+    toxtat = false;
+    $("toxta").style.display = "";
+    $("sxemaHamma").disabled = true; $("hamma").disabled = true;
+
+    try {
+      const guruhlar = await sinfGuruhlari();
+      log(`🗂 «${nom}» sxemasi ${guruhlar.size} ta sinfga yaratilmoqda…`, "ok");
+
+      const royxat = [...guruhlar.values()];
+      let yaratildi = 0, bor = 0, xato = 0;
+
+      for (let i = 0; i < royxat.length; i++) {
+        if (toxtat) { log("■ To'xtatildi", "ogoh"); break; }
+        const g = royxat[i];
+        $("hammaHolat").textContent = `${i + 1}/${royxat.length}: ${g.nom}`;
+        $("pbar").style.width = Math.round(((i + 1) / royxat.length) * 100) + "%";
+        try {
+          const mavjud = await sxemalar(g.id, period);
+          if (mavjud.some((x) => normKey(x.nom) === normKey(nom))) {
+            bor++;
+            log(`↷ ${g.nom} — «${nom}» allaqachon bor`, "dim");
+            continue;
+          }
+          await sxemaYarat(g.id, period, nom);
+          yaratildi++;
+          log(`＋ ${g.nom} — «${nom}» yaratildi`, "ok");
+        } catch (err) {
+          xato++;
+          log(`✖ ${g.nom} — ${err.message}`, "xato");
+        }
+        await sleep(250);   // eMaktabni bo'g'ib qo'ymaylik
+      }
+
+      log(`— YAKUN: ${yaratildi} ta sxema yaratildi`
+        + `${bor ? `, ${bor} tasida allaqachon bor edi` : ""}`
+        + `${xato ? `, ${xato} xato` : ""} —`, xato ? "ogoh" : "ok");
+      if (yaratildi) {
+        log("Endi «🏫 Hamma sinfga» bilan darslarni to'ldirsangiz bo'ladi.", "dim");
+      }
+    } catch (err) {
+      log("✖ " + err.message, "xato");
+    }
+
+    $("toxta").style.display = "none";
+    $("sxemaHamma").disabled = false; $("hamma").disabled = false;
+    $("hammaHolat").textContent = "";
+  }
+
+  $("sxemaHamma").onclick = hammagaSxema;
 
   // ——— Qo'lda moslashtirilgan nomlar ———
   // Tur (fan/ustoz/xona) so'ralmaydi: juftlik uchalasiga ham yoziladi.
