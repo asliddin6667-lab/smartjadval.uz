@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Smartjadval → eMaktab ko'prigi
 // @namespace    https://smartjadval.uz/
-// @version      1.8.1
+// @version      1.9.0
 // @description  Smartjadval.uz da tuzilgan dars jadvalini eMaktab (kundalik.com) «Darslar jadvali sxemasi» setkasiga joylashtiradi
 // @author       smartjadval.uz
 // @match        https://schools.emaktab.uz/*
@@ -1418,9 +1418,26 @@
           </div>
           <div class="qator">
             <button class="b b-alt" id="sinov">🧪 Sinov (1 dars, saqlamaydi)</button>
-            <button class="b b-main" id="yur">▶ Joylashtirish</button>
+            <button class="b b-main" id="yur">▶ Shu sinfga</button>
             <button class="b b-warn" id="toxta" style="display:none">■ To'xtatish</button>
           </div>
+          <!-- ⚠️ ASOSIY TUGMA SHU YERDA TURADI.
+               Ilgari u faqat panelning pastidagi «Hamma sinfga» bo'limida
+               edi va ko'rinmay qolardi — foydalanuvchi sinfma-sinf kirib
+               «Joylashtirish» bosib chiqardi. Endi eng kerakli amal
+               ko'z oldida: bir bosishda hamma sinf. -->
+          <div class="qator">
+            <button class="b b-main" id="hamma"
+              style="width:100%;padding:11px;font-size:13px;
+                background:linear-gradient(135deg,#6366f1,#8b5cf6);">
+              🚀 HAMMA SINFGA JOYLASHTIRISH
+            </button>
+          </div>
+          <div class="dim" style="font-size:10.5px;margin:-2px 0 4px;">
+            Sinf nomi bo'yicha mos keladi. Sxemasi yo'q sinfga «<span id="nomKo"></span>»
+            nomli sxema yaratadi, bo'shini to'ldiradi, darsi borga tegmaydi.
+          </div>
+          <div class="qator"><span class="holat" id="hammaHolat"></span></div>
           <div class="pb"><i id="pbar"></i></div>
         </div>
 
@@ -1440,13 +1457,16 @@
           <div class="qator">
             <label><input type="checkbox" id="mavjudHam"> DARSI BOR sxemaga ham yozish (darslar ikkilanadi!)</label>
           </div>
+          <!-- ⚠️ «Hamma sinfga» tugmasi 3-BO'LIMGA ko'chirildi (yuqoriga).
+               Bu yerda faqat sxema yaratish qoldi — u alohida amal:
+               jadval fayli hali tayyor bo'lmaganda ham ishlaydi.
+               Bir id ni IKKINCHI MARTA yozmang: getElementById
+               birinchisini oladi va tugma ishlamay qoladi.
+               (Izohda teskari apostrof ISHLATILMAYDI — bu blok
+                shablon-satr ichida, u yerda belgi satrni uzib yuboradi.) -->
           <div class="qator">
             <button class="b b-alt" id="sxemaHamma"
               title="Faqat sxema yaratadi, dars yozmaydi">🗂 Hammasiga shu nomli sxema</button>
-          </div>
-          <div class="qator">
-            <button class="b b-main" id="hamma">🏫 Hamma sinfga (sxema + darslar)</button>
-            <span class="holat" id="hammaHolat"></span>
           </div>
         </div>
 
@@ -1872,6 +1892,14 @@
   }
 
   $("hamma").onclick = hammaSinf;
+
+  // Sxema nomi 3-bo'limdagi izohda ham ko'rinsin — tugma u yerda,
+  // nom esa pastda kiritiladi; foydalanuvchi nimani bosayotganini bilsin.
+  const nomKoYangila = () => {
+    $("nomKo").textContent = String($("chorakNom").value || "").trim() || "1 chorak";
+  };
+  $("chorakNom").oninput = nomKoYangila;
+  nomKoYangila();
 
   // ===================================================================
   //  HAMMASIGA SHU NOMLI SXEMA — faqat yaratadi, dars yozmaydi
