@@ -1299,3 +1299,22 @@ bir necha MB — shu brauzerda IKKINCHI profil ochilsa kvota to'ladi.
   [scheduleEngine.js](src/engine/scheduleEngine.js) da** (bo'linish tarixi yuqorida).
   Faylda qolganlari: `compactSchedule` va core'ning qayta eksporti. Funksiyani
   qidirsangiz ikkala faylga ham qarang.
+
+#### Jonli sinovda topilgan ikki nosozlik (4-A, 18.09.2026)
+
+⚠️ **`API.bosh` KATAK ISH DAVOMIDA BAND BO'LIB QOLADI.** Ro'yxatlar bo'sh
+katak orqali so'raladi (`scheduleitemnew` faqat bo'shda to'liq forma beradi),
+lekin o'sha katakka dars tushishi mumkin — birinchi dars aynan shunga tushdi.
+Undan keyin forma xato sahifasini qaytardi, `guruhlar` bo'sh chiqdi va
+**qolgan 9 ta dars «guruh ro'yxati bo'sh» deb rad etildi**. Endi `API.band`
+to'plami shu yurishda to'ldirilgan kataklarni yuritadi (API rejimida sahifa
+DOM'i yangilanmaydi — ularni faqat o'zimiz bilamiz), `formaBoshda()` esa
+forma bo'sh kelsa yangi bo'sh katak topib qayta so'raydi.
+
+⚠️ **Ko'prikdagi `SYN` ro'yxati `SUBJECT_SYNONYMS` ning QISQARTIRILGAN
+nusxasi edi** — «Tabiiy fan (Science)» unda yo'q edi va o'sha dars
+«mos nom topilmadi» bo'lib tushmadi. Endi ikkalasi bir xil (48 qator).
+**Bittasiga qator qo'shsangiz ikkinchisiga ham qo'shing.**
+
+eMaktabda uchragan qo'shimcha yozilishlar sinonimlarga kiritildi:
+«Естественные науки», «Букварь», «Изо», «Чтение», «Физическое воспитание».

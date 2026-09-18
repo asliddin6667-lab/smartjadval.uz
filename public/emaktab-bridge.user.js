@@ -115,30 +115,59 @@
     return x.toliq === y.toliq || x.qisqa === y.qisqa;
   }
 
+  // ⚠️ src/utils/emaktabNames.js dagi SUBJECT_SYNONYMS bilan AYNI
+  // bo'lishi shart. Ilgari bu yerda qisqartirilgan nusxa turardi va
+  // «Tabiiy fan (Science)» yo'q edi — natijada o'sha dars jonli
+  // maktabda «mos nom topilmadi» bo'lib tushmay qoldi.
   const SYN = [
-    ["Ona tili","Родной язык"],["Adabiyot","Литература"],["O'zbek tili","Узбекский язык"],
-    ["Ingliz tili","Английский язык","English"],["Rus tili","Русский язык"],
-    ["Matematika","Математика"],["Algebra","Алгебра"],["Geometriya","Геометрия"],
-    ["Alifbe","Азбука"],["Yozuv","Письмо"],["Husnixat","Чистописание"],
-    ["Nutq o'stirish","Развитие речи"],["O'qish savodxonligi","Грамотность чтения"],
-    ["Sinfdan tashqari o'qish","Внеклассное чтение"],["Ifodali o'qish","Выразительное чтение"],
-    ["Tabiatshunoslik","Природоведение"],["Biologiya","Биология"],["Kimyo","Химия"],
-    ["Fizika","Физика"],["Astranomiya","Астрономия","Astronomiya"],["Geografiya","География"],
-    ["Tarix","История"],["O'zbekiston tarixi","История Узбекистана"],
-    ["Jahon tarixi","Всемирная история"],["Tarixdan hikoyalar","Рассказы по истории"],
-    ["Huquq","Право"],["Davlat va huquq asoslari","Основы государства и права"],
+    ["Ona tili","Родной язык"],
+    ["Ona tili va o'qish savodxonligi","Русский язык и грамотность чтения"],
+    ["O'qish savodxonligi","Грамотность чтения","Чтение"],
+    ["Adabiyot","Литература"],
+    ["Badiiy adabiyot","Художественная литература"],
+    ["Ifodali o'qish","Выразительное чтение"],
+    ["Sinfdan tashqari o'qish","Внеклассное чтение"],
+    ["Alifbe","Азбука","Букварь"],
+    ["Yozuv","Письмо"],
+    ["Husnixat","Чистописание"],
+    ["Nutq o'stirish","Развитие речи"],
+    ["O'zbek tili","Узбекский язык"],
+    ["Ingliz tili","Английский язык","English"],
+    ["Rus tili","Русский язык"],
+    ["Matematika","Математика"],
+    ["Algebra","Алгебра"],
+    ["Geometriya","Геометрия"],
+    ["Mental arifmetika","Ментальная арифметика"],
+    ["Mnemonika","Мнемоника"],
+    ["Tabiatshunoslik","Природоведение"],
+    ["Tabiiy fan (Science)","Естествознание (Science)","Естественные науки"],
+    ["Biologiya","Биология"],
+    ["Kimyo","Химия"],
+    ["Fizika","Физика"],
+    ["Astranomiya","Астрономия","Astronomiya"],
+    ["Geografiya","География"],
+    ["Tarix","История"],
+    ["O'zbekiston tarixi","История Узбекистана"],
+    ["Jahon tarixi","Всемирная история"],
+    ["Tarixdan hikoyalar","Рассказы по истории"],
+    ["Huquq","Право"],
+    ["Davlat va huquq asoslari","Основы государства и права"],
     ["Iqtisodiy bilim asoslari","Основы экономических знаний"],
     ["Tadbirkorlik asoslari","Основы предпринимательства"],
-    ["Tarbiya","Воспитание"],["Kelajak soati","Час будущего"],
-    ["Tanqidiy fikrlash","Критическое мышление"],["Informatika","Информатика"],
+    ["Tarbiya","Воспитание"],
+    ["Kelajak soati","Час будущего"],
+    ["Tanqidiy fikrlash","Критическое мышление"],
+    ["Informatika","Информатика"],
     ["Informatika va axborot texnologiyalari","Информатика и информационные технологии"],
-    ["Texnologiya","Технология","Mehnat","Труд"],["Chizmachilik","Черчение"],
-    ["Tasviriy san'at","Изобразительное искусство"],["Musiqa","Музыка"],
+    ["Texnologiya","Технология","Mehnat","Труд"],
+    ["Chizmachilik","Черчение"],
+    ["Tasviriy san'at","Изобразительное искусство","Изо"],
+    ["Musiqa","Музыка"],
     ["Musiqa madaniyati","Музыкальная культура"],
-    ["Jismoniy tarbiya","Физическая культура","Jismoniy madaniyat"],
+    ["Jismoniy tarbiya","Физическая культура","Jismoniy madaniyat","Физическое воспитание"],
     ["Chaqiruvga qadar boshlang'ich tayyorgarlik","Начальная допризывная подготовка"],
-    ["Boshlang'ich ta'lim","Начальное образование"],["Tanlov fanlari","Предметы по выбору"],
-    ["Mental arifmetika","Ментальная арифметика"],["Mnemonika","Мнемоника"],
+    ["Boshlang'ich ta'lim","Начальное образование"],
+    ["Tanlov fanlari","Предметы по выбору"],
   ];
   const SYN_MAP = new Map();
   SYN.forEach((row, i) => row.forEach((n) => { const k = normKey(n); if (k && !SYN_MAP.has(k)) SYN_MAP.set(k, i); }));
@@ -544,6 +573,7 @@
     tayyor: false,
     xss: "", token: "", schoolId: "", scheduleId: "", groupId: "",
     bosh: null,            // { kun, soat } — ro'yxat so'rash uchun BO'SH katak
+    band: new Set(),       // shu yurishda TO'LDIRILGAN kataklar ("kun_soat")
     fanlar: [],            // [{ v, label }] — butun maktab fanlari
     fanKesh: new Map(),    // fanId → { guruhlar, ustozlar, xonalar }
 
@@ -584,6 +614,7 @@
       if (g) {
         for (const soat of g.soatlar.keys()) {
           for (const kun of g.cols.keys()) {
+            if (this.band.has(`${kun}_${soat}`)) continue;   // biz to'ldirganmiz
             const c = cellAt(g, kun, soat);
             if (c && !txt(c)) nomzodlar.push({ kun, soat });
           }
@@ -592,7 +623,9 @@
       // Setka topilmasa yoki hammasi band ko'rinsa — ko'r-ko'rona sinaymiz
       if (!nomzodlar.length) {
         for (let soat = 1; soat <= 12; soat++) {
-          for (let kun = 1; kun <= 6; kun++) nomzodlar.push({ kun, soat });
+          for (let kun = 1; kun <= 6; kun++) {
+            if (!this.band.has(`${kun}_${soat}`)) nomzodlar.push({ kun, soat });
+          }
         }
       }
       for (const n of nomzodlar.slice(0, 20)) {
@@ -600,6 +633,27 @@
         if (f.fanlar.length) return { katak: n, f };
       }
       throw new Error("bo'sh katak topilmadi — setkada bitta katakni bo'shating");
+    },
+
+    // ⚠️ `bosh` KATAK ISH DAVOMIDA BAND BO'LIB QOLADI.
+    //
+    //  Ro'yxatlar bo'sh katak orqali so'raladi, lekin o'sha katakka dars
+    //  tushishi mumkin (birinchi dars aynan shunga tushgan edi). Undan
+    //  keyin forma xato sahifasini qaytaradi va `guruhlar` bo'sh chiqadi —
+    //  natijada QOLGAN HAMMA dars «guruh ro'yxati bo'sh» deb rad etilardi.
+    //  Shuning uchun forma bo'sh kelsa yangi bo'sh katak topib qayta
+    //  so'raymiz. To'ldirilgan kataklar `band` to'plamida yuriladi:
+    //  API rejimida sahifa DOM'i yangilanmaydi, ya'ni ularni faqat o'zimiz
+    //  bilamiz.
+    async formaBoshda(fanId) {
+      let f = await this.forma(fanId);
+      if (!f.fanlar.length) {
+        const yangi = await this.boshKatak();
+        this.bosh = yangi.katak;
+        this.token = yangi.f.token || this.token;
+        f = fanId ? await this.forma(fanId) : yangi.f;
+      }
+      return f;
     },
 
     // «Yangi dars» formasi. `fanId` berilsa — o'sha fanning guruhlari qaytadi.
@@ -636,7 +690,7 @@
     // Kesh bo'lmasa har dars uchun 3 ta ortiqcha so'rov ketardi.
     async fanMalumoti(fanId) {
       if (this.fanKesh.has(fanId)) return this.fanKesh.get(fanId);
-      const f = await this.forma(fanId);
+      const f = await this.formaBoshda(fanId);
       const royxat = (matn) => {
         const js = JSON.parse(matn);
         return Array.isArray(js)
@@ -674,7 +728,11 @@
       const matn = await r.text();
       let js = null;
       try { js = JSON.parse(matn); } catch { /* xato javobi JSON emas */ }
-      if (js && js.id) return { ok: true, yozuv: js };
+      if (js && js.id) {
+        // Katak endi band — ro'yxat so'rash uchun boshqasi kerak bo'ladi
+        this.band.add(`${kun}_${soat}`);
+        return { ok: true, yozuv: js };
+      }
       // Server xatoni HTML yoki oddiy matn bilan qaytaradi — tegini tozalaymiz
       const toza = matn.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
       return { ok: false, sabab: toza ? cut(toza, 160) : `HTTP ${r.status}` };
