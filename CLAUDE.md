@@ -1385,14 +1385,24 @@ nechta bo'lsa `__RequestVerificationToken` lisi. Forma topilmasa xato
 xabarining o'ziga sahifadagi formalar va maydonlar ro'yxati qo'shiladi —
 keyingi safar konsolda qidirib o'tirmaslik uchun.
 
-⚠️ **«🏫 Hamma sinfga» MAVJUD SXEMAGA FAQAT ICHI BO'SH BO'LSA YOZADI.**
-Ustiga yozilsa darslar IKKILANADI, shuning uchun `sxemaBoshmi()` sxemaning
-`view=edit` sahifasini o'qib `d<kun>_<soat>` kataklarini tekshiradi.
-**Noaniqlik «bo'sh emas» deb qaraladi**: sahifa ochilmasa yoki setka
-topilmasa `false` qaytadi va sxemaga tegilmaydi. Ilgari mavjud sxema
-SO'ZSIZ o'tkazib yuborilardi — maktab oldindan bo'sh sxema yaratib
-qo'ygan bo'lsa (jonli maktabda aynan shunday edi) birortasi to'lmasdi.
-Darsi bor sxemaga yozish alohida belgi bilan, ONGLI ravishda yoqiladi.
+⚠️ **«🏫 Hamma sinfga» MAVJUD SXEMADA FAQAT BO'SH KATAKLARGA YOZADI.**
+`sxemaBandKataklar()` sxemaning `view=edit` sahifasini o'qib band
+`d<kun>_<soat>` kataklar TO'PLAMINI qaytaradi; o'sha kataklardagi darslar
+o'tkazib yuboriladi (`oldindan bor edi`), qolgani joylanadi — ya'ni qayta
+yurish xavfsiz va faqat tushmay qolganlarni to'ldiradi. **Noaniqlik
+(`null`) — sxemaga tegilmaydi.** Ilgari ichida bitta dars bo'lsa ham
+butun sxema o'tkazib yuborilar, 34/35 tushgan sinfning qolgan darsini
+keyin qo'yib bo'lmasdi. «Tizimli xatoda to'xtash» qoidasi qayta yurishda
+ishlamasin deb `oldindan === 0` sharti qo'shilgan. Darsi bor katakka
+yozish alohida belgi bilan, ONGLI ravishda yoqiladi.
+
+⚠️ **eMAKTAB FAN NOMINI ~20 BELGIGA KESADI VA SO'ZLARNI QISQARTIRADI:**
+«Dav-t va huquq asos.», «Chaqiruvga qadar bosh». Ichma-ich qidiruv buni
+topmaydi (jonli maktabda 21 dars tushmadi, 21.09.2026). `abbrevMatch()`
+so'zma-so'z solishtiradi: qisqa so'z (`-t`, nuqta tashlanadi) to'liq
+so'zning boshi bo'lishi shart, ≥ yarmi va ≥8 belgi mos kelsin. Ikkala
+nusxada (`emaktabNames.js` + ko'prik) bir xil. Bir nechta nomzod qolsa
+tavakkal qilinmaydi.
 
 ⚠️ **Sinf almashganda `API.fanKesh` TOZALANISHI SHART** — keshdagi
 `guruhlar` (subgroup) ro'yxati sinfga xos, begona sinfniki ishlatilsa

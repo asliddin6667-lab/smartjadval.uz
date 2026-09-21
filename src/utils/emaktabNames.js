@@ -122,7 +122,7 @@ const SUBJECT_SYNONYMS = [
   ["Jahon tarixi", "Всемирная история"],
   ["Tarixdan hikoyalar", "Рассказы по истории"],
   ["Huquq", "Право"],
-  ["Davlat va huquq asoslari", "Основы государства и права"],
+  ["Davlat va huquq asoslari", "Основы государства и права", "Dav-t va huquq asos.", "Huquq asoslari"],
   ["Iqtisodiy bilim asoslari", "Основы экономических знаний"],
   ["Tadbirkorlik asoslari", "Основы предпринимательства"],
   ["Tarbiya", "Воспитание"],
@@ -136,7 +136,7 @@ const SUBJECT_SYNONYMS = [
   ["Musiqa", "Музыка"],
   ["Musiqa madaniyati", "Музыкальная культура"],
   ["Jismoniy tarbiya", "Физическая культура", "Jismoniy madaniyat", "Физическое воспитание"],
-  ["Chaqiruvga qadar boshlang'ich tayyorgarlik", "Начальная допризывная подготовка"],
+  ["Chaqiruvga qadar boshlang'ich tayyorgarlik", "Начальная допризывная подготовка", "CHQBT", "ЧҚБТ", "НДП"],
   ["Boshlang'ich ta'lim", "Начальное образование"],
   ["Tanlov fanlari", "Предметы по выбору"],
 ];
@@ -223,6 +223,20 @@ export function bestMatch(target, list, kind = "fan") {
     }
   }
 
+  // ⚠️ eMAKTAB FAN NOMINI ~20 BELGIGA KESADI VA SO'ZLARNI QISQARTIRADI:
+  //  «Davlat va huquq asoslari» → «Dav-t va huquq asos.»,
+  //  «Chaqiruvga qadar boshlang'ich tayyorgarlik» → «Chaqiruvga qadar bosh».
+  //  Ichma-ich qidiruv («qismiy») buni topmaydi — «davtvahuquqasos»
+  //  to'liq nomning bo'lagi emas. So'zma-so'z solishtiramiz.
+  //  Jonli maktabda 21 dars aynan shu sababdan tushmadi (21.09.2026).
+  const qisq = list.filter((x) => abbrevMatch(labelOf(x), target) || abbrevMatch(target, labelOf(x)));
+  if (qisq.length) {
+    const bir = sc ? qisq.filter((x) => scriptOf(labelOf(x)) === sc) : [];
+    const tanlov = bir.length ? bir : qisq;
+    // Bir nechta nomzod qolsa — tavakkal qilmaymiz, aniqroq yo'l yo'q.
+    if (tanlov.length === 1) return { qiymat: tanlov[0], ishonch: "qismiy" };
+  }
+
   // qismiy: biri ikkinchisining ichida ("Informatika" ⊂ "Informatika va AT").
   // Bitta nomzod qolsagina — aks holda noto'g'ri fan tanlanadi.
   if (nk.length >= 5) {
@@ -233,4 +247,33 @@ export function bestMatch(target, list, kind = "fan") {
     if (part.length === 1) return { qiymat: part[0], ishonch: "qismiy" };
   }
   return { qiymat: null, ishonch: "" };
+}
+
+// Nomni so'zlarga bo'lish: qisqartma qo'shimchasi («dav-t» → «dav»),
+// nuqta, qavs tashlanadi; har so'z normKey bilan tozalanadi.
+function sozlar(raw) {
+  return String(raw ?? "")
+    .replace(APOS, "")
+    .toLowerCase()
+    .split(/[\s()]+/)
+    .map((w) => normKey(w.replace(/-\S*$/, "")))
+    .filter(Boolean);
+}
+
+// `qisqa` — `toliq` ning kesilgan/qisqartirilgan shaklimi?
+// Har bir qisqa so'z o'z o'rnidagi to'liq so'zning BOSHI bo'lishi shart;
+// bir harfli so'z faqat aynan teng bo'lsa o'tadi. Kamida so'zlarning
+// yarmi va ≥8 belgi mos kelsin — «va», «tili» kabi umumiy so'zlar bilan
+// tasodifiy moslik bo'lmasin («Tarix» ⊄ «Tarixdan hikoyalar»).
+export function abbrevMatch(qisqa, toliq) {
+  const a = sozlar(qisqa);
+  const b = sozlar(toliq);
+  if (!a.length || !b.length || a.length > b.length) return false;
+  let umumiy = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (!b[i].startsWith(a[i])) return false;
+    if (a[i].length < 2 && a[i] !== b[i]) return false;
+    umumiy += a[i].length;
+  }
+  return a.length * 2 >= b.length && umumiy >= 8;
 }

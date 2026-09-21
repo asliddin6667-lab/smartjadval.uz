@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Smartjadval → eMaktab ko'prigi
 // @namespace    https://smartjadval.uz/
-// @version      1.9.0
+// @version      1.10.0
 // @description  Smartjadval.uz da tuzilgan dars jadvalini eMaktab (kundalik.com) «Darslar jadvali sxemasi» setkasiga joylashtiradi
 // @author       smartjadval.uz
 // @match        https://schools.emaktab.uz/*
@@ -203,7 +203,7 @@
     ["Jahon tarixi","Всемирная история"],
     ["Tarixdan hikoyalar","Рассказы по истории"],
     ["Huquq","Право"],
-    ["Davlat va huquq asoslari","Основы государства и права"],
+    ["Davlat va huquq asoslari","Основы государства и права","Dav-t va huquq asos.","Huquq asoslari"],
     ["Iqtisodiy bilim asoslari","Основы экономических знаний"],
     ["Tadbirkorlik asoslari","Основы предпринимательства"],
     ["Tarbiya","Воспитание"],
@@ -217,7 +217,7 @@
     ["Musiqa","Музыка"],
     ["Musiqa madaniyati","Музыкальная культура"],
     ["Jismoniy tarbiya","Физическая культура","Jismoniy madaniyat","Физическое воспитание"],
-    ["Chaqiruvga qadar boshlang'ich tayyorgarlik","Начальная допризывная подготовка"],
+    ["Chaqiruvga qadar boshlang'ich tayyorgarlik","Начальная допризывная подготовка","CHQBT","ЧҚБТ","НДП"],
     ["Boshlang'ich ta'lim","Начальное образование"],
     ["Tanlov fanlari","Предметы по выбору"],
   ];
@@ -285,6 +285,21 @@
         return { qiymat: bir || syn[0], ishonch: "sinonim" };
       }
     }
+    // ⚠️ eMAKTAB FAN NOMINI ~20 BELGIGA KESADI VA SO'ZLARNI QISQARTIRADI:
+    //  «Davlat va huquq asoslari» → «Dav-t va huquq asos.»,
+    //  «Chaqiruvga qadar boshlang'ich tayyorgarlik» → «Chaqiruvga qadar bosh».
+    //  Ichma-ich qidiruv («qismiy») buni topmaydi — «davtvahuquqasos»
+    //  to'liq nomning bo'lagi emas. So'zma-so'z solishtiramiz.
+    //  Jonli maktabda 21 dars aynan shu sababdan tushmadi (21.09.2026).
+    //  ⚠️ src/utils/emaktabNames.js dagi `abbrevMatch` bilan BIR XIL.
+    const qisq = list.filter((x) => abbrevMatch(lab(x), target) || abbrevMatch(target, lab(x)));
+    if (qisq.length) {
+      const bir = sc ? qisq.filter((x) => scriptOf(lab(x)) === sc) : [];
+      const tanlov = bir.length ? bir : qisq;
+      // Bir nechta nomzod qolsa — tavakkal qilmaymiz, aniqroq yo'l yo'q.
+      if (tanlov.length === 1) return { qiymat: tanlov[0], ishonch: "qismiy" };
+    }
+
     if (nk.length >= 5) {
       const part = list.filter((x) => {
         const o = normKey(lab(x));
@@ -293,6 +308,35 @@
       if (part.length === 1) return { qiymat: part[0], ishonch: "qismiy" };
     }
     return { qiymat: null, ishonch: "" };
+  }
+
+  // Nomni so'zlarga bo'lish: qisqartma qo'shimchasi («dav-t» → «dav»),
+  // nuqta, qavs tashlanadi; har so'z normKey bilan tozalanadi.
+  function sozlar(raw) {
+    return String(raw == null ? "" : raw)
+      .replace(APOS, "")
+      .toLowerCase()
+      .split(/[\s()]+/)
+      .map((w) => normKey(w.replace(/-\S*$/, "")))
+      .filter(Boolean);
+  }
+
+  // `qisqa` — `toliq` ning kesilgan/qisqartirilgan shaklimi?
+  // Har bir qisqa so'z o'z o'rnidagi to'liq so'zning BOSHI bo'lishi shart;
+  // bir harfli so'z faqat aynan teng bo'lsa o'tadi. Kamida so'zlarning
+  // yarmi va ≥8 belgi mos kelsin — «va», «tili» kabi umumiy so'zlar bilan
+  // tasodifiy moslik bo'lmasin («Tarix» ⊄ «Tarixdan hikoyalar»).
+  function abbrevMatch(qisqa, toliq) {
+    const a = sozlar(qisqa);
+    const b = sozlar(toliq);
+    if (!a.length || !b.length || a.length > b.length) return false;
+    let umumiy = 0;
+    for (let i = 0; i < a.length; i++) {
+      if (!b[i].startsWith(a[i])) return false;
+      if (a[i].length < 2 && a[i] !== b[i]) return false;
+      umumiy += a[i].length;
+    }
+    return a.length * 2 >= b.length && umumiy >= 8;
   }
 
   // ===================================================================
@@ -1017,27 +1061,42 @@
     return out;
   }
 
-  // Sxema ICHI BO'SHMI? — mavjud sxemani to'ldirish xavfsizmi shundan
-  //  aniqlanadi. Ilgari mavjud sxema SO'ZSIZ o'tkazib yuborilardi:
+  // Mavjud sxemaning BAND KATAKLARI — qaysi katakka yozish xavfsizligi
+  //  shundan aniqlanadi. Ilgari mavjud sxema SO'ZSIZ o'tkazib yuborilardi:
   //  maktab avvaldan bo'sh sxema yaratib qo'ygan bo'lsa (jonli maktabda
   //  aynan shunday edi) «Hamma sinfga» ularning birortasini to'ldirmasdi.
   //
-  //  ⚠️ NOANIQLIK — «BO'SH EMAS» deb qaraladi. Sahifa ochilmasa yoki
-  //  setka topilmasa `false` qaytadi, ya'ni sxemaga TEGILMAYDI:
-  //  ustiga yozilsa darslar IKKILANADI.
-  async function sxemaBoshmi(group, period, schedId) {
+  //  ⚠️ NOANIQLIK — «TEGILMAYDI» degani. Sahifa ochilmasa yoki setka
+  //  topilmasa `null` qaytadi va sxemaga umuman yozilmaydi: ustiga
+  //  yozilsa darslar IKKILANADI.
+  //  ⚠️ QAYTA YURISHDA OLDIN JOYLANGANLAR O'Z JOYIDA QOLADI. Ilgari
+  //  ichida bitta dars bo'lsa ham butun sxema o'tkazib yuborilardi —
+  //  birinchi yurishda 34/35 tushgan sinfning qolgan bitta darsini
+  //  keyin qo'yib bo'lmasdi. Endi «band kataklar» TO'PLAMI qaytadi va
+  //  faqat bo'sh kataklarga yoziladi.
+  //
+  //  Qaytadi: Set("kun_soat") — band kataklar; `null` — aniqlab
+  //  bo'lmadi (sahifa ochilmadi / setka topilmadi) → sxemaga TEGILMAYDI.
+  async function sxemaBandKataklar(group, period, schedId) {
     let doc;
     try {
       const r = await fetch(sxemaUrl(group, period, `&view=edit&schedule=${enc(schedId)}`),
         { credentials: "same-origin" });
-      if (!r.ok) return false;
+      if (!r.ok) return null;
       doc = new DOMParser().parseFromString(await r.text(), "text/html");
-    } catch { return false; }
+    } catch { return null; }
     const kataklar = [...doc.querySelectorAll('[id^="d"]')]
       .filter((el) => /^d[0-6]_\d+$/.test(el.id));
-    if (!kataklar.length) return false;
-    // Bo'sh katakda faqat «+» qo'shish tugmasi turadi
-    return !kataklar.some((el) => txt(el).replace(/[+\s]/g, ""));
+    if (!kataklar.length) return null;
+    const band = new Set();
+    kataklar.forEach((el) => {
+      // Bo'sh katakda faqat «+» qo'shish tugmasi turadi
+      if (!txt(el).replace(/[+\s]/g, "")) return;
+      const m = el.id.match(/^d([0-6])_(\d+)$/);
+      // Sahifada kun 0 = Yakshanba; bizda 7. `kun % 7` bilan mos keladi.
+      band.add(`${Number(m[1]) === 0 ? 7 : Number(m[1])}_${m[2]}`);
+    });
+    return band;
   }
 
   // Formadagi «Nomi» maydoni: nomlangan, ko'rinadigan MATN maydoni.
@@ -1792,7 +1851,7 @@
             : "sinflar ro'yxatidagi dars sonlariga qarang — u yerda ham bo'sh bo'lsa "
               + "muammo jadvalda, ko'prikda emas."), "ogoh");
       }
-      let jamiOk = 0, jamiXato = 0, otkazildi = 0;
+      let jamiOk = 0, jamiXato = 0, otkazildi = 0, jamiOldindan = 0;
 
       for (let i = 0; i < ishlar.length; i++) {
         if (toxtat) { log("■ To'xtatildi", "ogoh"); break; }
@@ -1818,21 +1877,33 @@
         }
 
         let schedId;
+        // Mavjud sxemaning band kataklari. Bo'sh Set — sxema yangi yoki
+        // bo'sh; `null` — aniqlab bo'lmadi.
+        let band = new Set();
         try {
           const royxat = await sxemalar(g.id, period);
           const bor = royxat.find((x) => normKey(x.nom) === normKey(chorakNomi));
-          // Mavjud sxema ICHI BO'SH bo'lsa to'ldiriladi — darslar
-          // ikkilanmaydi. Ichida dars bo'lsa (yoki bilib bo'lmasa)
-          // tegilmaydi; «mavjud sxemani ham to'ldirish» belgisi shu
-          // to'siqni ONGLI ravishda ochadi.
-          if (bor && !opt.mavjudHam && !(await sxemaBoshmi(g.id, period, bor.id))) {
-            otkazildi++;
-            log(`↷ ${sinf.nom} — «${chorakNomi}» sxemasida dars bor, tegilmadi`, "dim");
-            continue;
+          if (bor) {
+            // ⚠️ QAYTA YURISH: oldin joylangan darslar O'Z JOYIDA qoladi,
+            // faqat bo'sh kataklar to'ldiriladi. Band kataklar aniqlanmasa
+            // sxemaga tegilmaydi — ustiga yozilsa darslar ikkilanadi.
+            // «DARSI BOR sxemaga ham yozish» belgisi shu to'siqni ONGLI
+            // ravishda ochadi.
+            band = await sxemaBandKataklar(g.id, period, bor.id);
+            if (band == null) {
+              if (!opt.mavjudHam) {
+                otkazildi++;
+                log(`↷ ${sinf.nom} — «${chorakNomi}» sxemasining holati aniqlanmadi, tegilmadi`, "dim");
+                continue;
+              }
+              band = new Set();
+            }
+            if (opt.mavjudHam) band = new Set();
           }
           schedId = bor ? bor.id : await sxemaYarat(g.id, period, chorakNomi);
           log(bor
-            ? `＝ ${sinf.nom} — mavjud «${chorakNomi}» sxemasi to'ldiriladi`
+            ? `＝ ${sinf.nom} — mavjud «${chorakNomi}» sxemasi`
+              + (band.size ? ` (${band.size} katak band — ularga tegilmaydi)` : " bo'sh")
             : `＋ ${sinf.nom} — «${chorakNomi}» sxemasi yaratildi`, "dim");
         } catch (err) {
           jamiXato++;
@@ -1840,13 +1911,28 @@
           continue;
         }
 
+        // Hamma katak band bo'lsa — qiladigan ish yo'q
+        const qoldi = sinf.darslar.filter((d) => !band.has(`${d.kun}_${d.soat}`));
+        if (!qoldi.length) {
+          otkazildi++;
+          log(`↷ ${sinf.nom} — hamma dars allaqachon joyida (${sinf.darslar.length} ta)`, "dim");
+          continue;
+        }
+
         // API ni SHU sinfga sozlaymiz. Kesh tozalanishi SHART: `guruhlar`
         // (subgroup) ro'yxati sinfga xos, eski kesh begona sinfniki bo'ladi.
+        // `band` oldindan to'ldiriladi — ro'yxat so'raladigan «bo'sh katak»
+        // band katakka tushmasin (sahifadagi setka BOSHQA sinfniki).
         API.scheduleId = schedId;
         API.groupId = g.id;
-        API.band = new Set();
+        API.band = new Set(band);
         API.bosh = null;
         API.fanKesh = new Map();
+        for (let soat = 1; soat <= 12 && !API.bosh; soat++) {
+          for (let kun = 1; kun <= 6; kun++) {
+            if (!band.has(`${kun}_${soat}`)) { API.bosh = { kun, soat }; break; }
+          }
+        }
         try {
           const f0 = await API.formaBoshda(0);
           if (f0.token) API.token = f0.token;
@@ -1858,7 +1944,8 @@
         }
 
         let ok = 0, xato = 0;
-        for (const d of sinf.darslar) {
+        const oldindan = sinf.darslar.length - qoldi.length;
+        for (const d of qoldi) {
           if (toxtat) break;
           let r;
           try { r = await placeLessonApi(d, paket, xarita, opt); }
@@ -1867,12 +1954,14 @@
           else { xato++; log(`   ✖ ${sinf.nom} ${d.kun}-kun ${d.soat}-soat ${d.fan} — ${r.sabab}`, "xato"); }
           await sleep(opt.tanaffus);
         }
-        jamiOk += ok; jamiXato += xato;
-        log(`${ok === sinf.darslar.length ? "✔" : "⚠"} ${sinf.nom}: ${ok}/${sinf.darslar.length} joylandi`,
-          xato ? "ogoh" : "ok");
+        jamiOk += ok; jamiXato += xato; jamiOldindan += oldindan;
+        log(`${xato ? "⚠" : "✔"} ${sinf.nom}: ${ok}/${qoldi.length} joylandi`
+          + (oldindan ? `, ${oldindan} oldindan bor edi` : ""), xato ? "ogoh" : "ok");
 
-        // Tizimli nosozlik — davom etishning ma'nosi yo'q
-        if (ok === 0 && xato > 0) {
+        // Tizimli nosozlik — davom etishning ma'nosi yo'q. Lekin qayta
+        // yurishda sinfning deyarli hammasi oldindan turgan bo'ladi:
+        // o'shanda «0 joylandi» tizimli xato emas, to'xtamaymiz.
+        if (ok === 0 && xato > 0 && oldindan === 0) {
           log("✖ Bu sinfda birorta dars joylashmadi — to'xtatildi. "
             + "Sababini yuqoridagi xatolardan ko'ring.", "xato");
           break;
@@ -1880,6 +1969,7 @@
       }
 
       log(`— YAKUN: ${jamiOk} dars joylandi, ${jamiXato} xato`
+        + `${jamiOldindan ? `, ${jamiOldindan} dars oldindan joyida edi` : ""}`
         + `${otkazildi ? `, ${otkazildi} sinf o'tkazib yuborildi` : ""} —`, jamiXato ? "ogoh" : "ok");
       log("🔄 Har sinfni ochib ko'zdan kechiring va «Nashr etish» ni O'ZINGIZ bosing.", "dim");
     } catch (err) {
