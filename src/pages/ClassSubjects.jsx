@@ -4,7 +4,7 @@ import {
   PRIMARY_SUBJECT_NAMES_RU, MIDDLE_SUBJECT_NAMES_RU, HIGH_SUBJECT_NAMES_RU
 } from "../utils/constants";
 import { sortByName, cmpName } from "../utils/sortHelpers";
-import { normName, buildCurriculumIndex, hoursFromRow } from "../utils/curriculum";
+import { normName, buildCurriculumIndex, hoursFromRow, isFirstGradeOnlyName, isCanonicalName } from "../utils/curriculum";
 import { getCachedCurriculum, fetchStandardHours } from "../services/standardHoursService";
 import { removeSubjectLessons, removeClassesLessons, removeAssignmentsLessons } from "../utils/scheduleCleanup";
 import { LANG_BOTH, classLangOf, subjectLangOf, subjectFitsLang, langIcon, langLabel } from "../utils/eduLang";
@@ -1166,15 +1166,22 @@ Fan bilan birga ular ham o'chsinmi?`;
 
     if (grade >= 1 && grade <= 11 && plan.length) {
       // Reja qatori → fan. Bir qatorga bir nechta fan tushishi mumkin
-      // («Букварь» ham, «O'qish savodxonligi» ham) — birinchisi olinadi;
-      // ro'yxat alifbo tartibida bo'lgani uchun tanlov barqaror.
+      // («Alifbe» ham, «O'qish savodxonligi» ham). Qator nomi bilan
+      // AYNAN bir xil nomlangan fan ustun; qolganlardan alifbo tartibida
+      // birinchisi olinadi (ro'yxat tartiblangani uchun tanlov barqaror).
+      // «Alifbe» / «Азбука» / «Букварь» faqat 1-sinf fani — 2-sinfdan
+      // boshlab ular rejaga olinmaydi, o'rniga «O'qish savodxonligi»
+      // («Грамотность чтения») kerak; u bo'lmasa qator «yetishmaydi»
+      // deb ko'rsatiladi.
       const oz = new Map();      // sinf tiliga mos (yoki umumiy) fanlar
       const begona = new Map();  // boshqa til deb belgilangan fanlar — zaxira
       sortByName(subjects).forEach((s) => {
+        if (grade >= 2 && isFirstGradeOnlyName(s.name)) return;
         const row = curriculumRowFor(s.name, lang);
         if (!row) return;
         const m = subjectFitsLang(s, lang) ? oz : begona;
-        if (!m.has(row.name)) m.set(row.name, s);
+        const cur = m.get(row.name);
+        if (!cur || (isCanonicalName(s.name, row) && !isCanonicalName(cur.name, row))) m.set(row.name, s);
       });
 
       const rows = [];

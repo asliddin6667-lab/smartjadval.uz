@@ -151,6 +151,27 @@ export function normName(v) {
 }
 
 
+/* ===================================================================
+   FAQAT 1-SINF FANLARI
+
+   «Alifbe» («Азбука» / «Букварь») rejada «O'qish savodxonligi» qatoriga
+   tushadi — 1-sinfda shu fan aynan Alifbe deb nomlanadi. Lekin 2–4
+   sinfda fan «O'qish savodxonligi» («Грамотность чтения»); jonli
+   maktabda ikkala fan ham bo'lgani uchun alifbo tartibida «Alifbe»
+   birinchi kelib, 2–4 sinflarga ham Alifbe yozilardi.
+   Shuning uchun bu nomlar 2-sinfdan boshlab rejaga UMUMAN olinmaydi.
+=================================================================== */
+const FIRST_GRADE_ONLY_NAMES = new Set(["alifbe", "азбука", "букварь"].map(normName));
+
+export function isFirstGradeOnlyName(name) {
+  return FIRST_GRADE_ONLY_NAMES.has(normName(name));
+}
+
+// Fan nomi reja qatorining ASOSIY nomi bilan bir xilmi (taxallus emas)?
+export function isCanonicalName(name, row) {
+  return Boolean(row) && normName(name) === normName(row.name);
+}
+
 // Standart holat: IKKALA til ham to'ldirilgan — soatlar bir xil,
 // rus sinflarida fanlar ruscha nomlanadi.
 export const DEFAULT_CURRICULUM = { uz: CURRICULUM_UZ, ru: CURRICULUM_RU };
