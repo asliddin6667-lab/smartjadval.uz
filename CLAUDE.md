@@ -1133,7 +1133,7 @@ yuborib bo'lmaydi (CORS). Shuning uchun ko'chirish IKKI BO'LAKKA ajratilgan:
 | Qayerda ishlaydi | Fayl | Vazifasi |
 |---|---|---|
 | smartjadval.uz | [emaktabExport.js](src/utils/emaktabExport.js) | jadvaldan JSON paket yasaydi |
-| smartjadval.uz | [EmaktabExport.jsx](src/pages/EmaktabExport.jsx) | sinf tanlash, nusxa olish, ko'rsatma |
+| smartjadval.uz | [EmaktabExport.jsx](src/pages/EmaktabExport.jsx) | sinf tanlash, nusxa olish, ko'rsatma. Ikki usul: «Tampermonkey» (skript `.user.js` havolasi orqali o'rnatiladi, jadval JSON fayl bo'lib yuklanadi) va «Console» («⚡ Hammasi birga»). Tanlov `localStorage` `sj_emk_usul` da |
 | schools.emaktab.uz | [emaktab-bridge.user.js](public/emaktab-bridge.user.js) | setkani to'ldiradi |
 | ikkalasida | [emaktabNames.js](src/utils/emaktabNames.js) | nom moslashtirish |
 
@@ -1278,6 +1278,282 @@ bilan aniq moslik bermaydi — bu ham id bo'yicha bog'lashning foydasini
 ko'rsatadi. Ro'yxatda takroriy/xato yozuvlar ham uchraydi
 («Классный час» va «классый час»).
 
+### O'quvchilar sinxroni: Turon → eMaktab (alohida skript)
+
+[emaktab-oquvchilar.user.js](public/emaktab-oquvchilar.user.js) — dars jadvali
+ko'prigidan **ALOHIDA** skript, unga ulanmagan. Foydalanuvchi qo'llanmasi:
+[OQUVCHILAR_QOLLANMA.md](OQUVCHILAR_QOLLANMA.md).
+
+Vazifasi: Turon bazasi (maktabning o'z CRM'i, `*.xususiy-maktab.uz`, 4 filial)
+ro'yxatini eMaktab o'quvchilari bilan solishtirib qo'shish / ko'chirish / chiqarish.
+
+**IKKI SAYTDA ishlaydi, `EMAKTAB_REJIM` bilan ajratiladi:**
+- Turon `…/head-office/students` — `turonPanel()` (9A-QISM): jadvalni
+  `turonJadval()` bilan o'qiydi (ustunlar sarlavhadan `ustunTani()`,
+  katak MATN TUGUNLARIGA bo'linadi — «O'QUVCHI» katagida avatar, F.I.O,
+  kod, filial nishoni aralash), `page=N` bilan hamma sahifani fetch qiladi,
+  har ochilgan sahifani MutationObserver bilan o'zi yig'adi (localStorage
+  `sj_oq_turon_yigim_v1`).
+  ⚠️ **Turon kodi (STD-2026-NNN) FILIAL ICHIDA yagona, maktab bo'yicha
+  EMAS** (21.09.2026): har filial o'z sanog'ini 1 dan yuritadi. Kalit faqat
+  kod bo'lganida 2771 dan 1169 qolgan (= kodlar soni), kichik filiallar
+  deyarli yo'qolgan. `qatorKaliti()` = filial + kod. Yig'im kaliti
+  `sj_oq_turon_yigim_v2` ga ko'tarildi — v1 ustma-ust yozilgan edi.
+  Tartib esa barqaror chiqdi; shunga qaramay `turonHammaSahifa()`
+  ehtiyot uchun usullarni ketma-ket sinaydi:
+  barqarorlik tekshiruvi (1-sahifa ikki marta) → tartib parametri
+  (`TARTIB_PARAMLARI`) → sahifa hajmi (`HAJM_NOMLARI`) → sahifadagi sinf
+  `<select>` bo'yicha filtr → qayta o'tish (8 martagacha). Qaysi usul
+  ishlagani jurnalga yoziladi; hech biri ishlamasa «🧾 Tashxis»
+  (`turonTashxis()`) sahifa tuzilishini faylga beradi. Uzatmada
+  `faol` soni ham ketadi — eMaktab paneli ro'yxat kam bo'lsa
+  CHIQARISHni rad etadi (aks holda yig'ilmagan bola «Turonda yo'q» deb
+  chiqarilardi).
+- eMaktab `…/v2/admin/persons/*` — solishtirish paneli (9-QISM).
+- ⚠️ **Domenlararo uzatish — `GM_setValue`/`GM_getValue`** (`@grant`).
+  localStorage domenga bog'liq, shuning uchun ishlamaydi. Console rejimida
+  GM yo'q — JSON fayl orqali. `@grant` borligi uchun skript Tampermonkey
+  qumlog'ida yuradi: sahifaning fetch/XHR'ini ushlash va `__SJ_OQUVCHI__`
+  bayrog'i uchun `W = unsafeWindow` ishlatiladi, `window` EMAS.
+
+- **Sinf kaliti = daraja + harf + filial harfi.** Furqat — qo'shimchasiz
+  («4 A» → `4a`), Oltiariq `O`, Qo'qon `Q`, Yaypan `Y` («4 A O» → `4ao`).
+  eMaktab tomonida `classKey()` qisqa so'zlarni ketma-ket yig'gani uchun bu
+  o'z-o'zidan chiqadi. Filial harflari va qo'lda sinf mosligi panelda,
+  localStorage'da (`sj_oq_filial_v1`, `sj_oq_sinf_v1`).
+- **Yo'nalish nomi sinf EMAS.** Turonda yuqori sinflar «8-Ijtimoiy»,
+  «Ijtimoiy1», «Aniq 1» (yonida «8-sinf») — eMaktabda esa «8 A», «8 B».
+  `turonSinf()` bunday nomdan faqat RAQAMNI oladi va `naqsh` qaytaradi:
+  shu filialdagi shu raqamli hamma sinf nomzod. Bola ulardan birida tursa
+  «mos» (tegilmaydi), yangi bo'lsa eng kam o'quvchili sinfga (`engKam`).
+  Furqat naqshi boshqa filial qo'shimchasi bilan tugagan kalitlarni
+  (`istisno`) chiqarib tashlaydi — «8 A O» Furqatning 8-sinfi emas.
+- **Ism mosligi** `ismKalit()`: to'liq → so'zlar tartibsiz → familiya+ism
+  (faqat sinf ham teng bo'lsa). «o'g'li/qizi» tashlanadi. Qo'shish va
+  chiqarish ro'yxatida familiya+ism bir xil bo'lsa — «shubhali», avtomatik
+  BAJARILMAYDI (yozilish farqi tufayli bola o'chirilib nusxasi yaratilmasin).
+- **eMaktab ro'yxati** `/v2/admin/persons/default?…&group=students&page=N`
+  sahifalarini o'qiydi. Asosiy jadval SARLAVHA bo'yicha topiladi (FISH ·
+  Lavozim · Sinf); **sinfsiz o'quvchilar ham olinadi** (21.09.2026 da 74
+  tasi tashlab ketilib, 1302 dan 1228 chiqqan — ular Turondagi ismi
+  bilan NUSXA bo'lib qo'shilardi). «Odamlar topildi: N» bilan
+  solishtiriladi — kam chiqsa chiqarish xavfli.
+- **Sinflar «Sinflar» sahifasidan** (`emaktabSinflari()`,
+  `/v2/schedules/?school=`, `group=` havolalari — ko'prikdagi
+  `sinfGuruhlari()` bilan bir xil manba). O'quvchilar ro'yxatidan yig'ilsa
+  BO'SH sinf ko'rinmaydi va yangi ochilgan «8 A O» «ochilmagan» deb
+  chiqadi (21.09.2026). Sahifa ochilmasa o'quvchilardagi sinflar qoladi.
+- **Ism mosligi 4-qoida:** familiya+ism ikkala ro'yxatda ham YAGONA bo'lsa
+  — sinf va sharifdan qat'i nazar bitta odam (eMaktabda sharifsiz yozilgan
+  25 «shubhali» shu edi). `ismKalit()` da x→h va -ovich/-ovna tashlanadi.
+- Jurnalga «eMaktabda bor, Turonda mos sinfi yo'q» ro'yxati chiqadi
+  («1 I», «1 G», «1 J» — ehtimol boshqa filial sinfi harfsiz ochilgan;
+  eMaktabda nomini «1 I Q» qilish kerak, skript o'zi taxmin qilmaydi).
+- **«Shaxsni yaratish» — BIR NECHA BOSQICHLI USTA** (`/v2/admin/persons/new`,
+  21.09.2026): 1-bosqichda faqat yashirin `tab`/`studyYear`/`who`, `source`
+  radio va `save1` — ism yo'q. `yaratOdam()` 4 bosqichgacha yuradi: oraliq
+  bosqichda «yangi» radio tanlanib yuboriladi (navigatsiya), asosiy
+  (familiya/ism bor) bosqich to'ldiriladi, keyin sinf bosqichi bo'lsa
+  o'tiladi. SINOVda oraliq bosqich BIR marta yuboriladi (2-bosqich
+  maydonlarini ko'rish uchun), asosiy forma hech qachon yuborilmaydi.
+- eMaktab ro'yxatida ismi HAVOLASIZ 72 o'quvchi bor edi (hisobi
+  faollashmagan) — endi matndan o'qiladi (`qatorlarniOqi`), aks holda
+  Turondagi ismi bilan nusxa qo'shilardi. Ularning `tahrir` havolasi
+  bo'lmasa ko'chirish/chiqarish qilinmaydi.
+- **Yaratish 2-bosqich maydonlari (jonli, 21.09.2026):** `who` radio×3
+  (xodim / o'quvchi / ota-ona — «quvchi» yorlig'i tanlanadi), `studyYear`
+  select (joriy o'quv yili), `group` select — **BO'SH keladi** (sahifada
+  JS to'ldiradi), shuning uchun sinf ID'si «Sinflar» sahifasidan
+  (`t._sinfId`, `r.sinfIdlari`) to'g'ridan-to'g'ri yuboriladi;
+  `membershipdatestartclass0` / `membershipdatestartschool` → qabul sanasi
+  (nomida «class» bor, lekin SANA — `maydonTuri` da qabul sinfdan oldin
+  tekshiriladi); `eduorderdatebox` → sana (dd/mm/yyyy), `eduOrderType` →
+  faqat «Boshqa buyruq» (399); **`eduOrderNumber` MAJBURIY** — server
+  «Buyruqning raqamini ko‘rsating» bilan rad etdi (22.09.2026, 🚀 real
+  yurishda 2 bola). Ilgari maydon tanilmay tashlab ketilardi; v0.7.5 dan
+  `maydonTuri` → "raqam" (sana qoidasidan oldin, chunki yorlig'ida
+  «sanadan» bor) va «1» yoziladi (ko'chirish ustasidagi kabi);
+  `nlast/nfirst/nmiddle/birthday/sex(male|female)`; `pinfl`,
+  `personalNumber` bo'sh qoldiriladi; **3-bosqich — TASDIQLASH** (22.09.2026
+  da ko'rildi): save2 qabul qilinsa server hamma maydonni YASHIRIN holda
+  (nlast:hidden, group:hidden, eduOrderNumber:hidden, doublePersonId,
+  DodGroup*, …) va `back3`/`save3`/`save4` tugmalari bilan qaytaradi —
+  bu rad etish emas; v0.7.6 dan `yaratishTasdiqi()` uni taniydi va `save3`
+  bilan yuboradi. **Tasdiqlangan (22.09.2026, v0.7.9 bilan 3 ta 2-talik
+  sinov: 4 qo'shish + 2 ko'chirish, 0 xato — uchala drayver ishlaydi):**
+  back3=«Orqaga», save3=«Yaratish», save4=«yana yaratish va qo‘shish»;
+  natija `…/persons/person?person=<id>&school=…&retgroup=<sinfId>&message=created`,
+  h1 «Yangi shaxs yaratildi». «Forma qayta chiqdi» faqat nlast
+  KO'RINADIGAN bo'lsa (`korinadiganNlast`). v0.7.7: `bajar()` sessiya
+  xatosida (so'rov ketmadi / Failed to fetch) darhol to'xtab F5 so'raydi —
+  aks holda qolgan ~1900 bola birma-bir xato bilan o'tardi. `parent*` — ota-ona
+  bo'limi, TEGILMAYDI. Submit tugmalari: `setSkipCreatingByPinfl` (birinchi!)
+  va `save2` — `formaYig()` save/saqla nomlisini tanlaydi. Javobda `nlast`
+  qayta chiqsa — saqlanmagan (xato yoki `showDoublePersonPopup`).
+- **Shaxs sahifasi bo'limlari** (21.09.2026): `/v2/admin/persons/person?
+  person=<id>&school=<id>&view=<bo'lim>` — review · personal (tahrir:
+  nlast/nfirst/nmiddle/sex/birthday/…/save, **sinf YO'Q**) · achievements ·
+  migration · orders · attendance · parents. `shaxsUrl(e, view)` qatordagi
+  havoladan `view` ni almashtirib beradi. **Amal havolalari `view=review`
+  sahifasining o'ng menyusida** (22.09.2026 skrinshot): «Tahrirlash»,
+  «Boshqa sinfga ko‘chirish» (→ move ustasi), «maktabdan chiqarish»,
+  «Shaxsni o‘chirib tashlash» (→ `/v2/admin/persons/delete?person=…` —
+  «Ha, o‘chirib tashlang!» / «Yo‘q»; baholari bilan BUTUNLAY o'chiradi,
+  skript ISHLATMAYDI). v0.7.8 `chiqarOdam` review sahifasidan «maktabdan
+  chiqarish» havolasini oladi (delete'ga olib borsa bajarmaydi), formani
+  umumiy qoida bilan to'ldiradi (sana bugun, «Boshqa buyruq», № 1, radio
+  Haqiqiy), tasdiq bosqichi bo'lsa yuboradi. **Chiqarish formasi
+  (22.09.2026 da haqiqiy yurishda o'qildi, 2 bola chiqarildi):**
+  `/v2/admin/persons/dismiss?person=…&school=…&searchParams=…&retgroup=0` —
+  `what` radio Valid/Error, `membershipdate` (dd/mm/yyyy), `dismReason`,
+  `comment`, `eduOrderNumber`, `eduorderdatebox` (dd/mm/yyyy),
+  `eduOrderType` (305 «Ta'lim muassasasini bitirish…», … «Boshqa buyruq»),
+  `docType` (201 «O‘rta umumiy ta'lim attestati»), `docSeries`, `docNumber`,
+  `documentdatebox`, `docRegNumber`, `docLedgerEntryNumber`; 2-bosqich —
+  hamma maydon yashirin + `back`/`confirmed`; natija
+  `…/persons/default?school=…&message=dismissed`, «Shaxs maktabdan
+  muvaffaqiyatli chiqarildi». ⚠️ v0.7.8 birinchi yurishda umumiy qoida
+  bilan `eduOrderType`=305 va hujjat maydonlariga «1»/sana yozib yuborgan
+  (Dilmurodov Azizbek, Sharofiddinov Dadajon — Buyruqlar bo'limida qo'lda
+  tuzatish kerak). v0.7.9 dan nom bo'yicha qat'iy: `eduOrderType` faqat
+  «Boshqa buyruq» (bo'lmasa yuborilmaydi), `HUJJAT_RE` maydonlari BO'SH,
+  `dismReason`/`comment` sahifa bergani. Migratsiya sahifasida amal havolasi YO'Q;
+  ⚠️ **migratsiya sahifasida FORMA YO'Q** (22.09.2026 SINOV): faqat logout
+  formalari, havolalar `/v2/AjaxPages/MembershipDateEdit?school=…&group=…
+  &memberSchool=…&memberGroup=…&datetype=1` (sana tahriri, JS oyna) va
+  `/v2/class?class=<id>`. Demak o'tkazish/chiqarish ham `AjaxPages/…` JS
+  oynasi orqali — `sahifaTashxisi()` endi `onclick` elementlarini va HTML
+  ichidagi barcha `AjaxPages/…` manzillarini chiqaradi, sayt menyusi
+  havolalari filtrlangan (ilgari 40 ta havola limiti menyu bilan to'lardi).
+  `kochirOdam` nomzod manzillarni (havola + onclick + AjaxPages) ochib
+  sinf ro'yxatli forma qidiradi, SINOVda har birining ichini ham yozadi.
+  **22.09.2026 tasdiqlandi: shaxs sahifasining 7 bo'limida ham o'tkazish
+  yo'q** (personal — faqat FIO/jins/sana; orders — buyruqlar jadvali
+  `editdate<id>`/`addNumber`/`adddate`/`addType`/`addBelonging`;
+  migration — faqat `MembershipDateEdit` (datetype=1 boshlanish, 2 tugash,
+  forma `membershipdatefrom`) va sinf havolasi `/v2/class?class=<id>`).
+  Sinf sahifasida ham yo'q: `/v2/class?class=<id>` → «Odamlar»
+  `&view=members` → `&group=students|active|archive|staff|parents`, qatorda
+  faqat «Tahrirlash»; «O'quvchi qo'shish» → `/v2/admin/persons/new?school=…
+  &who=student&studyYear=2026&group=<sinfId>` (yaratish ustasi sinf
+  oldindan tanlangan holda).
+- **O'TKAZISH USTASI TOPILDI** (22.09.2026, «⏺ O'rganish» yozuvi):
+  `/v2/admin/persons/move?person=<id>&school=<id>&retgroup=0` —
+  «O'quvchini ko'chirish masteri». 1-bosqich «Sinfni tanlash»: O'quv yili
+  select (2026/2027), Yangi sinf select (nomlar bilan to'ldirilgan),
+  «Ko'chirish turi» radio: Haqiqiy (A'zolikning boshlanish sanasi
+  `dd.mm.yyyy`, №-buyruq raqami, sanadan `dd/mm/yyyy`, Buyruq turi select
+  «Boshqa buyruq») / Xato tufayli; tugma «Keyingi qadam». 2-bosqich
+  «Tasdiqlash». Sahifa `/v2/ajax?xss=…&a=ft&sy=2026` bilan o'quv yili
+  chegarasini oladi (01/08/2026–31/07/2027). **Maydonlar** (22.09.2026):
+  `__RequestVerificationToken`, `step`(hidden), `studyYear`(«2026»),
+  `group`(sinf ID), `what`(radio Valid/Error), `membershipdate`
+  (dd.mm.yyyy), `eduOrderNumber`, `eduorderdatebox` (dd/mm/yyyy),
+  `eduOrderType` (303 = «O'quv yili oxirida … o'tkazish» — BU EMAS, «Boshqa
+  buyruq» tanlanadi — «Boshqa ta'lim shakliga o'tkazish» (310) ham
+  «boshqa» bilan boshlanadi, aynan `boshqabuyruq` kaliti bilan tanlanadi),
+  `save1`; 2-bosqich: hidden `group, fromGroup, step, studyYear,
+  searchParams, membershipDate, what, eduOrderNumber, EduOrderDateBox,
+  eduOrderType` + `back2`/`save2`; natija `…person?…&view=review&
+  message=moved`, matn «Shaxs boshqa sinfga muvaffaqiyatli o'tkazildi».
+  **Sana qoidasi (server xatolaridan, 22.09.2026)**: yangi sinf a'zoligi
+  ≥ maktabga a'zolik boshi VA > eski sinf a'zoligi boshi (eski sinf bir kun
+  oldin yopiladi). `joriyAzolik()` migratsiya sahifasidan ikkalasini o'qiydi
+  (`MembershipDateEdit` havolasi `group=`siz — maktab, `group=`li — sinf;
+  matni «chorshanba, 2-sentabr, 2026» → `uzSana`), `kochirOdam()` sana =
+  max(oy boshi, maktab boshi, sinf boshi+1), zaxira — bugun. Birinchi
+  muvaffaqiyatli o'tkazish: 02.09 da kirgan bola 03.09 bilan o'tdi.
+  Chiqarish ustasi hali noma'lum.
+- **Sinflar rejasi (6B-QISM, v0.7.0, 22.09.2026)**: `sinfRejasi(turon,
+  filiallar, qolda, sinflar, sigim)` — harfli Turon sinfi eMaktabda yo'q
+  bo'lsa aynan o'sha nom («4 A Q»); yo'nalishli guruhlar filial+daraja
+  bo'yicha sanalib `ceil(soni/sig'im)` sinf, mavjud+rejadagi ayirilib
+  qolgani `HARF_TARTIBI` (A B V G D E J Z I K…) bo'yicha bo'sh harf bilan.
+  Faqat harfli bolalar bo'lsa qo'shimcha ochilmaydi. Panel «3. Sinflar»
+  (`sinfTaqqos`, `sinfYarat`, `sigim`). eMaktab «Boshqaruv → Sinflar»
+  sahifasi `/v2/admin/class/default?school=…` (tablar: Sinflar ro'yxati /
+  O'tkazish / Chiqarish / Arxivlash; «+» — yaratish). `@match` endi
+  `/v2/admin/*`. **Sinf yaratish formasi** `/v2/admin/class/new?school=…`
+  (22.09.2026 da SINOVda o'qildi): `name` (Sinf kodi — «1 A O»), `nameFull`
+  (ixtiyoriy, bo'sh), `studyform` (Smena → «Birinchi smena»), `maxStudentCount`
+  (bo'sh), `gkind` (→ «Umumiy ta'lim»), `educationLanguage` (O'zbek, tegilmaydi),
+  `parallel` (0…12), `isfinal` (belgilanmaydi), `year` («2026»), `period`
+  (**majburiy** → «2026-2027 hisobot», bo'lmasa «Standart choraklar»),
+  `table` (→ «Qo'ng'iroqlarning asosiy jadvali»), `firstLessonNumber`
+  (radio → 1 «jadvaldan chiqarish»), `espSubjects` (multi → «o'rganmaydi»),
+  `description/teacher/teachermembershipdatestart/psychologist` bo'sh, `save`.
+  `sinfYarat()` nom bo'yicha to'ldiradi (zaxira — yorliq), muvaffaqiyatni
+  `emaktabSinflari()` da nom paydo bo'lishi bilan tekshiradi.
+  Tekshirilgan (22.09.2026): «1 F» shu qiymatlar bilan to'g'ri yaratildi.
+  Tuzoqlar: (1) forma sahifasida «Hisobot davri belgilanmagan.» qizil
+  matni doim turadi — server xatosi emas; (2) `espSubjects` variant matnida
+  «o‘rganmaydi» apostrofi bor — `normKey` orqali /organmaydi/ bilan
+  taniladi, bo'sh yuborilsa «Sinf uchun Tanlovga ko‘ra fanlarni
+  ko‘rsating» xatosi; (3) `save` yuborilgach «Failed to fetch» chiqishi
+  mumkin (sessiya tugagan yoki yo'naltirish) — v0.7.4 dan yuborish xatosi
+  yutilib, hukm faqat ro'yxatdan; «➕» real rejimda avval ro'yxatni qayta
+  o'qib, allaqachon bor sinflarni tashlab yuboradi (reja eskirsa «1 F»
+  qayta urinilmaydi), sessiya xatosida darhol to'xtab F5 ni so'raydi.
+- **v0.8.0 — tanaffus va chegara yo'q, 🚀 chiqarishni ham qiladi** (maktab
+  talabi, 22.09.2026: «600 ms nima, tanaffus kerak emas, bir bosishda
+  o'chirib qo'shib ko'chirsin»): panelda `tanaffus`/`limit` maydonlari
+  olib tashlandi, `bajar()` da `tanaffus: 0, limit: Infinity`;
+  `hammasiAvto()` `aChiq` ni ham yoqadi (Turon ro'yxati to'liq bo'lsa) va
+  bitta confirm'da uchala sonni ko'rsatadi. Himoya: `natija.begonaKalitlar`
+  (Turonda mos sinfi yo'q eMaktab sinflari, masalan harfsiz «1 I») —
+  ulardagi bolalar chiqarilmaydi, jurnalga soni yoziladi.
+- **v0.8.1 — parallel yurish** («juda ko'p vaqt ketadi», 22.09.2026: 2710
+  amal birma-bir ≈ 1.5 soat): `bajar()` da `PARALLEL = 5` ishchi (SINOVda 1)
+  umumiy navbatdan oladi; har usta mustaqil (holat formaning yashirin
+  maydonlarida, server sessiyasida emas). Sessiya xatosi yoki boshidagi
+  ketma-ket xato `umumiyToxta` bilan hamma ishchini to'xtatadi. Server
+  yuklamadan xato bersa (429/500) PARALLEL ni kamaytirish kerak.
+- **v0.8.2 — sessiya o'zi tiklanadi** (22.09.2026: 1265 boladan keyin
+  «Failed to fetch», F5 → 🔎 → 🚀 qo'lda kerak edi): `sessiyaniTikla()`
+  yashirin iframe bilan «Odamlarni izlash» ni yuklaydi (SSO bilan login
+  o'zi o'tadi), fetch sinovi; `bajar()` uzilgan bolani `qaytaNavbat` ga
+  qaytarib, tiklangach ishchilarni qayta ishga tushiradi (5 urinish).
+  Tiklanmasa — qo'lda kirish. 15 xato sabablari hali o'rganilmagan.
+- **v0.8.3 — natija saqlanadi, F5 dan keyin davom** («sessiyani
+  yangilasam qilgan amallar o'chib ketib boshidan solishtirishga to'g'ri
+  kelyapti», 22.09.2026): `LS_NATIJA` da qolgan qo'shish/ko'chirish/
+  chiqarish ro'yxatlari + begona/emkSinflar/sinfIdlari (`natijaSaqla`,
+  1.5 s throttle; har muvaffaqiyatli amal darhol ro'yxatdan chiqariladi);
+  sahifa ochilganda `natijaTikla()` — Turon ro'yxati vaqti (`_vaqt`) mos
+  bo'lsa tiklanadi, «♻ Oldingi solishtirish tiklandi» va 🚀 davom etadi.
+  `mos` ro'yxati saqlanmaydi, faqat `mosSoni` (statKo shuni ko'rsatadi).
+- **v0.8.4 — ro'yxat parallel o'qiladi** («30-sahifa (290/2451) bo'lguncha
+  sessiya tugab qolyapti», 22.09.2026): `emaktabRoyxati()` 6 sahifani bir
+  vaqtda, kutishsiz o'qiydi (246 sahifa ≈ 30–40 s), `oxirgi` har sahifadan
+  yangilanadi; `sahifaTiklab(url)` — sessiya uzilsa `sessiyaniTikla()` bilan
+  bir marta qayta urinadi (1-sahifa, sinflar sahifasi ham shu orqali).
+- **SINOV tejamkor**: yaratish ustasi va migratsiya sahifasi sinovda faqat
+  dastlabki 3 bola uchun ochiladi (`sinovUsta`, `sinovKoch`), qolganlarga
+  bir qatorli xulosa. Sabab: ustaning 1-bosqichi har bola uchun serverga
+  yuborilardi (870 × 2 so'rov) va foydalanuvchi buni «to'xtatgandan keyin
+  ham o'zi ishlab ketyapti» deb ko'rgan.
+- **Qattiq to'xtatish**: `HOLAT.toxtat` (fayl boshida, Turon rejimida ham
+  mavjud) — `sahifa()` va `formaYubor()` har so'rovdan oldin tekshirib
+  `TOXTATILDI` xatosi bilan chiqadi; `bajar()` bu xatoni xato deb sanamaydi.
+  `hammasiAvto()` solishtirish paytida ham «■» ni ko'rsatadi va
+  `bajar(true)` bayroqni tozalamaydi.
+  Maydonlar nomi/yorlig'i bo'yicha `maydonTuri()` bilan taniladi.
+  `maydonYorligi()` normKey'dan o'tadi — kirill lotinga aylanadi, regexlar
+  shuni hisobga oladi. SINOV rejimi «maydon → qiymat» ro'yxatini beradi;
+  «🧾 Yaratish formasi» va «🔍 O'rganish» (submit hodisasi + tarmoq)
+  haqiqiy formani yozib beradi — o'shandan keyin drayver aniqlashtiriladi.
+- **Boshqa filial sinfiga TUSHIRILMAYDI.** Harfli sinf («4-A» + Qo'qon)
+  faqat `4aq` ga; eMaktabda yo'q bo'lsa `sinfsiz` («sinf ochilgach
+  qo'shiladi»), «4 A» (Furqat) ga qo'shilmaydi. Keyingi sinxronda o'zi
+  qo'shiladi — nom bo'yicha moslik idempotent qiladi.
+- **Qabul sanasi = shu oyning 1-sanasi** (`oyBoshi()`): `maydonTuri()` da
+  `qabul` (admission/enrol/zachisl/…) va bo'sh `sana` maydonlari shu
+  qiymatni oladi; `<input type="date">` ga yyyy-mm-dd (`sanaMaydonga()`).
+  Chiqarish sanasi esa bugun qoladi.
+- Chiqarish alohida belgi + `confirm()`; hamma amal `limit` bilan
+  cheklanadi (odatiy 20) — birinchi yurish kichik bo'lsin. «🚀» tugmasi
+  qo'shish+ko'chirishni cheksiz, sinf tartibida (`tartibKaliti`) bajaradi.
+
 ### Deploy
 
 `main` ga push → [deploy.yml](.github/workflows/deploy.yml) → `npm run build` → GitHub
@@ -1410,3 +1686,52 @@ dars noto'g'ri guruhga tushadi. `band` va `bosh` ham shu bilan tozalanadi.
 
 **Tizimli xatoda to'xtaydi:** bir sinfda birorta dars joylashmasa qolgan
 42 sinfda ham joylashmaydi, shuning uchun sikl uziladi.
+
+⚠️ **O'QUVCHILAR SKRIPTI v0.8.5 — SESSIYA KEEP-ALIVE VA 🔎 YIQILGANDA ESKI NATIJA.**
+Panel ochiq turganda ham eMaktab sessiyasi tugab, «🔎» boshidayoq «Failed
+to fetch» bergan (22.09.2026). Endi `schoolId` bor sahifada har daqiqa
+tekshiriladi: oxirgi `sahifa()` so'rovidan 3 daqiqa o'tgan bo'lsa
+`royxatUrl(1)` fonda bir marta so'raladi (sessiya muddati uzayadi); login
+sahifasiga yo'naltirilsa jurnalga bir marta «F5 / qayta kiring» ogohi.
+`sessiyaniTikla()` faqat SSO cookie tirik bo'lsa ishlaydi — u ham tugagan
+bo'lsa foydalanuvchi login/parol bilan qayta kirishi shart. «🔎» `natija =
+null` qilib boshlaydi; xato bo'lsa endi `natijaTikla()` bilan saqlangan
+natija xotiraga qaytariladi, «🚀» qayta kirishdan keyin davom etadi.
+
+⚠️ **O'QUVCHILAR SKRIPTI v0.8.6 — SERVER RAD ETGAN BOLA QAYTA URINILMAYDI.**
+22.09.2026 dagi «0 bajarildi, 6 xato»: oltalasi ham tug'ilgan sana —
+Turonda 2026-yil (xato kiritilgan) yoki 2020-yil kuzi (eMaktab: «31 dekabr
+2026 da 7 yoshga to'lmagan — 1-sinfga qabul qilinmaydi, O'RQ 9-modda»).
+Har yurishda qayta yuborilib, `ok===0 && xato>=2` qoidasi bilan butun
+yurishni to'xtatardi. Endi: (1) `tugilganMuammosi(t)` — 2 yildan yosh /
+kelajak sana / 1-sinf uchun 7 yoshga to'lmagan bola serverga
+yuborilmasdan `x.sabab` bilan belgilanadi; (2) server «formani qayta
+ko'rsatdi / qabul qilinmadi» desa ham `x.sabab` yoziladi va `natijaSaqla`
+— `bajar()` va `hammasiAvto()` `x.sabab` li bolalarni sanamaydi, jurnalga
+«o'tkazib yuboriladi» ro'yxati, CSV da sabab ustuni (chiqarishda ham);
+(3) «ketma-ket xato» to'xtatishi faqat TIZIMLI xatoda (`topilmadi |
+tanilmagan | forma yo'q | tugamadi | kutilmagan xato`). Turon ro'yxati
+yangilansa (`_vaqt` o'zgaradi) natija qaytadan tuziladi va yana urinadi.
+
+⚠️ **O'QUVCHILAR SKRIPTI v0.8.7 — CHIQARISH FORMASIDA «BOSHQA BUYRUQ» YO'Q.**
+22.09.2026 dagi katta yurish: 793 bajarildi, 500 xato — hammasi chiqarish,
+sabab «eduOrderType: «Boshqa buyruq» turi ro'yxatda yo'q». Dismiss
+formasining `eduOrderType` ro'yxati faqat 3 variant: «Ta'lim muassasasini
+bitirish to‘g‘risidagi buyruq» (305, attestat), «Ta'lim muassasasidan
+chiqarish to‘g‘risidagi buyruq», «Ko‘chirish tartibiga muvofiq maktabdan
+chiqarish to‘g‘risidagi buyruq». Yaratish/ko'chirish ustalarida 399 «Boshqa
+buyruq» bor, chiqarishda yo'q. `chiqarOdam`: avval `boshqaBuyruq()`, topilmasa
+`normKey` bo'yicha `/muassasasidanchiqarish/` va `!/bitir|kochir/` — ya'ni
+aynan «muassasasidan chiqarish». Bitirish/ko'chirish hech qachon
+tanlanmaydi. Qo'shish/ko'chirishda qoida o'zgarmagan: faqat «Boshqa buyruq».
+
+⚠️ **O'QUVCHILAR SKRIPTI v0.8.8 — CHIQARISHDA `dismReason` MAJBURIY.**
+306 «Ta'lim muassasasidan chiqarish» buyrug'i bilan server «A'zolikdan
+chiqish sababini ko‘rsating!» deb rad etadi (22.09.2026, 22 bola).
+`dismReason` ro'yxati: «Boshqa kunduzgi umumiy ta`lim muassasalariga» /
+«…nogiron bolalar uchun sinflarga» / «kechki (smenali)…» / «o`rta maxsus
+kasb-hunar…» / … `chiqarOdam`: avval `normKey` bo'yicha «boshqa sabab»
+varianti, bo'lmasa «Boshqa kunduzgi umumiy ta'lim muassasalariga», bo'lmasa
+birinchi bo'sh bo'lmagan. SINOVda to'liq ro'yxat jurnalga chiqadi.
+`natijaTikla` «chiqish sababini» sababli eski «rad» belgilarini tozalaydi —
+ular qayta uriniladi. `comment` tegilmaydi.

@@ -66,12 +66,44 @@ Bu qadam bir marta bajariladi va ko'chirishni ancha aniq qiladi.
 
 ---
 
-## Har safar Console ochgingiz kelmasa
+## Har safar Console ochgingiz kelmasa — Tampermonkey
 
-**Tampermonkey** kengaytmasini o'rnating (Chrome Web Store), so'ng Smartjadval'dagi
-**«🧩 Skriptni yuklab olish»** tugmasi bergan faylni unga qo'shing. Shundan keyin
-**SJ** tugmasi eMaktab sahifalarida o'zi chiqadi — faqat jadval JSON'ini
-(«📋 Faqat jadval») qo'yish qoladi.
+Ko'prik bir marta o'rnatiladi, keyin eMaktab'ning «Dars jadvali» sahifalarida
+o'ng pastda **SJ** tugmasi o'zi turadi. Yangilanishlar ham avtomatik keladi.
+Smartjadval'dagi «eMaktab» sahifasida **«🧩 Tampermonkey orqali»** usulini
+tanlasangiz hamma qadam o'sha yerda ko'rsatib turiladi.
+
+**1. Tampermonkey kengaytmasini o'rnating** (bepul, ro'yxatdan o'tish shart emas):
+
+| Brauzer | Qayerdan |
+|---|---|
+| Chrome, Yandex, Opera | Chrome Web Store → «Tampermonkey» → *Add to Chrome* |
+| Edge | Microsoft Edge Add-ons → «Tampermonkey» → *Get* |
+| Firefox | Firefox Add-ons → «Tampermonkey» → *Add to Firefox* |
+
+⚠️ Chrome, Edge va Yandex'da qo'shimcha bitta qadam bor: `chrome://extensions`
+sahifasida o'ng yuqoridagi **«Dasturchi rejimi» (Developer mode)** ni yoqing.
+Yoqilmasa Tampermonkey skriptlarni umuman ishga tushirmaydi va SJ tugmasi chiqmaydi.
+
+**2. Ko'prik skriptini o'rnating.** Smartjadval → eMaktab → «Tayyorgarlik»
+kartasidagi **«🧩 Skriptni o'rnatish»** tugmasini bosing. Tampermonkey
+o'rnatish oynasini ochadi — **Install** ni bosing.
+Oyna o'rniga oddiy matn ochilsa — 1-qadam bajarilmagan. Zaxira yo'l:
+**«💾 Faylini yuklab olish»** → Tampermonkey → Boshqaruv paneli → *Utilities* →
+*Import from file* → yuklab olingan `emaktab-bridge.user.js`.
+
+**3. Tekshiring.** eMaktab'da istalgan sinfning chorak sxemasini oching —
+o'ng pastda **SJ** chiqishi kerak. Tampermonkey belgisini bosganda
+«Smartjadval → eMaktab ko'prigi» yashil (yoqiq) turadi.
+
+**Keyin har safar:** Smartjadval'da sinflarni belgilab **«💾 Jadvalni yuklab
+olish»** → eMaktab'da **SJ** → **«📂 Fayldan»** → sinfni tanlab **«▶ Shu
+sinfga»** yoki **«🚀 Hamma sinfga joylashtirish»**. Fayl brauzerda eslab
+qolinadi — 40 sinf uchun ham bir marta tanlash yetadi.
+
+**SJ chiqmasa:** Tampermonkey va skript ikkalasi yoqiqmi → Dasturchi rejimi
+yoqiqmi → siz «Dars jadvali» bo'limidamisiz (tugma jurnal/hisobotlarda ataylab
+chiqmaydi) → sahifani yangilang.
 
 ---
 
