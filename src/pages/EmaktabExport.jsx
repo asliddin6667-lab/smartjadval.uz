@@ -201,37 +201,53 @@ export default function EmaktabExport({
   return (
     <div className="emk-page">
       <style>{`
-        .emk-page{--emk-soft:#f8fafc;max-width:1120px;padding:0 0 40px;}
+        .emk-page{--emk-soft:#f8fafc;width:100%;max-width:none;padding:22px 28px 56px;box-sizing:border-box;
+          display:flex;flex-direction:column;gap:18px;}
         body.dark-mode .emk-page{--emk-soft:rgba(255,255,255,.04);}
+        @media(max-width:900px){.emk-page{padding:14px 14px 40px;gap:14px;}}
+
+        /* ——— ikki ustunli setka (keng ekranda) ——— */
+        .emk-grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:stretch;}
+        .emk-grid2>.emk-card{margin:0;}
+        @media(max-width:1100px){.emk-grid2{grid-template-columns:1fr;}}
 
         /* ——— sarlavha ——— */
-        .emk-hero{position:relative;overflow:hidden;border-radius:20px;padding:26px 28px;margin-bottom:18px;
-          background:linear-gradient(135deg,#312e81 0%,#4f46e5 45%,#0ea5e9 100%);color:#fff;
-          box-shadow:0 14px 40px rgba(79,70,229,.28);}
-        .emk-hero::after{content:"";position:absolute;right:-60px;top:-80px;width:260px;height:260px;border-radius:50%;
-          background:rgba(255,255,255,.08);}
-        .emk-hero h1{margin:0 0 6px;font-size:24px;letter-spacing:-.4px;}
-        .emk-hero p{margin:0;color:rgba(255,255,255,.85);font-size:14px;max-width:680px;line-height:1.5;}
+        .emk-hero{position:relative;overflow:hidden;border-radius:22px;padding:30px 34px 28px;
+          background:linear-gradient(120deg,#1e1b4b 0%,#3730a3 30%,#4f46e5 58%,#0ea5e9 100%);color:#fff;
+          box-shadow:0 18px 48px rgba(79,70,229,.30);}
+        .emk-hero::before{content:"";position:absolute;inset:0;
+          background:radial-gradient(circle at 85% 20%,rgba(255,255,255,.16),transparent 38%),
+                     radial-gradient(circle at 15% 110%,rgba(56,189,248,.28),transparent 40%);pointer-events:none;}
+        .emk-hero::after{content:"";position:absolute;right:-90px;top:-120px;width:340px;height:340px;border-radius:50%;
+          background:rgba(255,255,255,.07);pointer-events:none;}
+        .emk-hero h1{margin:0 0 8px;font-size:28px;letter-spacing:-.5px;line-height:1.15;}
+        .emk-hero p{margin:0;color:rgba(255,255,255,.86);font-size:14.5px;max-width:820px;line-height:1.55;}
         .emk-hero-row{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;align-items:flex-start;position:relative;}
         .emk-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.16);
           border:1px solid rgba(255,255,255,.3);border-radius:999px;padding:5px 12px;font-size:12px;font-weight:700;white-space:nowrap;}
 
         /* ——— oqim: 3 ta plitka ——— */
-        .emk-flow{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:10px;align-items:stretch;margin-top:18px;position:relative;}
-        .emk-flow-box{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);border-radius:14px;padding:12px 14px;}
-        .emk-flow-box b{display:block;font-size:13.5px;margin-bottom:3px;}
-        .emk-flow-box span{font-size:12px;color:rgba(255,255,255,.8);line-height:1.45;display:block;}
-        .emk-flow-arrow{display:flex;align-items:center;font-size:20px;color:rgba(255,255,255,.7);}
+        .emk-flow{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:12px;align-items:stretch;margin-top:22px;position:relative;}
+        .emk-flow-box{background:rgba(255,255,255,.13);border:1px solid rgba(255,255,255,.24);border-radius:16px;padding:14px 16px;
+          backdrop-filter:blur(6px);transition:background .15s;}
+        .emk-flow-box:hover{background:rgba(255,255,255,.2);}
+        .emk-flow-box b{display:block;font-size:14px;margin-bottom:4px;}
+        .emk-flow-box span{font-size:12.5px;color:rgba(255,255,255,.82);line-height:1.5;display:block;}
+        .emk-flow-arrow{display:flex;align-items:center;font-size:22px;color:rgba(255,255,255,.75);}
         @media(max-width:760px){.emk-flow{grid-template-columns:1fr;}.emk-flow-arrow{justify-content:center;transform:rotate(90deg);}}
 
         /* ——— kartalar ——— */
-        .emk-card{background:var(--card-bg,#fff);border:1px solid var(--card-border,#e2e8f0);
-          border-radius:18px;padding:20px 22px;margin-bottom:16px;box-shadow:var(--card-shadow,0 6px 20px rgba(15,23,42,.05));}
-        .emk-card-head{display:flex;align-items:center;gap:12px;margin-bottom:6px;flex-wrap:wrap;}
-        .emk-card-head h2{margin:0;font-size:16.5px;display:flex;align-items:center;gap:8px;color:var(--text-primary,#0f172a);}
-        .emk-num{width:30px;height:30px;border-radius:10px;flex:none;display:flex;align-items:center;justify-content:center;
-          font-size:14px;font-weight:800;color:#fff;background:linear-gradient(135deg,#6366f1,#0ea5e9);
-          box-shadow:0 4px 10px rgba(99,102,241,.3);}
+        .emk-card{position:relative;background:var(--card-bg,#fff);border:1px solid var(--card-border,#e2e8f0);
+          border-radius:20px;padding:22px 24px;margin:0;box-shadow:var(--card-shadow,0 6px 20px rgba(15,23,42,.05));
+          transition:box-shadow .2s,border-color .2s;}
+        .emk-card:hover{box-shadow:var(--card-shadow-hover,0 10px 30px rgba(15,23,42,.09));border-color:rgba(99,102,241,.3);}
+        .emk-card::before{content:"";position:absolute;left:24px;right:24px;top:0;height:3px;border-radius:0 0 4px 4px;
+          background:linear-gradient(90deg,#6366f1,#0ea5e9);opacity:.85;}
+        .emk-card-head{display:flex;align-items:center;gap:12px;margin-bottom:8px;flex-wrap:wrap;}
+        .emk-card-head h2{margin:0;font-size:17.5px;display:flex;align-items:center;gap:8px;color:var(--text-primary,#0f172a);letter-spacing:-.2px;}
+        .emk-num{width:32px;height:32px;border-radius:11px;flex:none;display:flex;align-items:center;justify-content:center;
+          font-size:14.5px;font-weight:800;color:#fff;background:linear-gradient(135deg,#6366f1,#0ea5e9);
+          box-shadow:0 5px 12px rgba(99,102,241,.32);}
         .emk-tag{font-size:11px;font-weight:800;letter-spacing:.3px;text-transform:uppercase;border-radius:999px;padding:3px 9px;}
         .emk-tag-bir{background:rgba(14,165,233,.14);color:#0369a1;}
         .emk-tag-tavsiya{background:rgba(16,185,129,.14);color:#047857;}
@@ -331,7 +347,13 @@ export default function EmaktabExport({
         .emk-acc-b ul{margin:0;padding-left:18px;}
         .emk-acc-b li{margin-bottom:6px;}
 
-        .emk-prev{max-height:260px;overflow:auto;border:1px solid var(--card-border,#e2e8f0);border-radius:12px;}
+        /* ——— 5-karta: qadamlar chapda, eslatmalar o'ngda ——— */
+        .emk-split{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:22px;align-items:start;}
+        @media(max-width:1100px){.emk-split{grid-template-columns:1fr;}}
+        .emk-split-side .emk-note:first-child{margin-top:0;}
+        .emk-split-side .emk-acc{margin-top:12px;}
+
+        .emk-prev{max-height:380px;overflow:auto;border:1px solid var(--card-border,#e2e8f0);border-radius:12px;}
         .emk-prev table{width:100%;border-collapse:collapse;font-size:12.5px;}
         .emk-prev th,.emk-prev td{padding:6px 10px;border-bottom:1px solid var(--card-border,#eef2f7);text-align:left;}
         .emk-prev th{background:var(--emk-soft);position:sticky;top:0;font-weight:700;}
@@ -481,6 +503,7 @@ export default function EmaktabExport({
         </div>
       )}
 
+      <div className="emk-grid2">
       {/* ——— 1. eMaktabdan import ——— */}
       <div className="emk-card">
         <div className="emk-card-head">
@@ -592,6 +615,9 @@ export default function EmaktabExport({
         </div>
       </div>
 
+      </div>
+
+      <div className="emk-grid2">
       {/* ——— 3. Sozlamalar ——— */}
       <div className="emk-card">
         <div className="emk-card-head">
@@ -707,6 +733,8 @@ export default function EmaktabExport({
         )}
       </div>
 
+      </div>
+
       {/* ——— 5. eMaktab'da joylashtirish ——— */}
       <div className="emk-card">
         <div className="emk-card-head">
@@ -714,6 +742,8 @@ export default function EmaktabExport({
           <h2>🚀 eMaktab'da joylashtirish</h2>
         </div>
         <p className="emk-sub">Endi eMaktab saytiga o'ting. Quyidagi qadamlar o'sha yerda bajariladi.</p>
+        <div className="emk-split">
+        <div>
         {tm ? (
           <ol className="emk-steps">
             <li>
@@ -760,6 +790,8 @@ export default function EmaktabExport({
           </ol>
         )}
 
+        </div>
+        <div className="emk-split-side">
         <div className="emk-note">
           ⚠️ Birinchi maktabda ishlatishdan oldin panelning <b>«🔍 O'rganish»</b> bo'limini bajaring:
           bitta darsni qo'lda qo'shasiz, skript eMaktab qanday ishlashini yozib oladi. O'sha natija
@@ -798,6 +830,8 @@ export default function EmaktabExport({
               </ul>
             </div>
           )}
+        </div>
+        </div>
         </div>
       </div>
 
