@@ -17,7 +17,7 @@
 // =====================================================================
 import { DAYS } from "./constants.js";
 import { isTeachingSlot, classIdsOf } from "./scheduleCore.js";
-import { parseClassName } from "./emaktabNames.js";
+import { parseClassName, bestMatch, abbrevMatch } from "./emaktabNames.js";
 
 // 2 — paketga `emaktab` id xaritasi qo'shildi (ko'prik nomlarni taxmin
 // qilmay, to'g'ridan-to'g'ri id bilan ishlaydi). Ko'prik 1-versiyani ham
@@ -173,6 +173,25 @@ export function buildEmaktabPayload({
   };
   const sinfNomlari = new Set(sinflar.map((s) => s.nom));
 
+  // Fan id'si yo'q, lekin ro'yxatda AYNI fanning eMaktab'dan kelgan
+  // nusxasi turibdi («Informatika va axborot texnologiyalari» ↔ eMaktab
+  // «Informatika va AT»). Import bu ikkisini alohida fan deb saqlagan
+  // bo'lishi mumkin — u holda jadvaldagi fan id'siz qoladi va ko'prikda
+  // «mos nom topilmadi» bo'ladi. Nusxa nomi sinonim yoki qisqartma bo'lib,
+  // ikki tomonlama mos kelsa uning id'si olinadi. Oddiy ichma-ich moslik
+  // («Informatika» ⊂ to'liq nom) qabul qilinmaydi — ular boshqa fan
+  // bo'lishi mumkin. (emaktabImport.js dagi 2-o'tish bilan bir xil qoida.)
+  const fanIdlari = idMap(subjects, fanNomlari);
+  const idli = subjects.filter((r) => r?.emaktabId && r.name);
+  const idsiz = subjects.filter((r) => r && !r.emaktabId && r.name && fanNomlari.has(r.name));
+  idsiz.forEach((r) => {
+    const m = bestMatch(r.name, idli, "fan");
+    if (!m.qiymat) return;
+    if (m.ishonch !== "sinonim" && !abbrevMatch(r.name, m.qiymat.name) && !abbrevMatch(m.qiymat.name, r.name)) return;
+    const teskari = bestMatch(m.qiymat.name, idsiz, "fan");
+    if (teskari.qiymat === r) fanIdlari[r.name] = String(m.qiymat.emaktabId);
+  });
+
   return {
     v: EMAKTAB_FORMAT_VERSION,
     manba: "smartjadval.uz",
@@ -190,7 +209,7 @@ export function buildEmaktabPayload({
     xonalar: [...xonaNomlari].sort((a, b) => a.localeCompare(b, "uz", { numeric: true })),
 
     emaktab: {
-      fanlar: idMap(subjects, fanNomlari),
+      fanlar: fanIdlari,
       ustozlar: idMap(teachers, ustozNomlari),
       xonalar: idMap(rooms, xonaNomlari),
       sinflar: idMap(classes, sinfNomlari),

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Smartjadval → eMaktab ko'prigi
 // @namespace    https://smartjadval.uz/
-// @version      1.10.0
+// @version      1.11.0
 // @description  Smartjadval.uz da tuzilgan dars jadvalini eMaktab (kundalik.com) «Darslar jadvali sxemasi» setkasiga joylashtiradi
 // @author       smartjadval.uz
 // @match        https://schools.emaktab.uz/*
@@ -210,7 +210,7 @@
     ["Kelajak soati","Час будущего"],
     ["Tanqidiy fikrlash","Критическое мышление"],
     ["Informatika","Информатика"],
-    ["Informatika va axborot texnologiyalari","Информатика и информационные технологии"],
+    ["Informatika va axborot texnologiyalari","Информатика и информационные технологии","Informatika va AT","Informatika va A.T.","Informatika va AKT","Axborot texnologiyalari","Информатика и ИТ","Информатика и ИКТ","Информационные технологии","Информатика и информ. технологии"],
     ["Texnologiya","Технология","Mehnat","Труд"],
     ["Chizmachilik","Черчение"],
     ["Tasviriy san'at","Изобразительное искусство","Изо"],
@@ -956,8 +956,43 @@
       if (f) return { ok: true, id: f.v, label: f.label, ishonch: "qo'lda" };
     }
     const m = bestMatch(name, list, kind);
-    if (!m.qiymat) return { ok: false, sabab: "mos nom topilmadi" };
+    if (!m.qiymat) return { ok: false, sabab: topilmadiSabab(name, list) };
     return { ok: true, id: m.qiymat.v, label: m.qiymat.label, ishonch: m.ishonch };
+  }
+
+  // «mos nom topilmadi» — lekin QAYSI nomlar bor edi? Foydalanuvchi buni
+  // bilmasa «Nom mosligi» qutisiga nima yozishni ham bilmaydi (jonli
+  // maktabda «Informatika va axborot texnologiyalari» shu sababdan 5 sinfda
+  // tushmay qoldi — eMaktab uni boshqacha atagan, lekin jurnal buni
+  // aytmagan). Shuning uchun o'xshash nomzodlar xatoning o'zida sanaladi.
+  function oxshashNomlar(target, list, max) {
+    const lab = (x) => (x == null ? "" : (typeof x === "string" ? x : String(x.label || x.name || x.text || "")));
+    const nk = normKey(target);
+    const sozlari = sozlar(target).filter((w) => w.length >= 4);
+    const ildiz = nk.slice(0, 5);
+    const out = [];
+    const bor = new Set();
+    for (const x of list) {
+      const l = lab(x);
+      const o = normKey(l);
+      if (!o || bor.has(l)) continue;
+      // Ball: boshi bir xil (3) > uzun so'zi bor (2) > nishon ichida (1)
+      const ball = (ildiz.length >= 5 && o.startsWith(ildiz)) ? 3
+        : (sozlari.some((w) => o.indexOf(w) >= 0) ? 2
+        : ((o.length >= 5 && nk.indexOf(o) >= 0) ? 1 : 0));
+      if (!ball) continue;
+      bor.add(l);
+      out.push({ l, ball });
+    }
+    out.sort((a, b) => b.ball - a.ball);
+    return out.slice(0, max || 6).map((x) => x.l);
+  }
+
+  function topilmadiSabab(name, list) {
+    const ox = oxshashNomlar(name, list, 6);
+    if (!ox.length) return "mos nom topilmadi";
+    return `mos nom topilmadi. eMaktab'da o'xshashlari: ${ox.map((n) => `«${n}»`).join(", ")}. `
+      + `To'g'risini «Nom mosligi» qutisiga yozing, masalan: ${name} = ${ox[0]}`;
   }
 
   // Nomga biriktirilgan eMaktab id'sini ro'yxatdan topish.
@@ -1326,7 +1361,7 @@
       if (f) { setValue(sel, f.el.value); return { ok: true, tanlandi: f.label, ishonch: "qo'lda" }; }
     }
     const m = bestMatch(name, opts, kind);
-    if (!m.qiymat) return { ok: false, sabab: "mos nom topilmadi" };
+    if (!m.qiymat) return { ok: false, sabab: topilmadiSabab(name, opts) };
     setValue(sel, m.qiymat.el.value);
     return { ok: true, tanlandi: m.qiymat.label, ishonch: m.ishonch };
   }

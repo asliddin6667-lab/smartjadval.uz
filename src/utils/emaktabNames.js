@@ -129,7 +129,7 @@ const SUBJECT_SYNONYMS = [
   ["Kelajak soati", "Час будущего"],
   ["Tanqidiy fikrlash", "Критическое мышление"],
   ["Informatika", "Информатика"],
-  ["Informatika va axborot texnologiyalari", "Информатика и информационные технологии"],
+  ["Informatika va axborot texnologiyalari", "Информатика и информационные технологии", "Informatika va AT", "Informatika va A.T.", "Informatika va AKT", "Axborot texnologiyalari", "Информатика и ИТ", "Информатика и ИКТ", "Информационные технологии", "Информатика и информ. технологии"],
   ["Texnologiya", "Технология", "Mehnat", "Труд"],
   ["Chizmachilik", "Черчение"],
   ["Tasviriy san'at", "Изобразительное искусство", "Изо"],

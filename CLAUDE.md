@@ -1248,6 +1248,17 @@ ma'lumotni eMaktab'dan OLIB KELISH va har yozuvga `emaktabId` yozish:
 - Id barqaror: `emk_<tur>_<emaktabId>` — qayta import yangi yozuv
   yaratmaydi, mavjudini topadi.
 - **Hech narsa o'chirilmaydi.** Import faqat qo'shadi va to'ldiradi.
+- **Fan nomi AYNAN mos kelmasa ham bog'lanadi** — lekin faqat sinonim yoki
+  qisqartma (`abbrevMatch`) bo'lsa VA ikki tomonlama (Smartjadval fani ham
+  eMaktab ro'yxatidan qaytib shu yozuvni tanlasa). Oddiy ichma-ich moslik
+  («Informatika» ⊂ «Informatika va axborot texnologiyalari») bog'lamaydi —
+  ular boshqa fan bo'lishi mumkin. Eksport ham (`buildEmaktabPayload`) shu
+  qoida bilan id'siz fanga eMaktab'dan kelgan nusxasining id'sini beradi
+  (import allaqachon ikkita alohida fan yaratib qo'ygan bo'lsa). Sabab:
+  28.09.2026 jonli maktabda «Informatika va axborot texnologiyalari» 5
+  sinfda «mos nom topilmadi» bo'lib tushmadi, jurnal esa eMaktab uni
+  QANDAY ataganini aytmasdi — endi ko'prik xatoda o'xshash nomlarni sanaydi
+  (`topilmadiSabab`) va «Nom mosligi» uchun tayyor qatorni beradi.
 - Paket versiyasi `2` ga ko'tarildi (`emaktab` xaritasi qo'shilgani uchun);
   ko'prik 1 va 2 ni ham qabul qiladi — eski faylda oddiygina nom bo'yicha
   moslashtirish ishlaydi.

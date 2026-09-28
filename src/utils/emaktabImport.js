@@ -20,7 +20,7 @@
 //  — aks holda maktab qo'lda kiritgan fan jimgina yo'qolardi.
 // =====================================================================
 import { SUBJECT_COLORS } from "./constants.js";
-import { normKey, classKey, sameTeacher } from "./emaktabNames.js";
+import { normKey, classKey, sameTeacher, bestMatch, abbrevMatch } from "./emaktabNames.js";
 
 // Id barqaror bo'lishi SHART: qayta import qilinganda ayni yozuv
 // topilsin, yangisi yaratilmasin.
@@ -75,29 +75,58 @@ export function mergeEmaktabData({
   // ——— 1. FANLAR (birinchi: ustozlar shularga bog'lanadi) ———
   const nextSubjects = [...subjects];
   const subjectByEmk = new Map();     // eMaktab fan id → Smartjadval fan id
+  const bogla = (bor, f) => {
+    const idx = nextSubjects.indexOf(bor);
+    nextSubjects[idx] = { ...bor, emaktabId: String(f.id) };
+    subjectByEmk.set(String(f.id), bor.id);
+    if (!bor.emaktabId) hisobot.fan.boglandi++;
+  };
+
+  // 1-o'tish: id yoki AYNAN bir xil nom.
+  const qoldi = [];
   (data.fanlar || []).forEach((f, i) => {
     if (!f || !f.id || !f.nom) return;
     const bor = findExisting(nextSubjects, f.id, f.nom, "fan");
-    if (bor) {
-      const idx = nextSubjects.indexOf(bor);
-      nextSubjects[idx] = { ...bor, emaktabId: String(f.id) };
-      subjectByEmk.set(String(f.id), bor.id);
-      if (!bor.emaktabId) hisobot.fan.boglandi++;
-    } else {
-      const id = idOf("sub", f.id);
-      nextSubjects.push({
-        id,
-        name: f.nom,
-        weeklyHours: 1,                 // soatni maktab o'zi belgilaydi
-        type: "Oddiy",
-        color: SUBJECT_COLORS[i % SUBJECT_COLORS.length],
-        allowDouble: false,
-        emaktabId: String(f.id),
-        createdAt: now,
-      });
-      subjectByEmk.set(String(f.id), id);
-      hisobot.fan.yangi++;
-    }
+    if (bor) bogla(bor, f); else qoldi.push({ f, i });
+  });
+
+  // 2-o'tish: sinonim / qisqartma / qismiy moslik — faqat IKKI TOMONLAMA
+  // bo'lsa. Jonli maktabda «Informatika va axborot texnologiyalari»
+  // eMaktab'da boshqacha yozilgani uchun id olmadi, o'rniga o'sha nom bilan
+  // YANGI fan yaratildi va 5 sinfda dars tushmay qoldi. Bir tomonlama
+  // moslik xavfli: eMaktab «Informatika» ⊂ «Informatika va AT» bo'lib
+  // noto'g'ri fanga yopishadi. Shuning uchun Smartjadval fani ham eMaktab
+  // ro'yxatidan qaytib AYNI yozuvni tanlasagina bog'lanadi. Oddiy ichma-ich
+  // moslik («Informatika» ⊂ «Informatika va axborot texnologiyalari») ham
+  // yetarli emas — ular ikki xil fan bo'lishi mumkin; faqat sinonim yoki
+  // kesilgan/qisqartirilgan yozuv (`abbrevMatch`) qabul qilinadi.
+  const bogliqmasFan = () => nextSubjects.filter((s) => !s.emaktabId);
+  const qoldiNomlar = () => qoldi.map((q) => ({ label: q.f.nom, q }));
+  qoldi.slice().forEach((q) => {
+    const m = bestMatch(q.f.nom, bogliqmasFan(), "fan");
+    if (!m.qiymat) return;
+    if (m.ishonch !== "sinonim" && !abbrevMatch(q.f.nom, m.qiymat.name) && !abbrevMatch(m.qiymat.name, q.f.nom)) return;
+    const teskari = bestMatch(m.qiymat.name, qoldiNomlar(), "fan");
+    if (!teskari.qiymat || teskari.qiymat.q !== q) return;
+    bogla(m.qiymat, q.f);
+    hisobot.ogohlar.push(`fan «${m.qiymat.name}» ↔ eMaktab «${q.f.nom}» (${m.ishonch})`);
+    qoldi.splice(qoldi.indexOf(q), 1);
+  });
+
+  qoldi.forEach(({ f, i }) => {
+    const id = idOf("sub", f.id);
+    nextSubjects.push({
+      id,
+      name: f.nom,
+      weeklyHours: 1,                 // soatni maktab o'zi belgilaydi
+      type: "Oddiy",
+      color: SUBJECT_COLORS[i % SUBJECT_COLORS.length],
+      allowDouble: false,
+      emaktabId: String(f.id),
+      createdAt: now,
+    });
+    subjectByEmk.set(String(f.id), id);
+    hisobot.fan.yangi++;
   });
 
   // ——— 2. USTOZLAR ———
