@@ -326,6 +326,9 @@ export default function ClassSubjectsPage({ classes, subjects, setSubjects, teac
   const [armAll, setArmAll] = useState(false);
   // "Standart soatlar" tasdiq oynasi (mavjud biriktirmalar almashadi — tasodifan bosilmasin)
   const [smartAllOpen, setSmartAllOpen] = useState(false);
+  // 👨‍🏫 Ustozga dars biriktirish oynasi: ustoz → fan → sinflar
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [assignForm, setAssignForm] = useState({ teacherId: "", subjectId: "", classIds: [] });
 
   useEffect(() => {
     if (!selectedClassId && classes[0]?.id) setSelectedClassId(classes[0].id);
@@ -522,6 +525,119 @@ Davom etamizmi?`;
   }
   function togglePoolTeacher(tid) {
     setPoolForm((p) => ({ ...p, teacherIds: p.teacherIds.includes(tid) ? p.teacherIds.filter((x) => x !== tid) : [...p.teacherIds, tid] }));
+  }
+
+  // ═══ USTOZGA DARS BIRIKTIRISH ═══
+  // Ustoz tanlanadi → uning fanlaridan sinflarda YOQILGANLARI chiqadi →
+  // fan tanlanadi → shu fan yoqilgan sinflar chiqadi → kerakli sinflar
+  // belgilanib "Biriktirish" bosiladi. Belgisi olingan sinfda ustoz bo'sh qoladi.
+
+  // Fan kamida bitta sinfda yoqilganmi?
+  function subjectEnabledAnywhere(subjectId) {
+    return Object.values(classSubjects).some((list) => (list || []).some((a) => a?.subjectId === subjectId));
+  }
+  // Sinflarda yoqilgan BARCHA fanlar: avval ustozning o'z fanlari, keyin
+  // boshqalari — ustoz o'z ro'yxatida yo'q fandan ham kirishi mumkin
+  // (biriktirilganda fan ustozga ham yoziladi — enableTeacherSubjects).
+  function assignSubjectsFor(teacherId) {
+    const t = teachers.find((x) => x.id === teacherId);
+    if (!t) return { own: [], other: [] };
+    const ids = new Set(teacherSubjectIds(t));
+    const enabled = sortedAllSubjects.filter((s) => subjectEnabledAnywhere(s.id));
+    return { own: enabled.filter((s) => ids.has(s.id)), other: enabled.filter((s) => !ids.has(s.id)) };
+  }
+  function assignSubjectList(teacherId) {
+    const { own, other } = assignSubjectsFor(teacherId);
+    return [...own, ...other];
+  }
+  // Shu fan yoqilgan sinflar — qatori bilan birga (alifbo bo'yicha).
+  // BOSHQA ustoz biriktirilgan sinflar chiqmaydi: bir fan bir sinfda bitta
+  // ustozniki, uni bu oynadan tortib olib bo'lmaydi (qatordan o'zgartiriladi).
+  function assignRowsFor(subjectId, teacherId = assignForm.teacherId) {
+    if (!subjectId) return [];
+    return sortedClasses
+      .map((c) => ({ cls: c, a: (classSubjects[c.id] || []).find((x) => x?.subjectId === subjectId) }))
+      .filter((r) => r.a && (!r.a.teacherId || r.a.teacherId === teacherId));
+  }
+  // Boshqa ustozda bo'lgani uchun yashirilgan sinflar soni
+  function assignHiddenCount(subjectId, teacherId) {
+    if (!subjectId) return 0;
+    return classes.filter((c) => (classSubjects[c.id] || []).some((x) => x?.subjectId === subjectId && x.teacherId && x.teacherId !== teacherId)).length;
+  }
+  // Parallel ("bir vaqtda 2 fan") guruhida ustoz UMUMIY — a'zo sinflar birga belgilanadi
+  function assignLinkedIds(subjectId, cls, a) {
+    const key = a?.pairEnabled ? String(a.pairGroupKey || "").trim() : "";
+    if (!key) return [cls.id];
+    return assignRowsFor(subjectId, assignForm.teacherId)
+      .filter((r) => r.a.pairEnabled && String(r.a.pairGroupKey || "").trim() === key && !r.a.levelGroupEnabled)
+      .map((r) => r.cls.id);
+  }
+  // Ustoz allaqachon kiradigan sinflar oldindan belgilangan bo'ladi
+  function assignPreselect(teacherId, subjectId) {
+    return assignRowsFor(subjectId, teacherId)
+      .filter((r) => !r.a.levelGroupEnabled && r.a.teacherId === teacherId)
+      .map((r) => r.cls.id);
+  }
+  function openAssignModal() {
+    const firstT = sortByName(teachers)[0];
+    const tid = firstT?.id || "";
+    const sid = assignSubjectList(tid)[0]?.id || "";
+    setAssignForm({ teacherId: tid, subjectId: sid, classIds: assignPreselect(tid, sid) });
+    setAssignOpen(true);
+  }
+  function setAssignTeacher(teacherId) {
+    const subs = assignSubjectList(teacherId);
+    const sid = subs.some((s) => s.id === assignForm.subjectId) ? assignForm.subjectId : (subs[0]?.id || "");
+    setAssignForm({ teacherId, subjectId: sid, classIds: assignPreselect(teacherId, sid) });
+  }
+  function setAssignSubject(subjectId) {
+    setAssignForm((p) => ({ ...p, subjectId, classIds: assignPreselect(p.teacherId, subjectId) }));
+  }
+  function toggleAssignClass(cls, a) {
+    const ids = assignLinkedIds(assignForm.subjectId, cls, a);
+    setAssignForm((p) => {
+      const on = p.classIds.includes(cls.id);
+      const rest = p.classIds.filter((x) => !ids.includes(x));
+      return { ...p, classIds: on ? rest : [...rest, ...ids] };
+    });
+  }
+  function applyTeacherAssign() {
+    const { teacherId, subjectId, classIds } = assignForm;
+    const teacher = teachers.find((t) => t.id === teacherId);
+    const subject = subjectById(subjectId);
+    if (!teacher) { toast?.("Ustoz tanlang", "warning"); return; }
+    if (!subject) { toast?.("Fan tanlang", "warning"); return; }
+    const want = new Set(classIds);
+    let added = 0, removed = 0, replaced = 0;
+    const next = { ...classSubjects };
+    Object.entries(next).forEach(([cid, list]) => {
+      next[cid] = (list || []).map((a) => {
+        if (a?.subjectId !== subjectId || a.levelGroupEnabled) return a;
+        const cur = a.teacherId || "";
+        // Boshqa ustozniki — tegilmaydi (ro'yxatda ham ko'rinmagan)
+        if (cur && cur !== teacherId) return a;
+        if (want.has(cid)) {
+          if (cur === teacherId) return a;
+          added += 1;
+          return { ...a, teacherId };
+        }
+        if (cur === teacherId) { removed += 1; return { ...a, teacherId: "" }; }
+        return a;
+      });
+    });
+    if (!added && !removed) { toast?.("O'zgarish yo'q", "info"); setAssignOpen(false); return; }
+    // Ustoz o'z ro'yxatida yo'q fandan kirsa — fan ustozga ham yoziladi,
+    // aks holda qatordagi «ustoz» tanlovi uni ko'rsatmay bo'sh turardi.
+    const gained = added && !teacherSubjectIds(teacher).includes(subjectId)
+      ? enableTeacherSubjects(new Map([[teacherId, new Set([subjectId])]]))
+      : 0;
+    setClassSubjects(next);
+    setAssignOpen(false);
+    const parts = [];
+    if (added) parts.push(`${added} sinfga biriktirildi`);
+    if (removed) parts.push(`${removed} sinfdan olindi`);
+    if (gained) parts.push("fan ustoz ro'yxatiga qo'shildi");
+    toast?.(`${teacher.name} — ${subject.name}: ${parts.join(", ")} ✓`, "success");
   }
   // Fanga biriktirilgan ustozlar — alifbo bo'yicha
   function teachersForSubject(subjectId) {
@@ -1653,6 +1769,7 @@ Fan bilan birga ular ham o'chsinmi?`;
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button className="btn btn-primary" onClick={() => { setPoolForm({ subjectId: langSubjects[0]?.id || sortedAllSubjects[0]?.id || "", classIds: [], teacherIds: [], weeklyHours: 5 }); setPoolOpen(true); }} disabled={!classes.length || !subjects.length}>🏊 Hovuz (daraja guruhi)</button>
+          <button className="btn btn-secondary" onClick={openAssignModal} disabled={!teachers.length || !subjects.length} title="Bitta ustozga bir fan bo'yicha bir nechta sinfni birdaniga biriktirish">👨‍🏫 Ustozga dars biriktirish</button>
           <button className="btn btn-secondary" onClick={applySmartForSelected} disabled={!selectedClassId || !subjects.length}>⚡ Mos fanlar</button>
           <button className="btn btn-success" onClick={() => setSmartAllOpen(true)} disabled={!classes.length || !subjects.length} title="Barcha sinflarga tayanch o'quv reja soatlarini qo'llash (tasdiq so'raladi)">⚡ Standart soatlar</button>
           <button
@@ -2865,6 +2982,121 @@ Fan bilan birga ular ham o'chsinmi?`;
           </div>
         )}
       </div>
+
+      {assignOpen && (() => {
+        const aTeachers = sortByName(teachers);
+        const aTeacher = teachers.find((t) => t.id === assignForm.teacherId);
+        const { own: aOwnSubjects, other: aOtherSubjects } = assignSubjectsFor(assignForm.teacherId);
+        const aSubjects = [...aOwnSubjects, ...aOtherSubjects];
+        const aSubject = subjectById(assignForm.subjectId);
+        const aRows = assignRowsFor(assignForm.subjectId, assignForm.teacherId);
+        const hiddenCount = assignHiddenCount(assignForm.subjectId, assignForm.teacherId);
+        const subjectIsNew = aSubject && aTeacher && !teacherSubjectIds(aTeacher).includes(aSubject.id);
+        const selectable = aRows.filter((r) => !r.a.levelGroupEnabled);
+        const allOn = selectable.length > 0 && selectable.every((r) => assignForm.classIds.includes(r.cls.id));
+        const selHours = aRows
+          .filter((r) => assignForm.classIds.includes(r.cls.id))
+          .reduce((s, r) => s + Number(r.a.weeklyHours || 0), 0);
+        const curLoad = teacherHourMap[assignForm.teacherId] || 0;
+        return (
+          <div onClick={() => setAssignOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+            <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--card-bg,#fff)", borderRadius: 16, padding: 22, width: "100%", maxWidth: 680, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 24px 70px rgba(0,0,0,.35)" }}>
+              <h3 style={{ margin: "0 0 4px" }}>👨‍🏫 Ustozga dars biriktirish</h3>
+              <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 16 }}>
+                Ustozni va fanni tanlang — shu fan yoqilgan, hali boshqa ustozga berilmagan sinflar chiqadi. Ustoz kiradigan sinflarni belgilab «Biriktirish»ni bosing. Belgisi olingan sinfda ustoz bo'sh qoladi. Ustoz o'z ro'yxatida yo'q fandan ham kirishi mumkin.
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div>
+                  <label className="form-label">Ustoz</label>
+                  <select className="form-control" value={assignForm.teacherId} onChange={(e) => setAssignTeacher(e.target.value)}>
+                    <option value="">— ustoz —</option>
+                    {aTeachers.map((t) => <option key={t.id} value={t.id}>{t.name} ({teacherHourMap[t.id] || 0} soat)</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="form-label">Fan (sinflarda yoqilgan)</label>
+                  <select className="form-control" value={assignForm.subjectId} onChange={(e) => setAssignSubject(e.target.value)} disabled={!aSubjects.length}>
+                    {aSubjects.length === 0 && <option value="">— fan topilmadi —</option>}
+                    {aOwnSubjects.length > 0 && (
+                      <optgroup label="Ustozning fanlari">
+                        {aOwnSubjects.map((s) => <option key={s.id} value={s.id}>{langIcon(subjectLangOf(s))} {s.name}</option>)}
+                      </optgroup>
+                    )}
+                    {aOtherSubjects.length > 0 && (
+                      <optgroup label="Boshqa fanlar (ustozga qo'shiladi)">
+                        {aOtherSubjects.map((s) => <option key={s.id} value={s.id}>{langIcon(subjectLangOf(s))} {s.name}</option>)}
+                      </optgroup>
+                    )}
+                  </select>
+                </div>
+              </div>
+
+              {aTeacher && aSubjects.length === 0 && (
+                <div style={{ marginTop: 10, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: 10, fontSize: 13, color: "#92400e" }}>
+                  Hali hech bir sinfda fan yoqilmagan. Avval sinfga fan qo'shing.
+                </div>
+              )}
+              {subjectIsNew && (
+                <div style={{ marginTop: 10, background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 10, padding: 10, fontSize: 13, color: "#1e40af" }}>
+                  «{aSubject.name}» hozircha «{aTeacher.name}» fanlari ro'yxatida yo'q — biriktirilganda avtomatik qo'shiladi.
+                </div>
+              )}
+
+              {aSubject && (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 14, gap: 8, flexWrap: "wrap" }}>
+                    <label className="form-label" style={{ margin: 0 }}>
+                      «{aSubject.name}» yoqilgan sinflar ({assignForm.classIds.length} / {selectable.length} tanlandi)
+                    </label>
+                    {selectable.length > 0 && (
+                      <button type="button" className="btn btn-sm btn-secondary"
+                        onClick={() => setAssignForm((p) => ({ ...p, classIds: allOn ? [] : selectable.map((r) => r.cls.id) }))}>
+                        {allOn ? "Barchasini olib tashlash" : "Barchasini belgilash"}
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 220, overflowY: "auto", padding: 6, marginTop: 6, border: "1px solid var(--card-border,#e5e7eb)", borderRadius: 10 }}>
+                    {aRows.length === 0 ? (
+                      <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                        {hiddenCount ? "Bu fan yoqilgan barcha sinflar boshqa ustozlarga biriktirilgan" : "Bu fan hech bir sinfda yoqilmagan"}
+                      </span>
+                    ) : aRows.map(({ cls, a }) => {
+                      const on = assignForm.classIds.includes(cls.id);
+                      const pooled = Boolean(a.levelGroupEnabled);
+                      const mine = Boolean(a.teacherId) && a.teacherId === assignForm.teacherId;
+                      const linked = assignLinkedIds(assignForm.subjectId, cls, a).length > 1;
+                      const title = pooled
+                        ? "Hovuz (daraja guruhi) — ustozlar ⚙️ Sozlamalardan belgilanadi"
+                        : mine ? "Hozir shu ustoz kiradi" : "Ustoz biriktirilmagan";
+                      return (
+                        <button key={cls.id} type="button" disabled={pooled} onClick={() => toggleAssignClass(cls, a)} title={title}
+                          className={`btn btn-sm ${on ? "btn-success" : "btn-secondary"}`}
+                          style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-start", gap: 0, lineHeight: 1.25, opacity: pooled ? 0.55 : 1 }}>
+                          <span>{on ? "✓ " : ""}{cls.name} · {a.weeklyHours || 0} s{linked ? " 🔗" : ""}</span>
+                          <span style={{ fontSize: 10, opacity: 0.85 }}>
+                            {pooled ? "🎯 hovuz" : mine ? "✓ shu ustoz" : "— bo'sh —"}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div style={{ marginTop: 10, background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 10, padding: 10, fontSize: 13, color: "#065f46" }}>
+                    <b>{aTeacher?.name}</b> — {aSubject.name}: {assignForm.classIds.length} sinf, {selHours} soat.
+                    {" "}Ustozning hozirgi yuklamasi: <b>{curLoad}</b> soat/hafta.
+                    {hiddenCount > 0 && <div style={{ marginTop: 4, color: "#92400e" }}>ℹ️ {hiddenCount} ta sinf boshqa ustozga biriktirilgan, shuning uchun ro'yxatda yo'q. Almashtirish uchun o'sha sinf qatoridan ustozni o'zgartiring.</div>}
+                  </div>
+                </>
+              )}
+
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 18 }}>
+                <button className="btn btn-secondary" type="button" onClick={() => setAssignOpen(false)}>Bekor qilish</button>
+                <button className="btn btn-primary" type="button" onClick={applyTeacherAssign} disabled={!aTeacher || !aSubject}>👨‍🏫 Biriktirish</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {poolOpen && (() => {
         const poolSubject = subjectById(poolForm.subjectId);
