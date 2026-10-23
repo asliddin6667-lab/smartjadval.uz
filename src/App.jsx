@@ -43,6 +43,7 @@ import {
 } from "./services/cloudSync";
 import SyncBadge from "./components/SyncBadge";
 import { buildDemoSchoolData } from "./utils/demoData";
+import { runDueSubstitutions, hasDueSubstitutions, fmtDate } from "./utils/teacherSubstitutions";
 import { isLocalOnly, announceMode } from "./services/devMode";
 
 const emptySettings = { schoolName: "", academicYear: "2024-2025" };
@@ -101,6 +102,7 @@ function readLocalData(user) {
     shifts: loadUserData(uid, "shifts", []),
     schedule: loadUserData(uid, "schedule", {}),
     savedSchedules: loadUserData(uid, "savedSchedules", []),
+    substitutions: loadUserData(uid, "substitutions", []),
   };
 
   // Demo foydalanuvchida ma'lumot bo'lmasa, platforma to'ldirilgan holda ochiladi.
@@ -118,6 +120,7 @@ function readLocalData(user) {
       shifts: demo.shifts || [],
       schedule: demo.schedule,
       savedSchedules: [],
+      substitutions: [],
     };
   }
 
@@ -195,6 +198,8 @@ export default function App() {
   const [schedule, setSchedule] = useState({});
   // Nomlangan jadval nusxalari — "Saqlangan jadvallar" bo'limi
   const [savedSchedules, setSavedSchedules] = useState([]);
+  // Ustoz almashtirish yozuvlari (vaqtinchalik/doimiy) — "Ustoz almashtirish" bo'limi
+  const [substitutions, setSubstitutions] = useState([]);
   const [dataReady, setDataReady] = useState(false);
 
   // Kirishdagi sinxronizatsiya tugadimi? Tugamaguncha bulutga HECH NIMA
@@ -279,6 +284,7 @@ export default function App() {
     setShifts(d.shifts);
     setSchedule(d.schedule);
     setSavedSchedules(d.savedSchedules || []);
+    setSubstitutions(d.substitutions || []);
   }, []);
 
   // ——— Faol bo'limni URL hash va localStorage'ga yozish ———
@@ -600,6 +606,7 @@ export default function App() {
   useEffect(() => { if (userId && dataReady) saveUserData(userId, "shifts", shifts); }, [userId, dataReady, shifts]);
   useEffect(() => { if (userId && dataReady) saveUserData(userId, "schedule", schedule); }, [userId, dataReady, schedule]);
   useEffect(() => { if (userId && dataReady) saveUserData(userId, "savedSchedules", savedSchedules); }, [userId, dataReady, savedSchedules]);
+  useEffect(() => { if (userId && dataReady) saveUserData(userId, "substitutions", substitutions); }, [userId, dataReady, substitutions]);
   useEffect(() => { if (userId && dataReady) saveUserData(userId, "settings", settings); }, [userId, dataReady, settings]);
   useEffect(() => { saveData("darkMode", darkMode); }, [darkMode]);
 
@@ -612,7 +619,7 @@ export default function App() {
   }, [
     userId, dataReady, syncDone,
     classes, subjects, teachers, classSubjects, rooms,
-    timeslots, lunchGroups, shifts, schedule, settings, savedSchedules,
+    timeslots, lunchGroups, shifts, schedule, settings, savedSchedules, substitutions,
   ]);
 
   useEffect(() => {
@@ -637,6 +644,7 @@ export default function App() {
       shifts: blob.shifts || [],
       schedule: blob.schedule || {},
       savedSchedules: blob.savedSchedules || [],
+      substitutions: blob.substitutions || [],
     });
   }, [applySchoolData]);
 
@@ -826,6 +834,73 @@ export default function App() {
   // qolib ketishi mumkin — shuning uchun qisqa vaqt kutdiramiz.
   const syncPending = !LOCAL_ONLY && !isDemoUser && dataReady && !syncDone;
 
+  // =====================================================================
+  //  USTOZ ALMASHTIRISH — MUDDATI KELGANLARNI AVTOMATIK BAJARISH
+  //
+  //  Vaqtinchalik almashtirish (sanadan sanagacha) muddati tugasa darslar
+  //  ESKI ustozga o'zi qaytadi; boshlanish sanasi kelganlar o'zi qo'llanadi.
+  //  Tekshiruv: ma'lumot yuklanganda, oyna faollashganda va har daqiqada
+  //  (tungi almashuv uchun). Faqat o'qish rejimida (bulut yo'q, obuna
+  //  tugagan, kirishdagi sinxron tugamagan) HECH NARSA qilinmaydi —
+  //  aks holda o'zgarish bulutga bormay, keyin bulut nusxasi ostida
+  //  qolib ketardi.
+  //  [teacherSubstitutions.js](./utils/teacherSubstitutions.js)
+  // =====================================================================
+  const [subsTick, setSubsTick] = useState(0);
+  useEffect(() => {
+    const bump = () => setSubsTick((t) => t + 1);
+    const timer = setInterval(bump, 60 * 1000);
+    window.addEventListener("focus", bump);
+    document.addEventListener("visibilitychange", bump);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", bump);
+      document.removeEventListener("visibilitychange", bump);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!userId || isDistrictAdmin || !dataReady) return;
+    if (syncPending || cloudBlocked || subBlocked || contentLocked) return;
+    if (!hasDueSubstitutions(substitutions)) return;
+
+    const res = runDueSubstitutions({
+      substitutions, schedule, classSubjects, timeslots, teachers, classes, lunchGroups,
+    });
+    if (!res.changed) return;
+
+    setSchedule(res.schedule);
+    setClassSubjects(res.classSubjects);
+    setSubstitutions(res.substitutions);
+
+    const nameOf = (id) => teachers.find((t) => t.id === id)?.name || "ustoz";
+    res.events.forEach((ev) => {
+      const s = ev.sub;
+      if (ev.type === "reverted") {
+        const r = ev.summary || {};
+        const issues = [];
+        if (r.conflicts > 0) issues.push(`${r.conflicts} soatda ustoz ziddiyati`);
+        if (r.missing > 0) issues.push(`${r.missing} dars topilmadi`);
+        addToast(
+          `Vaqtinchalik almashtirish tugadi (${fmtDate(s.endDate)}): darslar ${nameOf(s.oldTeacherId)}ga qaytarildi`
+            + (issues.length ? ` — ${issues.join(", ")}, jadvalni tekshiring` : " ✓"),
+          issues.length ? "warning" : "success"
+        );
+      } else if (ev.type === "applied") {
+        addToast(
+          `Rejalashtirilgan almashtirish boshlandi: ${nameOf(s.oldTeacherId)} → ${nameOf(s.newTeacherId)} (${fmtDate(s.startDate)} – ${fmtDate(s.endDate)})`,
+          "info"
+        );
+      } else if (ev.type === "skipped") {
+        addToast(
+          `Rejalashtirilgan almashtirish (${nameOf(s.oldTeacherId)} → ${nameOf(s.newTeacherId)}) muddati o'tib ketgani uchun qo'llanmadi`,
+          "warning"
+        );
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, isDistrictAdmin, dataReady, syncPending, cloudBlocked, subBlocked, contentLocked, substitutions, subsTick]);
+
   function warnReadOnly() {
     addToast(
       "Bulutga ulanish yo'q — o'zgartirish saqlanmaydi. Internetni tekshiring va «Qayta urinish» tugmasini bosing",
@@ -956,7 +1031,12 @@ export default function App() {
           onRestore={handleRestoreVersion}
         />
       );
-      case "teacherReplace": return <TeacherReplacePage {...pageProps} setSchedule={setSchedule} setClassSubjects={setClassSubjects} />;
+      case "teacherReplace": return (
+        <TeacherReplacePage
+          {...pageProps} setSchedule={setSchedule} setClassSubjects={setClassSubjects}
+          substitutions={substitutions} setSubstitutions={setSubstitutions}
+        />
+      );
       case "analytics": return <AnalyticsPage {...pageProps} shifts={shifts} />;
       case "importExport": return <ImportExportPage {...pageProps} settings={settings} shifts={shifts} setSubjects={setSubjects} setTeachers={setTeachers} />;
       case "emaktab": return (
@@ -978,6 +1058,7 @@ export default function App() {
           setClassSubjects={setClassSubjects} setLunchGroups={setLunchGroups}
           shifts={shifts} setShifts={setShifts}
           savedSchedules={savedSchedules} setSavedSchedules={setSavedSchedules}
+          substitutions={substitutions} setSubstitutions={setSubstitutions}
           {...pageProps}
         />
       );

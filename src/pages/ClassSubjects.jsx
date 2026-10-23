@@ -25,6 +25,22 @@ function teacherSubjectIds(teacher) {
   return Array.isArray(teacher.subjectIds) ? teacher.subjectIds : (teacher.subjectId ? [teacher.subjectId] : []);
 }
 
+// «Ustozga dars biriktirish» oynasidagi bo'lim kartasi (oddiy / 2 guruh / parallel / hovuz).
+// Render ichida e'lon qilinsa har o'zgarishda qayta mount bo'lardi — shuning uchun tashqarida.
+function AssignSection({ icon, title, hint, count, children }) {
+  return (
+    <div className="ta-section">
+      <div className="ta-section-head">
+        <span className="ta-section-icon">{icon}</span>
+        <span className="ta-section-title">{title}</span>
+        <span className="ta-section-count">{count}</span>
+        {hint && <span className="ta-section-hint">{hint}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
 function getGradeFromClassName(name = "") {
   const match = String(name).match(/^(\d+)/);
   return match ? Number(match[1]) : 0;
@@ -328,7 +344,9 @@ export default function ClassSubjectsPage({ classes, subjects, setSubjects, teac
   const [smartAllOpen, setSmartAllOpen] = useState(false);
   // 👨‍🏫 Ustozga dars biriktirish oynasi: ustoz → fan → sinflar
   const [assignOpen, setAssignOpen] = useState(false);
-  const [assignForm, setAssignForm] = useState({ teacherId: "", subjectId: "", classIds: [] });
+  // classIds — oddiy/parallel/juft qatorlar; splitGroups — {sinfId: 1|2};
+  // pools — {hovuzKalit: darajaIndeksi}
+  const [assignForm, setAssignForm] = useState({ teacherId: "", subjectId: "", classIds: [], splitGroups: {}, pools: {} });
 
   useEffect(() => {
     if (!selectedClassId && classes[0]?.id) setSelectedClassId(classes[0].id);
@@ -528,9 +546,14 @@ Davom etamizmi?`;
   }
 
   // ═══ USTOZGA DARS BIRIKTIRISH ═══
-  // Ustoz tanlanadi → uning fanlaridan sinflarda YOQILGANLARI chiqadi →
-  // fan tanlanadi → shu fan yoqilgan sinflar chiqadi → kerakli sinflar
-  // belgilanib "Biriktirish" bosiladi. Belgisi olingan sinfda ustoz bo'sh qoladi.
+  // Ustoz → fan → sinflar. Qator rejimiga qarab to'rt xil biriktiriladi:
+  //   • oddiy      — teacherId
+  //   • ✂️ 2 guruh — 1-guruh (teacherId) yoki 2-guruh (teacherId2) so'raladi
+  //   • 🔁 parallel — guruhdagi BARCHA sinflarga bitta ustoz (groupKey)
+  //   • 🎯 hovuz    — hovuz tanlanib, ustoz bitta darajaga (levelGroups[i]) o'tiradi
+  // Boshqa ustoz egallagan joy ro'yxatda ko'rinmaydi / o'chirilgan bo'ladi.
+
+  const ASSIGN_EMPTY_FORM = { teacherId: "", subjectId: "", classIds: [], splitGroups: {}, pools: {} };
 
   // Fan kamida bitta sinfda yoqilganmi?
   function subjectEnabledAnywhere(subjectId) {
@@ -550,81 +573,195 @@ Davom etamizmi?`;
     const { own, other } = assignSubjectsFor(teacherId);
     return [...own, ...other];
   }
-  // Shu fan yoqilgan sinflar — qatori bilan birga (alifbo bo'yicha).
-  // BOSHQA ustoz biriktirilgan sinflar chiqmaydi: bir fan bir sinfda bitta
-  // ustozniki, uni bu oynadan tortib olib bo'lmaydi (qatordan o'zgartiriladi).
-  function assignRowsFor(subjectId, teacherId = assignForm.teacherId) {
-    if (!subjectId) return [];
-    return sortedClasses
+
+  // Qator rejimi
+  function assignModeOf(a) {
+    if (a.levelGroupEnabled && String(a.levelGroupKey || "").trim()) return "pool";
+    if (a.splitEnabled) return "split";
+    if (String(a.groupKey || "").trim()) return "parallel";
+    return "simple";
+  }
+
+  // Fan yoqilgan sinflarni rejimlarga ajratib beradi.
+  // simple/parallel/split — qatorlar; pools — hovuzlar (a'zolar + darajalar).
+  function assignCatalog(subjectId, teacherId) {
+    const out = { simple: [], split: [], parallel: [], pools: [], hiddenCount: 0 };
+    if (!subjectId) return out;
+    const rows = sortedClasses
       .map((c) => ({ cls: c, a: (classSubjects[c.id] || []).find((x) => x?.subjectId === subjectId) }))
-      .filter((r) => r.a && (!r.a.teacherId || r.a.teacherId === teacherId));
+      .filter((r) => r.a);
+    const poolMap = new Map();
+    const parMap = new Map();
+    rows.forEach((r) => {
+      const mode = assignModeOf(r.a);
+      if (mode === "pool") {
+        const key = String(r.a.levelGroupKey).trim();
+        if (!poolMap.has(key)) poolMap.set(key, { key, members: [], first: r.a });
+        poolMap.get(key).members.push(r);
+        return;
+      }
+      if (mode === "split") {
+        const t1 = r.a.teacherId || "", t2 = r.a.teacherId2 || "";
+        const free1 = !t1 || t1 === teacherId, free2 = !t2 || t2 === teacherId;
+        if (!free1 && !free2) { out.hiddenCount += 1; return; }
+        out.split.push({ ...r, free1, free2 });
+        return;
+      }
+      if (mode === "parallel") {
+        const key = String(r.a.groupKey).trim();
+        if (!parMap.has(key)) parMap.set(key, { key, members: [] });
+        parMap.get(key).members.push(r);
+        return;
+      }
+      const t = r.a.teacherId || "";
+      if (t && t !== teacherId) { out.hiddenCount += 1; return; }
+      out.simple.push(r);
+    });
+    parMap.forEach((g) => {
+      // Guruhda bironta a'zoda boshqa ustoz bo'lsa — butun guruh boshqaniki
+      const other = g.members.find((r) => r.a.teacherId && r.a.teacherId !== teacherId);
+      if (other) { out.hiddenCount += g.members.length; return; }
+      out.parallel.push(g);
+    });
+    poolMap.forEach((pl) => {
+      const cfg = getSharedLevelConfig(subjectId, pl.first);
+      const groups = makeLevelGroups(cfg.levelGroupCount || pl.first.levelGroupCount || 3, cfg.levelGroups || pl.first.levelGroups);
+      const slots = groups.map((g, i) => ({
+        index: i,
+        name: g.name || `${i + 1}-daraja`,
+        teacherId: g.teacherId || "",
+        free: !g.teacherId || g.teacherId === teacherId,
+      }));
+      if (!slots.some((s) => s.free)) { out.hiddenCount += pl.members.length; return; }
+      out.pools.push({ key: pl.key, members: pl.members, slots, weeklyHours: Number(cfg.weeklyHours || pl.first.weeklyHours || 0) });
+    });
+    return out;
   }
-  // Boshqa ustozda bo'lgani uchun yashirilgan sinflar soni
-  function assignHiddenCount(subjectId, teacherId) {
-    if (!subjectId) return 0;
-    return classes.filter((c) => (classSubjects[c.id] || []).some((x) => x?.subjectId === subjectId && x.teacherId && x.teacherId !== teacherId)).length;
-  }
-  // Parallel ("bir vaqtda 2 fan") guruhida ustoz UMUMIY — a'zo sinflar birga belgilanadi
-  function assignLinkedIds(subjectId, cls, a) {
-    const key = a?.pairEnabled ? String(a.pairGroupKey || "").trim() : "";
-    if (!key) return [cls.id];
-    return assignRowsFor(subjectId, assignForm.teacherId)
-      .filter((r) => r.a.pairEnabled && String(r.a.pairGroupKey || "").trim() === key && !r.a.levelGroupEnabled)
-      .map((r) => r.cls.id);
-  }
-  // Ustoz allaqachon kiradigan sinflar oldindan belgilangan bo'ladi
+
+  // Ustoz allaqachon kiradigan joylar — oldindan belgilangan bo'ladi
   function assignPreselect(teacherId, subjectId) {
-    return assignRowsFor(subjectId, teacherId)
-      .filter((r) => !r.a.levelGroupEnabled && r.a.teacherId === teacherId)
-      .map((r) => r.cls.id);
+    const cat = assignCatalog(subjectId, teacherId);
+    const classIds = [];
+    cat.simple.forEach((r) => { if (r.a.teacherId === teacherId) classIds.push(r.cls.id); });
+    cat.parallel.forEach((g) => { if (g.members.some((r) => r.a.teacherId === teacherId)) g.members.forEach((r) => classIds.push(r.cls.id)); });
+    const splitGroups = {};
+    cat.split.forEach((r) => {
+      if (r.a.teacherId === teacherId) splitGroups[r.cls.id] = 1;
+      else if (r.a.teacherId2 === teacherId) splitGroups[r.cls.id] = 2;
+    });
+    const pools = {};
+    cat.pools.forEach((pl) => {
+      const mine = pl.slots.find((s) => s.teacherId === teacherId);
+      if (mine) pools[pl.key] = mine.index;
+    });
+    return { classIds, splitGroups, pools };
   }
   function openAssignModal() {
     const firstT = sortByName(teachers)[0];
     const tid = firstT?.id || "";
     const sid = assignSubjectList(tid)[0]?.id || "";
-    setAssignForm({ teacherId: tid, subjectId: sid, classIds: assignPreselect(tid, sid) });
+    setAssignForm({ ...ASSIGN_EMPTY_FORM, teacherId: tid, subjectId: sid, ...assignPreselect(tid, sid) });
     setAssignOpen(true);
   }
   function setAssignTeacher(teacherId) {
-    const subs = assignSubjectList(teacherId);
-    const sid = subs.some((s) => s.id === assignForm.subjectId) ? assignForm.subjectId : (subs[0]?.id || "");
-    setAssignForm({ teacherId, subjectId: sid, classIds: assignPreselect(teacherId, sid) });
+    // Oldingi fan faqat yangi ustozning O'Z fani bo'lsa qoladi, aks holda
+    // uning birinchi fani (yo'q bo'lsa — sinflarda yoqilgan birinchi fan)
+    const { own, other } = assignSubjectsFor(teacherId);
+    const sid = own.some((s) => s.id === assignForm.subjectId) ? assignForm.subjectId : (own[0]?.id || other[0]?.id || "");
+    setAssignForm({ ...ASSIGN_EMPTY_FORM, teacherId, subjectId: sid, ...assignPreselect(teacherId, sid) });
   }
   function setAssignSubject(subjectId) {
-    setAssignForm((p) => ({ ...p, subjectId, classIds: assignPreselect(p.teacherId, subjectId) }));
+    setAssignForm((p) => ({ ...ASSIGN_EMPTY_FORM, teacherId: p.teacherId, subjectId, ...assignPreselect(p.teacherId, subjectId) }));
   }
-  function toggleAssignClass(cls, a) {
-    const ids = assignLinkedIds(assignForm.subjectId, cls, a);
+  function toggleAssignIds(ids) {
     setAssignForm((p) => {
-      const on = p.classIds.includes(cls.id);
+      const on = ids.every((id) => p.classIds.includes(id));
       const rest = p.classIds.filter((x) => !ids.includes(x));
       return { ...p, classIds: on ? rest : [...rest, ...ids] };
     });
   }
+  // ✂️ 2 guruh: qaysi guruh (1|2); qayta bosilsa — olib tashlanadi
+  function setAssignSplit(classId, group) {
+    setAssignForm((p) => {
+      const sg = { ...p.splitGroups };
+      if (sg[classId] === group) delete sg[classId]; else sg[classId] = group;
+      return { ...p, splitGroups: sg };
+    });
+  }
+  // 🎯 Hovuz: qaysi daraja; qayta bosilsa — olib tashlanadi
+  function setAssignPool(poolKey, index) {
+    setAssignForm((p) => {
+      const pools = { ...p.pools };
+      if (pools[poolKey] === index) delete pools[poolKey]; else pools[poolKey] = index;
+      return { ...p, pools };
+    });
+  }
+
+  // Formadan YANGI classSubjects yasaydi (saqlamaydi). Oldindan ko'rish va
+  // saqlash bir xil yo'ldan o'tadi — ekrandagi "yangi yuklama" aniq bo'ladi.
+  function buildAssignNext(form) {
+    const { teacherId, subjectId } = form;
+    const cat = assignCatalog(subjectId, teacherId);
+    const want = new Set(form.classIds);
+    let added = 0, removed = 0;
+    const next = { ...classSubjects };
+    const patchRow = (cid, fn) => {
+      next[cid] = (next[cid] || []).map((a) => (a?.subjectId === subjectId ? fn(a) : a));
+    };
+    // oddiy + parallel + juft (teacherId)
+    const plain = [...cat.simple, ...cat.parallel.flatMap((g) => g.members)];
+    plain.forEach(({ cls, a }) => {
+      const cur = a.teacherId || "";
+      if (want.has(cls.id)) {
+        if (cur === teacherId) return;
+        added += 1;
+        patchRow(cls.id, (x) => ({ ...x, teacherId }));
+      } else if (cur === teacherId) {
+        removed += 1;
+        patchRow(cls.id, (x) => ({ ...x, teacherId: "" }));
+      }
+    });
+    // ✂️ 2 guruh
+    cat.split.forEach(({ cls, a }) => {
+      const g = form.splitGroups[cls.id] || 0;
+      const was1 = a.teacherId === teacherId, was2 = a.teacherId2 === teacherId;
+      const patch = {};
+      if (g === 1 && !was1) { patch.teacherId = teacherId; added += 1; }
+      if (g !== 1 && was1) { patch.teacherId = ""; removed += 1; }
+      if (g === 2 && !was2) { patch.teacherId2 = teacherId; added += 1; }
+      if (g !== 2 && was2) { patch.teacherId2 = ""; removed += 1; }
+      if (Object.keys(patch).length) patchRow(cls.id, (x) => ({ ...x, ...patch }));
+    });
+    // 🎯 Hovuz — daraja ustozi guruhning HAMMA a'zosiga bir xil yoziladi
+    cat.pools.forEach((pl) => {
+      const idx = Object.prototype.hasOwnProperty.call(form.pools, pl.key) ? form.pools[pl.key] : -1;
+      const wasIdx = pl.slots.findIndex((s) => s.teacherId === teacherId);
+      if (idx === wasIdx) return;
+      if (idx >= 0) added += 1;
+      if (wasIdx >= 0) removed += 1;
+      // Nom/xona asl guruhdan olinadi, faqat daraja ustozi o'zgaradi
+      const first = pl.members[0].a;
+      const cfg = getSharedLevelConfig(subjectId, first);
+      const orig = makeLevelGroups(pl.slots.length, cfg.levelGroups || first.levelGroups);
+      const nextGroups = orig.map((g, i) => {
+        if (i === idx) return { ...g, teacherId };
+        if (g.teacherId === teacherId) return { ...g, teacherId: "" };
+        return g;
+      });
+      pl.members.forEach(({ cls }) => {
+        patchRow(cls.id, (x) => ({ ...x, levelGroupCount: nextGroups.length, levelGroups: nextGroups.map((g) => ({ ...g })) }));
+      });
+    });
+    return { next, added, removed };
+  }
+
   function applyTeacherAssign() {
-    const { teacherId, subjectId, classIds } = assignForm;
+    const { teacherId, subjectId } = assignForm;
     const teacher = teachers.find((t) => t.id === teacherId);
     const subject = subjectById(subjectId);
     if (!teacher) { toast?.("Ustoz tanlang", "warning"); return; }
     if (!subject) { toast?.("Fan tanlang", "warning"); return; }
-    const want = new Set(classIds);
-    let added = 0, removed = 0, replaced = 0;
-    const next = { ...classSubjects };
-    Object.entries(next).forEach(([cid, list]) => {
-      next[cid] = (list || []).map((a) => {
-        if (a?.subjectId !== subjectId || a.levelGroupEnabled) return a;
-        const cur = a.teacherId || "";
-        // Boshqa ustozniki — tegilmaydi (ro'yxatda ham ko'rinmagan)
-        if (cur && cur !== teacherId) return a;
-        if (want.has(cid)) {
-          if (cur === teacherId) return a;
-          added += 1;
-          return { ...a, teacherId };
-        }
-        if (cur === teacherId) { removed += 1; return { ...a, teacherId: "" }; }
-        return a;
-      });
-    });
+    const { next, added, removed } = buildAssignNext(assignForm);
     if (!added && !removed) { toast?.("O'zgarish yo'q", "info"); setAssignOpen(false); return; }
     // Ustoz o'z ro'yxatida yo'q fandan kirsa — fan ustozga ham yoziladi,
     // aks holda qatordagi «ustoz» tanlovi uni ko'rsatmay bo'sh turardi.
@@ -634,11 +771,12 @@ Davom etamizmi?`;
     setClassSubjects(next);
     setAssignOpen(false);
     const parts = [];
-    if (added) parts.push(`${added} sinfga biriktirildi`);
-    if (removed) parts.push(`${removed} sinfdan olindi`);
+    if (added) parts.push(`${added} joyga biriktirildi`);
+    if (removed) parts.push(`${removed} joydan olindi`);
     if (gained) parts.push("fan ustoz ro'yxatiga qo'shildi");
     toast?.(`${teacher.name} — ${subject.name}: ${parts.join(", ")} ✓`, "success");
   }
+
   // Fanga biriktirilgan ustozlar — alifbo bo'yicha
   function teachersForSubject(subjectId) {
     return sortByName(teachers.filter(t => teacherSubjectIds(t).includes(subjectId)));
@@ -2989,109 +3127,225 @@ Fan bilan birga ular ham o'chsinmi?`;
         const { own: aOwnSubjects, other: aOtherSubjects } = assignSubjectsFor(assignForm.teacherId);
         const aSubjects = [...aOwnSubjects, ...aOtherSubjects];
         const aSubject = subjectById(assignForm.subjectId);
-        const aRows = assignRowsFor(assignForm.subjectId, assignForm.teacherId);
-        const hiddenCount = assignHiddenCount(assignForm.subjectId, assignForm.teacherId);
+        const cat = assignCatalog(assignForm.subjectId, assignForm.teacherId);
+        const total = cat.simple.length + cat.split.length + cat.parallel.length + cat.pools.length;
         const subjectIsNew = aSubject && aTeacher && !teacherSubjectIds(aTeacher).includes(aSubject.id);
-        const selectable = aRows.filter((r) => !r.a.levelGroupEnabled);
-        const allOn = selectable.length > 0 && selectable.every((r) => assignForm.classIds.includes(r.cls.id));
-        const selHours = aRows
-          .filter((r) => assignForm.classIds.includes(r.cls.id))
-          .reduce((s, r) => s + Number(r.a.weeklyHours || 0), 0);
+        const tName = (id) => teachers.find((t) => t.id === id)?.name || "";
+        const preview = aTeacher && aSubject ? buildAssignNext(assignForm) : null;
         const curLoad = teacherHourMap[assignForm.teacherId] || 0;
+        const newLoad = preview ? (computeTeacherHours(preview.next)[assignForm.teacherId] || 0) : curLoad;
+        const maxH = Number(aTeacher?.maxWeeklyHours || 0);
+        const picked =
+          assignForm.classIds.length +
+          Object.keys(assignForm.splitGroups).length +
+          Object.keys(assignForm.pools).length;
+        const allSimpleOn = cat.simple.length > 0 && cat.simple.every((r) => assignForm.classIds.includes(r.cls.id));
+        const chip = (text, cls) => <span className={`ta-chip ${cls || ""}`}>{text}</span>;
+        // 🔗 Juft (bir vaqtda 2 fan) guruhida 1-guruh ustozi umumiy — a'zolar birga belgilanadi
+        const pairLinkedIds = (a, cls) => {
+          const key = a.pairEnabled ? String(a.pairGroupKey || "").trim() : "";
+          if (!key) return [cls.id];
+          return cat.simple.filter((r) => r.a.pairEnabled && String(r.a.pairGroupKey || "").trim() === key).map((r) => r.cls.id);
+        };
         return (
-          <div onClick={() => setAssignOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
-            <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--card-bg,#fff)", borderRadius: 16, padding: 22, width: "100%", maxWidth: 680, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 24px 70px rgba(0,0,0,.35)" }}>
-              <h3 style={{ margin: "0 0 4px" }}>👨‍🏫 Ustozga dars biriktirish</h3>
-              <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 16 }}>
-                Ustozni va fanni tanlang — shu fan yoqilgan, hali boshqa ustozga berilmagan sinflar chiqadi. Ustoz kiradigan sinflarni belgilab «Biriktirish»ni bosing. Belgisi olingan sinfda ustoz bo'sh qoladi. Ustoz o'z ro'yxatida yo'q fandan ham kirishi mumkin.
+          <div className="ta-backdrop" onClick={() => setAssignOpen(false)}>
+            <div className="ta-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="ta-head">
+                <div className="ta-head-icon">👨‍🏫</div>
+                <div>
+                  <div className="ta-title">Ustozga dars biriktirish</div>
+                  <div className="ta-sub">Ustoz va fanni tanlang — fan yoqilgan sinflar rejimi bo'yicha chiqadi: oddiy, 2 guruh, parallel, hovuz.</div>
+                </div>
+                <button type="button" className="ta-close" onClick={() => setAssignOpen(false)} aria-label="Yopish">✕</button>
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                <div>
-                  <label className="form-label">Ustoz</label>
-                  <select className="form-control" value={assignForm.teacherId} onChange={(e) => setAssignTeacher(e.target.value)}>
-                    <option value="">— ustoz —</option>
-                    {aTeachers.map((t) => <option key={t.id} value={t.id}>{t.name} ({teacherHourMap[t.id] || 0} soat)</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="form-label">Fan (sinflarda yoqilgan)</label>
-                  <select className="form-control" value={assignForm.subjectId} onChange={(e) => setAssignSubject(e.target.value)} disabled={!aSubjects.length}>
-                    {aSubjects.length === 0 && <option value="">— fan topilmadi —</option>}
-                    {aOwnSubjects.length > 0 && (
-                      <optgroup label="Ustozning fanlari">
-                        {aOwnSubjects.map((s) => <option key={s.id} value={s.id}>{langIcon(subjectLangOf(s))} {s.name}</option>)}
-                      </optgroup>
-                    )}
-                    {aOtherSubjects.length > 0 && (
-                      <optgroup label="Boshqa fanlar (ustozga qo'shiladi)">
-                        {aOtherSubjects.map((s) => <option key={s.id} value={s.id}>{langIcon(subjectLangOf(s))} {s.name}</option>)}
-                      </optgroup>
-                    )}
-                  </select>
-                </div>
-              </div>
-
-              {aTeacher && aSubjects.length === 0 && (
-                <div style={{ marginTop: 10, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: 10, fontSize: 13, color: "#92400e" }}>
-                  Hali hech bir sinfda fan yoqilmagan. Avval sinfga fan qo'shing.
-                </div>
-              )}
-              {subjectIsNew && (
-                <div style={{ marginTop: 10, background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 10, padding: 10, fontSize: 13, color: "#1e40af" }}>
-                  «{aSubject.name}» hozircha «{aTeacher.name}» fanlari ro'yxatida yo'q — biriktirilganda avtomatik qo'shiladi.
-                </div>
-              )}
-
-              {aSubject && (
-                <>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 14, gap: 8, flexWrap: "wrap" }}>
-                    <label className="form-label" style={{ margin: 0 }}>
-                      «{aSubject.name}» yoqilgan sinflar ({assignForm.classIds.length} / {selectable.length} tanlandi)
-                    </label>
-                    {selectable.length > 0 && (
-                      <button type="button" className="btn btn-sm btn-secondary"
-                        onClick={() => setAssignForm((p) => ({ ...p, classIds: allOn ? [] : selectable.map((r) => r.cls.id) }))}>
-                        {allOn ? "Barchasini olib tashlash" : "Barchasini belgilash"}
-                      </button>
-                    )}
+              <div className="ta-body">
+                <div className="ta-pickers">
+                  <div className="ta-picker">
+                    <label className="ta-label"><span className="ta-step">1</span> Ustoz</label>
+                    <select className="form-control" value={assignForm.teacherId} onChange={(e) => setAssignTeacher(e.target.value)}>
+                      <option value="">— ustoz —</option>
+                      {aTeachers.map((t) => <option key={t.id} value={t.id}>{t.name} · {teacherHourMap[t.id] || 0} soat</option>)}
+                    </select>
                   </div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 220, overflowY: "auto", padding: 6, marginTop: 6, border: "1px solid var(--card-border,#e5e7eb)", borderRadius: 10 }}>
-                    {aRows.length === 0 ? (
-                      <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                        {hiddenCount ? "Bu fan yoqilgan barcha sinflar boshqa ustozlarga biriktirilgan" : "Bu fan hech bir sinfda yoqilmagan"}
-                      </span>
-                    ) : aRows.map(({ cls, a }) => {
-                      const on = assignForm.classIds.includes(cls.id);
-                      const pooled = Boolean(a.levelGroupEnabled);
-                      const mine = Boolean(a.teacherId) && a.teacherId === assignForm.teacherId;
-                      const linked = assignLinkedIds(assignForm.subjectId, cls, a).length > 1;
-                      const title = pooled
-                        ? "Hovuz (daraja guruhi) — ustozlar ⚙️ Sozlamalardan belgilanadi"
-                        : mine ? "Hozir shu ustoz kiradi" : "Ustoz biriktirilmagan";
-                      return (
-                        <button key={cls.id} type="button" disabled={pooled} onClick={() => toggleAssignClass(cls, a)} title={title}
-                          className={`btn btn-sm ${on ? "btn-success" : "btn-secondary"}`}
-                          style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-start", gap: 0, lineHeight: 1.25, opacity: pooled ? 0.55 : 1 }}>
-                          <span>{on ? "✓ " : ""}{cls.name} · {a.weeklyHours || 0} s{linked ? " 🔗" : ""}</span>
-                          <span style={{ fontSize: 10, opacity: 0.85 }}>
-                            {pooled ? "🎯 hovuz" : mine ? "✓ shu ustoz" : "— bo'sh —"}
-                          </span>
+                  <div className="ta-picker">
+                    <label className="ta-label"><span className="ta-step">2</span> Fan</label>
+                    <select className="form-control" value={assignForm.subjectId} onChange={(e) => setAssignSubject(e.target.value)} disabled={!aSubjects.length}>
+                      {aSubjects.length === 0 && <option value="">— sinflarda yoqilgan fan yo'q —</option>}
+                      {aOwnSubjects.length > 0 && (
+                        <optgroup label="Ustozning fanlari">
+                          {aOwnSubjects.map((s) => <option key={s.id} value={s.id}>{langIcon(subjectLangOf(s))} {s.name}</option>)}
+                        </optgroup>
+                      )}
+                      {aOtherSubjects.length > 0 && (
+                        <optgroup label="Boshqa fanlar (ustozga qo'shiladi)">
+                          {aOtherSubjects.map((s) => <option key={s.id} value={s.id}>{langIcon(subjectLangOf(s))} {s.name}</option>)}
+                        </optgroup>
+                      )}
+                    </select>
+                  </div>
+                </div>
+
+                {aTeacher && aSubjects.length === 0 && (
+                  <div className="ta-note ta-note-warn">Hali hech bir sinfda fan yoqilmagan. Avval sinfga fan qo'shing.</div>
+                )}
+                {subjectIsNew && (
+                  <div className="ta-note ta-note-info">«{aSubject.name}» hozircha «{aTeacher.name}» fanlari ro'yxatida yo'q — biriktirilganda avtomatik qo'shiladi.</div>
+                )}
+
+                {aSubject && aTeacher && (
+                  <>
+                    <div className="ta-list-head">
+                      <span className="ta-step">3</span>
+                      <span>«{aSubject.name}» yoqilgan sinflar</span>
+                      <span className="ta-muted">· {picked} tanlandi</span>
+                      {cat.simple.length > 1 && (
+                        <button type="button" className="btn btn-sm btn-secondary ta-all"
+                          onClick={() => toggleAssignIds(cat.simple.map((r) => r.cls.id))}>
+                          {allSimpleOn ? "Oddiylarni olib tashlash" : "Oddiylarni belgilash"}
                         </button>
-                      );
-                    })}
-                  </div>
-                  <div style={{ marginTop: 10, background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 10, padding: 10, fontSize: 13, color: "#065f46" }}>
-                    <b>{aTeacher?.name}</b> — {aSubject.name}: {assignForm.classIds.length} sinf, {selHours} soat.
-                    {" "}Ustozning hozirgi yuklamasi: <b>{curLoad}</b> soat/hafta.
-                    {hiddenCount > 0 && <div style={{ marginTop: 4, color: "#92400e" }}>ℹ️ {hiddenCount} ta sinf boshqa ustozga biriktirilgan, shuning uchun ro'yxatda yo'q. Almashtirish uchun o'sha sinf qatoridan ustozni o'zgartiring.</div>}
-                  </div>
-                </>
-              )}
+                      )}
+                    </div>
 
-              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 18 }}>
-                <button className="btn btn-secondary" type="button" onClick={() => setAssignOpen(false)}>Bekor qilish</button>
-                <button className="btn btn-primary" type="button" onClick={applyTeacherAssign} disabled={!aTeacher || !aSubject}>👨‍🏫 Biriktirish</button>
+                    {total === 0 && (
+                      <div className="ta-empty">
+                        {cat.hiddenCount ? "Bu fan yoqilgan barcha sinflar boshqa ustozlarga biriktirilgan." : "Bu fan hech bir sinfda yoqilmagan."}
+                      </div>
+                    )}
+
+                    {cat.simple.length > 0 && (
+                      <AssignSection icon="📘" title="Oddiy" count={cat.simple.length} hint="bosilsa belgilanadi">
+                        <div className="ta-grid">
+                          {cat.simple.map(({ cls, a }) => {
+                            const on = assignForm.classIds.includes(cls.id);
+                            const mine = a.teacherId === assignForm.teacherId && Boolean(a.teacherId);
+                            return (
+                              <button key={cls.id} type="button" className={`ta-card ${on ? "on" : ""}`} onClick={() => toggleAssignIds(pairLinkedIds(a, cls))}>
+                                <span className="ta-card-check">{on ? "✓" : ""}</span>
+                                <span className="ta-card-name">{cls.name}</span>
+                                <span className="ta-card-meta">{a.weeklyHours || 0} soat{a.pairEnabled ? " · 🔗 juft" : ""}</span>
+                                {mine ? chip("shu ustoz", "ok") : chip("bo'sh", "")}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </AssignSection>
+                    )}
+
+                    {cat.parallel.length > 0 && (
+                      <AssignSection icon="🔁" title="Parallel" count={cat.parallel.length} hint="guruhdagi hamma sinfga bitta ustoz">
+                        <div className="ta-grid">
+                          {cat.parallel.map((g) => {
+                            const ids = g.members.map((r) => r.cls.id);
+                            const on = ids.every((id) => assignForm.classIds.includes(id));
+                            const mine = g.members.some((r) => r.a.teacherId === assignForm.teacherId);
+                            const h = g.members[0].a.weeklyHours || 0;
+                            return (
+                              <button key={g.key} type="button" className={`ta-card ta-card-wide ${on ? "on" : ""}`} onClick={() => toggleAssignIds(ids)} title={g.key}>
+                                <span className="ta-card-check">{on ? "✓" : ""}</span>
+                                <span className="ta-card-name">{g.members.map((r) => r.cls.name).join(" + ")}</span>
+                                <span className="ta-card-meta">{h} soat · bir vaqtda, 1 marta hisoblanadi</span>
+                                {mine ? chip("shu ustoz", "ok") : chip("bo'sh", "")}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </AssignSection>
+                    )}
+
+                    {cat.split.length > 0 && (
+                      <AssignSection icon="✂️" title="2 guruhga bo'lingan" count={cat.split.length} hint="qaysi guruhga kirishini tanlang">
+                        <div className="ta-grid">
+                          {cat.split.map(({ cls, a, free1, free2 }) => {
+                            const g = assignForm.splitGroups[cls.id] || 0;
+                            const n1 = a.groupName1 || "1-guruh", n2 = a.groupName2 || "2-guruh";
+                            return (
+                              <div key={cls.id} className={`ta-card ta-card-static ${g ? "on" : ""}`}>
+                                <span className="ta-card-check">{g ? "✓" : ""}</span>
+                                <span className="ta-card-name">{cls.name}</span>
+                                <span className="ta-card-meta">{a.weeklyHours || 0} soat</span>
+                                <div className="ta-seg">
+                                  <button type="button" disabled={!free1} className={g === 1 ? "on" : ""} onClick={() => setAssignSplit(cls.id, 1)}
+                                    title={free1 ? n1 : `${n1}: ${tName(a.teacherId)}`}>
+                                    {n1}{!free1 && <small> · {tName(a.teacherId)}</small>}
+                                  </button>
+                                  <button type="button" disabled={!free2} className={g === 2 ? "on" : ""} onClick={() => setAssignSplit(cls.id, 2)}
+                                    title={free2 ? n2 : `${n2}: ${tName(a.teacherId2)}`}>
+                                    {n2}{!free2 && <small> · {tName(a.teacherId2)}</small>}
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </AssignSection>
+                    )}
+
+                    {cat.pools.length > 0 && (
+                      <AssignSection icon="🎯" title="Hovuz (daraja guruhi)" count={cat.pools.length} hint="ustoz bitta darajaga o'tiradi">
+                        <div className="ta-pools">
+                          {cat.pools.map((pl) => {
+                            const sel = Object.prototype.hasOwnProperty.call(assignForm.pools, pl.key) ? assignForm.pools[pl.key] : -1;
+                            return (
+                              <div key={pl.key} className={`ta-pool ${sel >= 0 ? "on" : ""}`}>
+                                <div className="ta-pool-head">
+                                  <span className="ta-card-check">{sel >= 0 ? "✓" : ""}</span>
+                                  <span className="ta-card-name">{pl.members.map((r) => r.cls.name).join(" + ")}</span>
+                                  <span className="ta-card-meta">{pl.weeklyHours} soat · {pl.slots.length} daraja</span>
+                                </div>
+                                <div className="ta-pool-key" title={pl.key}>{pl.key}</div>
+                                <div className="ta-slots">
+                                  {pl.slots.map((s) => {
+                                    const on = sel === s.index;
+                                    const mine = s.teacherId === assignForm.teacherId && Boolean(s.teacherId);
+                                    return (
+                                      <button key={s.index} type="button" disabled={!s.free} className={`ta-slot ${on ? "on" : ""}`}
+                                        onClick={() => setAssignPool(pl.key, s.index)}
+                                        title={s.free ? s.name : `${s.name}: ${tName(s.teacherId)}`}>
+                                        <span className="ta-slot-name">{on ? "✓ " : ""}{s.name}</span>
+                                        <span className="ta-slot-who">{s.free ? (mine ? "shu ustoz" : "bo'sh") : tName(s.teacherId)}</span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </AssignSection>
+                    )}
+
+                    {cat.hiddenCount > 0 && (
+                      <div className="ta-note ta-note-muted">
+                        ℹ️ {cat.hiddenCount} ta sinf/joy boshqa ustozga biriktirilgan, shuning uchun ro'yxatda yo'q. Almashtirish uchun o'sha sinf qatoridan ustozni o'zgartiring.
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
+              <div className="ta-foot">
+                {aTeacher && aSubject ? (
+                  <div className="ta-summary">
+                    <div className="ta-sum-item"><span className="ta-sum-k">Tanlandi</span><span className="ta-sum-v">{picked} joy</span></div>
+                    <div className="ta-sum-item">
+                      <span className="ta-sum-k">Yuklama</span>
+                      <span className="ta-sum-v">
+                        {curLoad} → <b className={newLoad > curLoad ? "up" : newLoad < curLoad ? "down" : ""}>{newLoad}</b> soat
+                        {maxH > 0 && <span className={`ta-max ${newLoad > maxH ? "over" : ""}`}> / {maxH}</span>}
+                      </span>
+                    </div>
+                    {preview && (preview.added || preview.removed) ? (
+                      <div className="ta-sum-item"><span className="ta-sum-k">O'zgarish</span><span className="ta-sum-v">+{preview.added} / −{preview.removed}</span></div>
+                    ) : (
+                      <div className="ta-sum-item"><span className="ta-sum-k">O'zgarish</span><span className="ta-sum-v ta-muted">yo'q</span></div>
+                    )}
+                  </div>
+                ) : <div />}
+                <div className="ta-actions">
+                  <button className="btn btn-secondary" type="button" onClick={() => setAssignOpen(false)}>Bekor qilish</button>
+                  <button className="btn btn-primary" type="button" onClick={applyTeacherAssign} disabled={!aTeacher || !aSubject || !preview || (!preview.added && !preview.removed)}>👨‍🏫 Biriktirish</button>
+                </div>
               </div>
             </div>
           </div>

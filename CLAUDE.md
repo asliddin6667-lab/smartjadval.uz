@@ -68,9 +68,9 @@ ham ustun.
 
 ### Ma'lumot holati — props drilling, store yo'q
 
-Maktab ma'lumotlari 11 ta state slice sifatida `App.jsx` da yashaydi:
+Maktab ma'lumotlari 12 ta state slice sifatida `App.jsx` da yashaydi:
 `settings, classes, subjects, teachers, classSubjects, rooms, timeslots, lunchGroups,
-shifts, schedule, savedSchedules`. Context/Redux/Zustand yo'q — hammasi `pageProps` orqali pastga
+shifts, schedule, savedSchedules, substitutions`. Context/Redux/Zustand yo'q — hammasi `pageProps` orqali pastga
 uzatiladi, sahifalar `setXxx` setterlarini oladi.
 
 Bu ro'yxat **uch joyda sinxron turishi shart**: `App.jsx` state'lari va `saveUserData`
@@ -948,6 +948,40 @@ aks holda localStorage kvotasi va bulutga ketadigan JSONB blob shishib ketadi.
 Saqlash oynasi ([SaveScheduleModal.jsx](src/components/SaveScheduleModal.jsx)) ikkala
 sahifada ham bir xil ishlatiladi.
 
+### Ustoz almashtirish (vaqtinchalik / doimiy)
+
+[TeacherReplace.jsx](src/pages/TeacherReplace.jsx) ketgan ustozning darslarini
+boshqa ustozga o'tkazadi — jadvalda ([replaceTeacher.js](src/utils/replaceTeacher.js),
+bo'sh katak qoldirmaydigan swap usuli) ham, sinf fanlarida
+([replaceTeacherSubjects.js](src/utils/replaceTeacherSubjects.js)) ham.
+
+- **Qamrov — (sinf, fan) juftlari**, sinf emas. Sinf fanlaridagi har bir ustoz
+  havolasi o'z faniga bog'lanadi (`findTeacherRefs`: `swapTeacherId` →
+  `swapSubjectId`, `weekAltTeacherId` → `weekAltSubjectId`, `pairTeacherId` →
+  `pairSubjectId`, `pairExtra[i]` → o'z `subjectId`si). Shu tufayli 7-A da
+  faqat matematikani ko'chirib, informatikani qoldirish mumkin.
+- **Har almashtirish `substitutions` kalitida YOZUV** bo'lib qoladi
+  ([teacherSubstitutions.js](src/utils/teacherSubstitutions.js)):
+  `scheduled` (sanasi kelmagan) → `active` (vaqtinchalik, amalda) /
+  `done` (doimiy) → `reverted`. Yozuvda qaytarish uchun iz saqlanadi:
+  `changes` (har dars qayerdan qayerga, swap sherigi bilan) va `csRows`
+  (sinf fanlarida qaysi joylar).
+- **Qaytarish — teskari amal, nusxani tiklash EMAS.** Oraliqda jadval qo'lda
+  tahrirlangan yoki qayta tuzilgan bo'lishi mumkin: swap'lar TESKARI tartibda
+  va bir necha o'tishda orqaga almashtiriladi (keyingi swap oldingisining
+  katagini band qilgan bo'lishi mumkin), joyida qolganlar yozilgan katagidan,
+  topilmaganlar butun jadvaldan (yangi ustoz, fan, sinf) bo'yicha qidirilib
+  nomi qaytariladi; sinf fanlarida hali yangi ustoz turgan joylargina eskiga
+  qaytadi. Natija `reverted: { movedBack, renamed, missing, conflicts, cs }`.
+- **Avtomatik ish — App.jsx dagi `runDueSubstitutions` effekti**: ma'lumot
+  yuklanganda, oyna faollashganda va har daqiqada. Sanasi kelganlar
+  qo'llanadi, muddati o'tganlar (tugash sanasi KIRADI, ya'ni `endDate < today`)
+  qaytariladi. Faqat o'qish holatlarida (`syncPending`, `cloudBlocked`,
+  `subBlocked`, `contentLocked`) ISHLAMAYDI — aks holda o'zgarish bulutga
+  bormay, keyin bulut nusxasi ostida qolib ketardi. Boshlanishi ham, tugashi
+  ham o'tib ketgan rejalashtirilgan yozuv qo'llanmaydi (`skipped`).
+- Sanalar lokal `YYYY-MM-DD` satr (`todayISO`), taqqoslash leksikografik.
+
 ### Supabase
 
 Klient [supabaseClient.js](src/services/supabaseClient.js) da — URL va **publishable**
@@ -1564,6 +1598,81 @@ ro'yxatini eMaktab o'quvchilari bilan solishtirib qo'shish / ko'chirish / chiqar
 - Chiqarish alohida belgi + `confirm()`; hamma amal `limit` bilan
   cheklanadi (odatiy 20) — birinchi yurish kichik bo'lsin. «🚀» tugmasi
   qo'shish+ko'chirishni cheksiz, sinf tartibida (`tartibKaliti`) bajaradi.
+
+### Turon ↔ ERP (erp.maktab.uz) o'quvchilar: ERP tugmachasini yoqish (alohida skript)
+
+[turon-erp-moslash.user.js](public/turon-erp-moslash.user.js) v6.3 (16.10.2026) — Turon
+jadvalidagi «ERP» tugmachasini (`input.erp-toggle[data-student-id]`) ERP
+ro'yxati bilan solishtirib yoqadi/o'chiradi. v4.2 (faqat sukutdagi Faol ro'yxat,
+«To'xtatish» GM holatini o'chirsa ham uchayotgan `async` davom etib yana
+saqlardi) o'rniga to'liq qayta yozilgan. `@noframes` — yashirin iframe ichida
+ishga tushmaydi.
+
+- **Bo'lim tanlash**: panelda `select` — «Barcha bo'limlar» + sahifadagi
+  `select[name=status]` variantlari (Faol/Nofaol/Bitirgan/Chetlatilgan/Ta'tilda/
+  Chiqib ketgan; GM `tem_statuslar` da keshlanadi, boshqa sahifada
+  `fetch(base)` dan o'qiladi). So'rov `?status=<v>&page=N`. Sahifalar
+  `SOZ.PARALLEL` (6) tadan guruhlab `Promise.all` bilan bir vaqtda o'qiladi
+  (`bolimOqi`), guruhlar orasida `SAHIFA_KUT` 100 ms; hajm parametri
+  (`HAJM_NOMLARI`) topilmasa serverning odatiy 12 ta/sahifasi bilan.
+- **Global moslik**: tanlangan bo'lim qaysi bo'lishidan qat'i nazar HAMMA
+  bo'limlar o'qiladi (takror yozuvlar — masalan Nofaol'dagi «… xxx» nusxa —
+  Faol'dagi aslini ERP'dan tortib olmasligi uchun), birga-bir bog'lanadi,
+  tugmacha esa faqat tanlangan bo'lim(lar)da o'zgartiriladi. Ustuvorlik:
+  ball → bo'lim tartibi (Faol avval) → allaqachon yoniq.
+- **3 daraja** (`moslashtir`): sana bir xil + ism ≥70 → ism aynan bir xil
+  (ikkala tomonda yagona; sana farq bo'lsa izoh) → ism ≥85 (ikkala tomonda sana
+  bor-u farq qilsa rad). `simNorm`: qisqa ism uzunining ichida to'liq bo'lsa
+  («Aliyev Ali» ⊂ «Aliyev Ali Valiyevich») 97%. Shubhali (ikki ERP nomzod
+  yaqin, Turonda bir xil ismli ikki qator, ikki Turon qatori bitta ERP
+  nomzodga teng yaqin) — tegilmaydi, Excel «Shubhalilar». `birthKey` ikkala
+  sana formatini (dd.mm.yyyy / yyyy-mm-dd) `yyyymmdd` ga keltiradi.
+- **Reja tasdig'i**: o'zgarishlar jadvali panel ichida, «Qo'llash/Bekor»;
+  «Tasdiqsiz avtomatik» belgisi bilan o'tkazib yuboriladi. ERP bazasi
+  `erp_meta.jami` dan kam yig'ilgan bo'lsa qizil ogoh.
+- **Yoqish** yashirin same-origin iframe'larda (`iframe.tem-iframe`,
+  `#tem-iframe-N`): sahifama-sahifa haqiqiy tugmacha bosiladi, `confirm/alert`
+  3 usulda o'chiriladi (wrapper, `unsafeWindow`, inline `<script>`),
+  SweetAlert/Bootstrap modal tasdig'i bosiladi; sahifada chiqmagani `q=<kod>`
+  qidiruv bilan. Tezlik (v6.2): iframe ichiga XHR/fetch sanagich kiritiladi
+  (`NET_JS` → `window.__temNet`), bosishdan keyin `sorovKut` so'rov tugashini
+  kutadi (ko'r-ko'rona `BOSISH_KUT` o'rniga); modal kutish moslashuvchan
+  (`MODAL`: birinchi marta 1.5 s, chiqmasa keyin 250 ms); 1-guruh yolg'iz
+  (zaxira rejim tekshiruvi), qolganlari `IFRAME_PARALLEL` (3) ishchi bilan
+  parallel (`qollash` → `guruhQollash`/`guruhQayta`/`guruhYakun`). Keyin
+  serverdan QAYTA O'QILIB tekshiriladi (`tekshir`): so'rovlar kuzatilgan bo'lsa
+  `SAQLASH_QISQA` (400 ms), bo'lmasa `SAQLASH_KUT` (2 s); saqlanmagandek
+  ko'ringanlar 2 s kutib yana o'qiladi, so'ng bir marta qayta bosiladi.
+- **Ikki Excel tugmasi**: «📊 Excel hisobot» — eski, SheetJS (`xlsx`, bezaksiz);
+  «🎨 To'liq hisobot» (`exportChiroyli`, v6.3) — ExcelJS 4.4.0 (`@require`
+  cdnjs) bilan bezatilgan: `Umumiy` (KPI kartalar, bo'lim/filial/ERP
+  jadvallari), `Faol · ERP yoniq` / `Faol · ERP o'chiq`, `Nofaol · ERP bor` /
+  `Nofaol · ERP yo'q`, boshqa bo'limlar alohida, `Shubhalilar`/`Yoqilmadi`
+  (bo'lsa), `ERP hisobot` (ERP tomonidan: Turonda bor/yo'q) va `ERP · Turonda
+  yo'q`, `Barcha filiallar` + `Filial · <nom>` har biriga. Umumiy yordamchi
+  `jadvalVaraq` (1-qator sarlavha, 2-izoh, 4-ustun boshlari, `ySplit:4`,
+  autoFilter, kenglik matn uzunligidan, juft qatorlar bo'yalgan, `teg`
+  funksiyasi bilan rangli kataklar — yashil/qizil/sariq/to'q/kul). Buning
+  uchun `natijaSaqla` qatorlariga `erpFish/erpSinf/erpBirth` qo'shilgan.
+  Yuklash `wb.xlsx.writeBuffer()` → Blob → `<a download>`.
+  Birinchi sahifada bosilgan-u birortasi saqlanmasa — **zaxira rejim**
+  (`tem_nav`): haqiqiy sahifa `q=<kod>` bilan birma-bir ochiladi, panel
+  yuklanganda `zaxiraDavom()` o'zi davom ettiradi.
+- **To'xtatish haqiqiy**: `HOLAT.toxtat` + `ToxtashXato` (`chk()`/`kut()` har
+  qadamda), fetch `AbortController`, reja tasdig'i `HOLAT.radEt`, iframe
+  `about:blank`, `tem_nav` o'chiriladi. Headless Chrome'da sinalgan: to'xtatgach
+  birorta so'rov ketmaydi.
+- **Panel**: `makePanel` — sudrab surish (pointer events, sensor ham), pastki
+  o'ng burchakdan o'lcham, A−/A+ masshtab, yig'ish, sarlavhani 2 marta bosish
+  — asl holat; geometriya GM `tem_ui`. Jurnal (`log`) + progress + bo'limlar
+  jadvali + 8 ta ko'rsatkich.
+- Natija GM `tem_natija` (bo'lim, kod, filial, daraja, sabab, natija). Excel:
+  Umumiy (bo'lim/filial kesimi), O'zgarishlar, «O'chiq - <bo'lim>», ERPda
+  topilmaganlar, Shubhalilar, Yoqilmadi, TURONda topilmagan ERP.
+- Sinov usuli: skript nusxasida `location.hostname` shartlari `true`,
+  `base` soxta URL, `GM_*`/`fetch` mock (sahifa HTML generatori), iframe
+  uchun `fr.src = url` → `fr.srcdoc = MOCK(url)`; headless Chrome
+  `--dump-dom` bilan panel matnini o'qish (qarang xotira).
 
 ### Deploy
 

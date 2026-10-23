@@ -26,6 +26,9 @@ export const SYNC_KEYS = [
   "shifts",
   "schedule",
   "savedSchedules",
+  // Ustoz almashtirishlar (vaqtinchalik/doimiy) — muddati tugaganda
+  // eski ustozga avtomatik qaytarish uchun [teacherSubstitutions.js](../utils/teacherSubstitutions.js)
+  "substitutions",
 ];
 
 // Ro'yxatning oldingi ko'rinishlari — eski `lastHash` ni tanish uchun.
@@ -35,6 +38,8 @@ export const SYNC_KEYS = [
 export const LEGACY_KEY_SETS = [
   ["settings", "classes", "subjects", "teachers", "classSubjects",
    "rooms", "timeslots", "lunchGroups", "shifts", "schedule"],
+  ["settings", "classes", "subjects", "teachers", "classSubjects",
+   "rooms", "timeslots", "lunchGroups", "shifts", "schedule", "savedSchedules"],
 ];
 
 // Har bir kalitning bo'sh qiymati (obyekt yoki massiv)
@@ -50,6 +55,7 @@ export const EMPTY = {
   shifts: [],
   schedule: {},
   savedSchedules: [],
+  substitutions: [],
 };
 
 // Ekranda ko'rsatiladigan nomlar (versiya tarixi sahifasi shundan foydalanadi)
@@ -65,6 +71,7 @@ export const KEY_TITLES = {
   shifts: "Smenalar",
   schedule: "Dars jadvali",
   savedSchedules: "Saqlangan jadvallar",
+  substitutions: "Ustoz almashtirishlar",
 };
 
 // Blob formati versiyasi — sparse ko'rinishni tanish uchun

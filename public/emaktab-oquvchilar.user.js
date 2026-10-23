@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Turon → eMaktab o'quvchilar sinxroni
 // @namespace    https://smartjadval.uz/
-// @version      0.9.6
+// @version      0.9.7
 // @description  Turon bazasidagi o'quvchilar ro'yxatini eMaktab (kundalik.com) «Odamlarni izlash» bo'limi bilan solishtiradi: yo'g'ini qo'shadi, ortiqchasini chiqaradi, sinfi o'zgarganini ko'chiradi
 // @author       smartjadval.uz
 // @match        https://schools.emaktab.uz/v2/admin/*
@@ -90,7 +90,7 @@
   //  (panel kodidan oldin) turadi — Turon rejimida panel kodi ishlamaydi.
   // Skript versiyasi jurnalda ko'rinsin (26.09.2026: brauzerda eski 0.9.1
   //  ishlab turgani faqat xabar matnidan bilindi). GM_info bo'lsa undan.
-  const VERSIYA = (typeof GM_info !== "undefined" && GM_info && GM_info.script && GM_info.script.version) || "0.9.6";
+  const VERSIYA = (typeof GM_info !== "undefined" && GM_info && GM_info.script && GM_info.script.version) || "0.9.7";
   const HOLAT = { toxtat: false };
   const TOXTATILDI = "■ To'xtatildi";
   function toxtashniTekshir() { if (HOLAT.toxtat) throw new Error(TOXTATILDI); }
@@ -1584,7 +1584,7 @@
     if (/(firstname|ism|imya|name)/.test(k) && !/(class|group|school|user|login|last|middle|sur|nick)/.test(k)) return "ism";
     if (/(birth|tugilgan|rojd|rozhd)/.test(k)) return "tugilgan";
     // Qabul sanasi — «Maktabga qabul qilingan sana» / «Дата зачисления» /
-    // «Enrollment date». Sinxronda SHU OYNING 1-SANASI yoziladi.
+    // «Enrollment date». Sinxronda BUGUNGI SANA yoziladi.
     if (/(qabul|admission|enrol|zachisl|kirgan|kelgan|entrydate|entry|startdate|datestart|membershipdate|datefrom|since)/.test(k)) return "qabul";
     if (/(sex|gender|jins)/.test(k) || k === "pol") return "jins";
     if (/(studyyear|oquvyil|uchebn|schoolyear)/.test(k)) return "yil";
@@ -1592,17 +1592,18 @@
     if (/(class|group|sinf|klass)/.test(k) && !/(school|type)/.test(k)) return "sinf";
     if (/(^who|role|toifa|lavozim|persontype|usertype)/.test(k) || k === "rol") return "rol";
     if (/(phone|telefon|mobile)/.test(k)) return "telefon";
-    // Boshqa sana maydoni (tug'ilgan emas) — bo'sh bo'lsa oy boshi yoziladi
+    // Boshqa sana maydoni (tug'ilgan emas) — bo'sh bo'lsa bugungi sana yoziladi
     if (/(date|sana|data)/.test(k)) return "sana";
     return "";
   }
 
-  // ⚠️ QABUL SANASI = SHU OYNING 1-SANASI (maktab talabi, 21.09.2026).
-  //  Qo'shish/ko'chirish formalaridagi qabul sanasi va bo'sh sana maydonlariga
-  //  aynan shu yoziladi — o'quvchi oy boshidan jurnalga tushsin.
-  function oyBoshi() {
+  // ⚠️ QABUL SANASI = BUGUNGI SANA (maktab talabi, 08.10.2026; ilgari
+  //  21.09.2026 dan oy boshi edi). Qo'shish/ko'chirish formalaridagi qabul
+  //  sanasi, buyruq sanasi va bo'sh sana maydonlariga aynan shu yoziladi —
+  //  o'quvchi qo'shilgan kunidan jurnalga tushsin. Chiqarish ham bugun.
+  function qabulSanasi() {
     const d = new Date();
-    return `01.${String(d.getMonth() + 1).padStart(2, "0")}.${d.getFullYear()}`;
+    return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}.${d.getFullYear()}`;
   }
 
   // ⚠️ TUG'ILGAN SANA OLDINDAN TEKSHIRILADI (22.09.2026: 6 bola rad etildi).
@@ -1875,10 +1876,10 @@
         else if (tur === "ism") v = f.ism;
         else if (tur === "sharif") v = f.sharif;
         else if (tur === "tugilgan") v = t.tugilgan ? sanaMaydonga(el, t.tugilgan) : null;
-        else if (tur === "qabul") v = sanaMaydonga(el, oyBoshi());
+        else if (tur === "qabul") v = sanaMaydonga(el, qabulSanasi());
         // ⚠️ Buyruq sanasi (`eduorderdatebox`) eMaktabda dd/mm/yyyy — ko'chirish
         //  ustasida shunday qabul qilindi (22.09.2026); qolgan sanalar nuqtali.
-        else if (tur === "sana") v = /orderdate/i.test(nomi) ? sanaNorm(oyBoshi()).replace(/\./g, "/") : (el.value ? null : sanaMaydonga(el, oyBoshi()));
+        else if (tur === "sana") v = /orderdate/i.test(nomi) ? sanaNorm(qabulSanasi()).replace(/\./g, "/") : (el.value ? null : sanaMaydonga(el, qabulSanasi()));
         else if (tur === "telefon") v = opt.telefon && t.telefon ? t.telefon : null;
         else if (tur === "sinf") v = sinfNomi;
         // Buyruq raqami — ko'chirish ustasidagi kabi «1» (bo'sh bo'lsa server rad etadi)
@@ -1968,7 +1969,7 @@
     if (opt.sinov && sinovUsta >= 3) {
       return { ok: true, sinov: true, izoh: [
         `SINOV (forma 3 marta tekshirildi, qayta ochilmadi): ${t.fio} → ${sinfNomi} (ID ${t._sinfId || "?"}), `
-        + `tug'ilgan ${t.tugilgan || "?"}, jins ${t.jins || "?"}, qabul ${oyBoshi()}`,
+        + `tug'ilgan ${t.tugilgan || "?"}, jins ${t.jins || "?"}, qabul ${qabulSanasi()}`,
       ] };
     }
     if (opt.sinov) sinovUsta++;
@@ -2168,7 +2169,7 @@
   //  «forma qayta chiqdi» oldik. Shuning uchun avval migratsiya sahifasidan
   //  hozirgi a'zolik boshlanishi o'qiladi (MembershipDateEdit havolasining
   //  matni: «chorshanba, 2-sentabr, 2026»), sana nomzodlari ketma-ket
-  //  sinaladi: oy boshi → hozirgi boshlanish → +1 kun → bugun. Har
+  //  sinaladi: bugun → hozirgi maktab boshlanishi → eski sinf boshi +1 kun. Har
   //  nomzod uchun usta qayta ochiladi (yangi token), rad etilsa keyingisi.
   const UZ_OYLAR = { yanvar: 1, fevral: 2, mart: 3, aprel: 4, may: 5, iyun: 6, iyul: 7, avgust: 8, sentabr: 9, sentyabr: 9, oktabr: 10, oktyabr: 10, noyabr: 11, dekabr: 12 };
   function uzSana(matn) {
@@ -2192,7 +2193,7 @@
   //  sanasidan oldin bo'lmasligi kerak» (≥ maktab) va «Sinfga a'zolikning
   //  tugash sanasi shu sinfga a'zolikning boshlanish sanasidan oldin
   //  bo'lmasligi kerak» (eski sinf 1 kun oldin yopiladi ⇒ yangi > eski sinf
-  //  boshi). Demak sana = max(oy boshi, maktab boshi, eski sinf boshi + 1).
+  //  boshi). Demak sana = max(bugun, maktab boshi, eski sinf boshi + 1).
   async function joriyAzolik(e) {
     const out = { maktab: "", sinf: "" };
     try {
@@ -2222,14 +2223,14 @@
     const izoh = [];
     if (!e.tahrir) return { ok: false, sabab: "shaxs havolasi yo'q" };
     if (opt.sinov && sinovKoch >= 3) {
-      return { ok: true, sinov: true, izoh: [`SINOV (usta 3 marta tekshirildi, qayta ochilmadi): ${e.fio} ${e.sinf || "sinfsiz"} → ${sinfNomi} (ID ${sinfId || "?"}), a'zolik ${oyBoshi()}`] };
+      return { ok: true, sinov: true, izoh: [`SINOV (usta 3 marta tekshirildi, qayta ochilmadi): ${e.fio} ${e.sinf || "sinfsiz"} → ${sinfNomi} (ID ${sinfId || "?"}), a'zolik ${qabulSanasi()}`] };
     }
     if (opt.sinov) sinovKoch++;
 
-    // Sana = max(oy boshi, maktab a'zoligi boshi, eski sinf boshi + 1);
+    // Sana = max(bugun, maktab a'zoligi boshi, eski sinf boshi + 1);
     // rad etilsa zaxira: bugun. Takrorlar olib tashlanadi.
     const joriy = await joriyAzolik(e);
-    let sana = oyBoshi();
+    let sana = qabulSanasi();
     if (joriy.maktab && sanaRaqam(joriy.maktab) > sanaRaqam(sana)) sana = joriy.maktab;
     if (joriy.sinf && sanaRaqam(kunQosh(joriy.sinf, 1)) > sanaRaqam(sana)) sana = kunQosh(joriy.sinf, 1);
     if (joriy.maktab || joriy.sinf) izoh.push(`hozirgi a'zolik: maktab ${joriy.maktab || "?"}, sinf ${joriy.sinf || "?"} ⇒ yangi a'zolik ${sana}`);

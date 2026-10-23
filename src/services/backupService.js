@@ -57,6 +57,7 @@ export const KEY_LABELS = {
   shifts: "Smenalar",
   schedule: "Dars jadvali (darslar)",
   savedSchedules: "Saqlangan jadvallar",
+  substitutions: "Ustoz almashtirishlar",
 };
 
 // ——— Zaxira obyektini yig'ish ———
