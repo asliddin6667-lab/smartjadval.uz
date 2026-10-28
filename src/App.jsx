@@ -692,6 +692,161 @@ export default function App() {
     setMobileNavOpen(false);
   }
 
+  // =====================================================================
+  //  ⚠️ HOOK'LAR — ERTA `return`LARDAN OLDIN TURISHI SHART
+  //
+  //  Quyidagi hisob-kitoblar va ustoz almashtirish `useState`/`useEffect`
+  //  lari ilgari "Ma'lumotlar yuklanmoqda..." ekranidan KEYIN turardi.
+  //  Birinchi kirishda (bu qurilmada kesh yo'q) ilova avval to'liq
+  //  daraxtni chizar, keyin `firstLoad` yonib erta `return` ga tushar
+  //  va hook soni kamayib qolardi → React #300 ("Rendered fewer hooks
+  //  than expected") — foydalanuvchi "Ilovada kutilmagan xato" ekranini
+  //  ko'rardi. Chiqish/kirishda ham xuddi shu yo'l bilan buzilardi.
+  //
+  //  QOIDA: bu komponentda birorta hook `if (...) return` lardan pastda
+  //  turmasin. Yangi hook qo'shsangiz — shu chiziqdan YUQORIGA yozing.
+  //  `currentUser` bu yerda null bo'lishi mumkin — `?.` bilan o'qiladi.
+  //  CI da `npm run check:hooks` (react-hooks/rules-of-hooks) shuni
+  //  deploy'dan oldin tekshiradi.
+  // =====================================================================
+  // ——— Obuna nazorati ———
+  // `subState` — faqat KO'RSATKICH uchun (qolgan kunlar, banner matni).
+  // QULF esa serverdan keladi: `subBlockedServer` null bo'lganda
+  // (server javob bermadi) keshga qaytamiz, aks holda server ustun.
+  const subState = checkSubscription(currentUser);
+  const locked = subBlockedServer === null ? subState.blocked : subBlockedServer;
+
+  // =====================================================================
+  //  BULUT QULFI — "FAQAT O'QISH" REJIMI
+  //
+  //  Bulutga yozib bo'lmayotgan bo'lsa (internet yo'q, server javob
+  //  bermayapti) tahrirlash BLOKLANADI. Sabab: mahalliy nusxa bulutdan
+  //  ajralib ketsa, keyin qaysidir qurilma ikkinchisining ishini bosib
+  //  o'tadi — aynan shu ma'lumot yo'qotishga olib kelgan edi.
+  //
+  //  Ma'lumotni KO'RISH, Excel'ga chiqarish va chop etish ishlayveradi.
+  // =====================================================================
+  // Server javob bergan bo'lsa — uning so'zi; bermagan bo'lsa keshga
+  // qaytamiz (bunda bulut ham ishlamayapti, ya'ni tahrirlash baribir
+  // `cloudBlocked` bilan to'silgan).
+  const isDemoUser = demoServer === null
+    ? currentUser?.email === "demo@smartjadval.uz"
+    : demoServer;
+
+  // =====================================================================
+  //  OBUNASIZ FOYDALANUVCHIGA SAHIFALAR RENDER QILINMAYDI
+  //
+  //  Ilgari sahifalar to'liq chizilar, ustidan esa `guardClick`
+  //  bosishlarni ushlab turardi. Bunday "ustidan qo'yilgan" qulf
+  //  printsipial ravishda ishonchsiz: DOM ham, React holati ham
+  //  brauzerda, ya'ni qorovulni chetlab o'tish uchun bitta qator
+  //  yetardi (aynan shu bo'lgan: `document.body.setAttribute(...)`).
+  //
+  //  Endi qulf TUZILMAVIY: obuna yo'q bo'lsa `renderPage()` umuman
+  //  chaqirilmaydi — bosiladigan narsaning o'zi yo'q. Buni ochish
+  //  uchun React holatini o'zgartirish kerak, u esa serverdan kelgan
+  //  `subBlockedServer` ga bog'langan.
+  //
+  //  Demo hisobi ozod — u ko'rgazma uchun, obunasi bo'lmasligi normal.
+  //  (Demo ekanligi ham serverdan tasdiqlanadi — yuqoriga qarang.)
+  // =====================================================================
+  const cloudBlocked =
+    !LOCAL_ONLY && !isDemoUser &&
+    (syncState.state === "offline" || syncState.state === "error");
+
+  // ——— OBUNA QULFI (server tomondan) ———
+  // Server yozishni RAD ETDI: subscription_rls_setup.sql dagi
+  // has_active_sub() obunasiz foydalanuvchiga schools jadvaliga
+  // yozishga ruxsat bermaydi.
+  //
+  // Bu "internet yo'q" EMAS. Ilgari ikkalasi ham "offline" holatiga
+  // tushar va foydalanuvchi internetini bekorga tekshirib, "sayt
+  // buzuq" deb qo'ng'iroq qilardi. Endi sabab ochiq aytiladi va
+  // to'lov sahifasiga yo'l ko'rsatiladi.
+  const subBlocked = !LOCAL_ONLY && !isDemoUser && syncState.state === "denied";
+
+  // Sahifalar umuman render qilinmaydigan holat. Ikki manba ham SERVERNIKI:
+  //   • `locked` — profil so'rovi (verifySubscription) aytgan holat;
+  //   • `subBlocked` — bulut YOZISHNI rad etdi (RLS: has_active_sub()).
+  // Ikkinchisi muhim: profil so'rovini brauzerda to'sib qo'yish mumkin
+  // (o'shanda keshga qaytamiz), lekin serverning "yozishga ruxsat yo'q"
+  // javobini soxtalashtirib bo'lmaydi — obuna yo'qligining haqiqiy isboti.
+  const contentLocked = (locked || subBlocked) && !isDemoUser;
+
+  // Kirishdagi sinxronizatsiya hali tugamagan (odatda 1 soniyacha).
+  // Shu paytda kiritilgan o'zgarish bulutdan kelayotgan nusxa ostida
+  // qolib ketishi mumkin — shuning uchun qisqa vaqt kutdiramiz.
+  const syncPending = !LOCAL_ONLY && !isDemoUser && dataReady && !syncDone;
+
+  // =====================================================================
+  //  USTOZ ALMASHTIRISH — MUDDATI KELGANLARNI AVTOMATIK BAJARISH
+  //
+  //  Vaqtinchalik almashtirish (sanadan sanagacha) muddati tugasa darslar
+  //  ESKI ustozga o'zi qaytadi; boshlanish sanasi kelganlar o'zi qo'llanadi.
+  //  Tekshiruv: ma'lumot yuklanganda, oyna faollashganda va har daqiqada
+  //  (tungi almashuv uchun). Faqat o'qish rejimida (bulut yo'q, obuna
+  //  tugagan, kirishdagi sinxron tugamagan) HECH NARSA qilinmaydi —
+  //  aks holda o'zgarish bulutga bormay, keyin bulut nusxasi ostida
+  //  qolib ketardi.
+  //  [teacherSubstitutions.js](./utils/teacherSubstitutions.js)
+  // =====================================================================
+  const [subsTick, setSubsTick] = useState(0);
+  useEffect(() => {
+    // Landing/kirish ekranida (foydalanuvchi yo'q) taymer kerak emas
+    if (!userId) return;
+    const bump = () => setSubsTick((t) => t + 1);
+    const timer = setInterval(bump, 60 * 1000);
+    window.addEventListener("focus", bump);
+    document.addEventListener("visibilitychange", bump);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", bump);
+      document.removeEventListener("visibilitychange", bump);
+    };
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId || isDistrictAdmin || !dataReady) return;
+    if (syncPending || cloudBlocked || subBlocked || contentLocked) return;
+    if (!hasDueSubstitutions(substitutions)) return;
+
+    const res = runDueSubstitutions({
+      substitutions, schedule, classSubjects, timeslots, teachers, classes, lunchGroups,
+    });
+    if (!res.changed) return;
+
+    setSchedule(res.schedule);
+    setClassSubjects(res.classSubjects);
+    setSubstitutions(res.substitutions);
+
+    const nameOf = (id) => teachers.find((t) => t.id === id)?.name || "ustoz";
+    res.events.forEach((ev) => {
+      const s = ev.sub;
+      if (ev.type === "reverted") {
+        const r = ev.summary || {};
+        const issues = [];
+        if (r.conflicts > 0) issues.push(`${r.conflicts} soatda ustoz ziddiyati`);
+        if (r.missing > 0) issues.push(`${r.missing} dars topilmadi`);
+        addToast(
+          `Vaqtinchalik almashtirish tugadi (${fmtDate(s.endDate)}): darslar ${nameOf(s.oldTeacherId)}ga qaytarildi`
+            + (issues.length ? ` — ${issues.join(", ")}, jadvalni tekshiring` : " ✓"),
+          issues.length ? "warning" : "success"
+        );
+      } else if (ev.type === "applied") {
+        addToast(
+          `Rejalashtirilgan almashtirish boshlandi: ${nameOf(s.oldTeacherId)} → ${nameOf(s.newTeacherId)} (${fmtDate(s.startDate)} – ${fmtDate(s.endDate)})`,
+          "info"
+        );
+      } else if (ev.type === "skipped") {
+        addToast(
+          `Rejalashtirilgan almashtirish (${nameOf(s.oldTeacherId)} → ${nameOf(s.newTeacherId)}) muddati o'tib ketgani uchun qo'llanmadi`,
+          "warning"
+        );
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, isDistrictAdmin, dataReady, syncPending, cloudBlocked, subBlocked, contentLocked, substitutions, subsTick]);
+
   // ——— PAROL TIKLASH EKRANI (hamma narsadan ustun) ———
   if (recoveryMode) {
     return (
@@ -764,142 +919,6 @@ export default function App() {
       </div>
     );
   }
-
-  // ——— Obuna nazorati ———
-  // `subState` — faqat KO'RSATKICH uchun (qolgan kunlar, banner matni).
-  // QULF esa serverdan keladi: `subBlockedServer` null bo'lganda
-  // (server javob bermadi) keshga qaytamiz, aks holda server ustun.
-  const subState = checkSubscription(currentUser);
-  const locked = subBlockedServer === null ? subState.blocked : subBlockedServer;
-
-  // =====================================================================
-  //  BULUT QULFI — "FAQAT O'QISH" REJIMI
-  //
-  //  Bulutga yozib bo'lmayotgan bo'lsa (internet yo'q, server javob
-  //  bermayapti) tahrirlash BLOKLANADI. Sabab: mahalliy nusxa bulutdan
-  //  ajralib ketsa, keyin qaysidir qurilma ikkinchisining ishini bosib
-  //  o'tadi — aynan shu ma'lumot yo'qotishga olib kelgan edi.
-  //
-  //  Ma'lumotni KO'RISH, Excel'ga chiqarish va chop etish ishlayveradi.
-  // =====================================================================
-  // Server javob bergan bo'lsa — uning so'zi; bermagan bo'lsa keshga
-  // qaytamiz (bunda bulut ham ishlamayapti, ya'ni tahrirlash baribir
-  // `cloudBlocked` bilan to'silgan).
-  const isDemoUser = demoServer === null
-    ? currentUser.email === "demo@smartjadval.uz"
-    : demoServer;
-
-  // =====================================================================
-  //  OBUNASIZ FOYDALANUVCHIGA SAHIFALAR RENDER QILINMAYDI
-  //
-  //  Ilgari sahifalar to'liq chizilar, ustidan esa `guardClick`
-  //  bosishlarni ushlab turardi. Bunday "ustidan qo'yilgan" qulf
-  //  printsipial ravishda ishonchsiz: DOM ham, React holati ham
-  //  brauzerda, ya'ni qorovulni chetlab o'tish uchun bitta qator
-  //  yetardi (aynan shu bo'lgan: `document.body.setAttribute(...)`).
-  //
-  //  Endi qulf TUZILMAVIY: obuna yo'q bo'lsa `renderPage()` umuman
-  //  chaqirilmaydi — bosiladigan narsaning o'zi yo'q. Buni ochish
-  //  uchun React holatini o'zgartirish kerak, u esa serverdan kelgan
-  //  `subBlockedServer` ga bog'langan.
-  //
-  //  Demo hisobi ozod — u ko'rgazma uchun, obunasi bo'lmasligi normal.
-  //  (Demo ekanligi ham serverdan tasdiqlanadi — yuqoriga qarang.)
-  // =====================================================================
-  const cloudBlocked =
-    !LOCAL_ONLY && !isDemoUser &&
-    (syncState.state === "offline" || syncState.state === "error");
-
-  // ——— OBUNA QULFI (server tomondan) ———
-  // Server yozishni RAD ETDI: subscription_rls_setup.sql dagi
-  // has_active_sub() obunasiz foydalanuvchiga schools jadvaliga
-  // yozishga ruxsat bermaydi.
-  //
-  // Bu "internet yo'q" EMAS. Ilgari ikkalasi ham "offline" holatiga
-  // tushar va foydalanuvchi internetini bekorga tekshirib, "sayt
-  // buzuq" deb qo'ng'iroq qilardi. Endi sabab ochiq aytiladi va
-  // to'lov sahifasiga yo'l ko'rsatiladi.
-  const subBlocked = !LOCAL_ONLY && !isDemoUser && syncState.state === "denied";
-
-  // Sahifalar umuman render qilinmaydigan holat. Ikki manba ham SERVERNIKI:
-  //   • `locked` — profil so'rovi (verifySubscription) aytgan holat;
-  //   • `subBlocked` — bulut YOZISHNI rad etdi (RLS: has_active_sub()).
-  // Ikkinchisi muhim: profil so'rovini brauzerda to'sib qo'yish mumkin
-  // (o'shanda keshga qaytamiz), lekin serverning "yozishga ruxsat yo'q"
-  // javobini soxtalashtirib bo'lmaydi — obuna yo'qligining haqiqiy isboti.
-  const contentLocked = (locked || subBlocked) && !isDemoUser;
-
-  // Kirishdagi sinxronizatsiya hali tugamagan (odatda 1 soniyacha).
-  // Shu paytda kiritilgan o'zgarish bulutdan kelayotgan nusxa ostida
-  // qolib ketishi mumkin — shuning uchun qisqa vaqt kutdiramiz.
-  const syncPending = !LOCAL_ONLY && !isDemoUser && dataReady && !syncDone;
-
-  // =====================================================================
-  //  USTOZ ALMASHTIRISH — MUDDATI KELGANLARNI AVTOMATIK BAJARISH
-  //
-  //  Vaqtinchalik almashtirish (sanadan sanagacha) muddati tugasa darslar
-  //  ESKI ustozga o'zi qaytadi; boshlanish sanasi kelganlar o'zi qo'llanadi.
-  //  Tekshiruv: ma'lumot yuklanganda, oyna faollashganda va har daqiqada
-  //  (tungi almashuv uchun). Faqat o'qish rejimida (bulut yo'q, obuna
-  //  tugagan, kirishdagi sinxron tugamagan) HECH NARSA qilinmaydi —
-  //  aks holda o'zgarish bulutga bormay, keyin bulut nusxasi ostida
-  //  qolib ketardi.
-  //  [teacherSubstitutions.js](./utils/teacherSubstitutions.js)
-  // =====================================================================
-  const [subsTick, setSubsTick] = useState(0);
-  useEffect(() => {
-    const bump = () => setSubsTick((t) => t + 1);
-    const timer = setInterval(bump, 60 * 1000);
-    window.addEventListener("focus", bump);
-    document.addEventListener("visibilitychange", bump);
-    return () => {
-      clearInterval(timer);
-      window.removeEventListener("focus", bump);
-      document.removeEventListener("visibilitychange", bump);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!userId || isDistrictAdmin || !dataReady) return;
-    if (syncPending || cloudBlocked || subBlocked || contentLocked) return;
-    if (!hasDueSubstitutions(substitutions)) return;
-
-    const res = runDueSubstitutions({
-      substitutions, schedule, classSubjects, timeslots, teachers, classes, lunchGroups,
-    });
-    if (!res.changed) return;
-
-    setSchedule(res.schedule);
-    setClassSubjects(res.classSubjects);
-    setSubstitutions(res.substitutions);
-
-    const nameOf = (id) => teachers.find((t) => t.id === id)?.name || "ustoz";
-    res.events.forEach((ev) => {
-      const s = ev.sub;
-      if (ev.type === "reverted") {
-        const r = ev.summary || {};
-        const issues = [];
-        if (r.conflicts > 0) issues.push(`${r.conflicts} soatda ustoz ziddiyati`);
-        if (r.missing > 0) issues.push(`${r.missing} dars topilmadi`);
-        addToast(
-          `Vaqtinchalik almashtirish tugadi (${fmtDate(s.endDate)}): darslar ${nameOf(s.oldTeacherId)}ga qaytarildi`
-            + (issues.length ? ` — ${issues.join(", ")}, jadvalni tekshiring` : " ✓"),
-          issues.length ? "warning" : "success"
-        );
-      } else if (ev.type === "applied") {
-        addToast(
-          `Rejalashtirilgan almashtirish boshlandi: ${nameOf(s.oldTeacherId)} → ${nameOf(s.newTeacherId)} (${fmtDate(s.startDate)} – ${fmtDate(s.endDate)})`,
-          "info"
-        );
-      } else if (ev.type === "skipped") {
-        addToast(
-          `Rejalashtirilgan almashtirish (${nameOf(s.oldTeacherId)} → ${nameOf(s.newTeacherId)}) muddati o'tib ketgani uchun qo'llanmadi`,
-          "warning"
-        );
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId, isDistrictAdmin, dataReady, syncPending, cloudBlocked, subBlocked, contentLocked, substitutions, subsTick]);
 
   function warnReadOnly() {
     addToast(

@@ -23,6 +23,10 @@ jobs:
 
       - run: npm install
 
+      # Hook tartibi (react-hooks/rules-of-hooks) — shartli/erta return'dan
+      # keyingi hook saytda React #300/#310 xatosi beradi. Qarang: eslint.hooks.config.js
+      - run: npm run check:hooks
+
       - run: npm run build
 
       - uses: actions/configure-pages@v5

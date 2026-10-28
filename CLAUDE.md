@@ -20,6 +20,7 @@ npm run preview   # build natijasini ko'rish
 
 npm run build:engine   # jadval dvigatelini qurib Edge Function ichiga joylash
 npm run check:bundle   # dvigatel dist/ ga sizib chiqmadimi? (build'dan keyin)
+npm run check:hooks    # hook tartibi (rules-of-hooks) — CI da build'dan OLDIN majburiy
 
 node scripts/blobRoundtrip.mjs      # bulut formati yo'qotishsizmi? (pastga qarang)
 node scripts/buildDemoSchedule.mjs  # demo jadvalni qayta yaratish
@@ -1703,6 +1704,17 @@ bir necha MB — shu brauzerda IKKINCHI profil ochilsa kvota to'ladi.
 
 ## Bilib qo'yish kerak bo'lgan tuzoqlar
 
+- **HOOK ERTA `return` DAN KEYIN TURMASIN (React #300/#310).** App.jsx da
+  `recoveryMode` / `!currentUser` / `mustChangePassword` / `isDistrictAdmin` /
+  `firstLoad && !dataReady` erta `return` lari bor; ustoz almashtirish
+  `useState`/`useEffect` lari ilgari ulardan PASTDA turardi. Birinchi kirishda
+  (qurilmada kesh yo'q) daraxt avval to'liq chizilib, keyin yuklanish ekraniga
+  tushar va hook soni kamayar edi — foydalanuvchi «Ilovada kutilmagan xato»
+  ekranini ko'rardi (28.10.2026). Endi App.jsx dagi barcha hook'lar
+  «⚠️ HOOK'LAR — ERTA return LARDAN OLDIN» izohli chiziqdan YUQORIDA; yangi hook
+  ham o'sha yerga yoziladi. [eslint.hooks.config.js](eslint.hooks.config.js) +
+  `npm run check:hooks` deploy'dan oldin CI da ishlaydi va buni rad etadi.
+  (`npm run lint` to'liq to'plam bilan ishlamay qolgani uchun ALOHIDA config.)
 - **Uslublar aralash:** `src/styles/*.css` global fayllar bor, lekin JSX ichida ham ko'p
   inline style. Mavjud faylning uslubiga ergashing, birini ikkinchisiga ko'chirmang.
 - **O'lik kod:** [deviceLock.js](src/services/deviceLock.js) va

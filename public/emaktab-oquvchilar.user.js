@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Turon → eMaktab o'quvchilar sinxroni
 // @namespace    https://smartjadval.uz/
-// @version      0.9.7
+// @version      0.9.8
 // @description  Turon bazasidagi o'quvchilar ro'yxatini eMaktab (kundalik.com) «Odamlarni izlash» bo'limi bilan solishtiradi: yo'g'ini qo'shadi, ortiqchasini chiqaradi, sinfi o'zgarganini ko'chiradi
 // @author       smartjadval.uz
 // @match        https://schools.emaktab.uz/v2/admin/*
@@ -90,7 +90,7 @@
   //  (panel kodidan oldin) turadi — Turon rejimida panel kodi ishlamaydi.
   // Skript versiyasi jurnalda ko'rinsin (26.09.2026: brauzerda eski 0.9.1
   //  ishlab turgani faqat xabar matnidan bilindi). GM_info bo'lsa undan.
-  const VERSIYA = (typeof GM_info !== "undefined" && GM_info && GM_info.script && GM_info.script.version) || "0.9.7";
+  const VERSIYA = (typeof GM_info !== "undefined" && GM_info && GM_info.script && GM_info.script.version) || "0.9.8";
   const HOLAT = { toxtat: false };
   const TOXTATILDI = "■ To'xtatildi";
   function toxtashniTekshir() { if (HOLAT.toxtat) throw new Error(TOXTATILDI); }
@@ -2397,6 +2397,60 @@
     } catch (err) { if (err.message === TOXTATILDI) throw err; return ""; }
   }
 
+  // ⚠️ 0.9.8 — ISMI MOS BOLANING TUG'ILGAN SANASI TO'G'RILANADI (maktab
+  //  talabi, 27.10.2026: «ism familiyasi o'xshash bo'lsa tug'ilgan sanasini
+  //  to'g'rilasin»). Misol: Turon «Kozimov Muhammadali Rahimjon o'g'li»
+  //  11.03.2010, O'g'il ↔ eMaktab «Kozimov Muhammadali» 22.01.2009, Ayol.
+  //  Mos / ko'chiriladigan juftlikda shaxs sahifasining «Shaxsiy ma'lumotlar»
+  //  formasi (view=personal: nlast/nfirst/…/birthday/sex/save) o'qiladi;
+  //  sana Turondan farq qilsa Turonniki yoziladi. Jins ham shu formada —
+  //  faqat Turon F.I.O qo'shimchasi («o'g'li»/«qizi») aniq aytsa va Turon
+  //  jinsiga zid bo'lmasa to'g'rilanadi. Formaning qolgan maydonlari
+  //  o'zgarmay qaytariladi. O'zgargani TUZATILDI hisobotiga yoziladi.
+  //  Turon sanasi shubhali bo'lsa (tugilganTekshir ok emas) — tegilmaydi.
+  //  Qaytadi: { ok, jim } — farq yo'q (jurnalga yozilmaydi) | { ok, izoh, ozgardi } | { ok:false, sabab }.
+  let sinovSana = 0;
+  async function sanaTogirla(e, t, opt) {
+    const tSana = sanaNorm(t.tugilgan);
+    if (opt.sinov && sinovSana >= 3) return { ok: true, sinov: true, jim: true };
+    if (opt.sinov) sinovSana++;
+    const { doc, url } = await sahifa(shaxsUrl(e, "personal"));
+    const el = doc.querySelector('input[name="birthday"]') || doc.querySelector('input[name*="birth" i]');
+    const form = el && el.closest("form");
+    if (!form) return { ok: false, sabab: "«Shaxsiy ma'lumotlar» formasida tug'ilgan sana maydoni topilmadi", izoh: [sahifaTashxisi(doc, url)] };
+    const qiymatlar = new Map();
+    const izoh = [];
+    const ozgardi = [];
+    const eSana = sanaNorm(String(el.value || "").trim());
+    if (eSana !== tSana) {
+      qiymatlar.set(el, sanaMaydonga(el, tSana));
+      ozgardi.push(`tug'ilgan sana ${eSana || "(bo'sh)"} → ${tSana}`);
+    }
+    // Jins: radio qiymati male/female — yorliqqa emas, qiymatga qaraladi
+    const nomJins = /qizi$/i.test(t.fio) ? "Qiz" : (/(o.?g.?li|ugli)$/i.test(t.fio) ? "O'g'il" : "");
+    if (nomJins && (!t.jins || jinsMos(t.jins, "qiz") === jinsMos(nomJins, "qiz"))) {
+      const radiolar = [...form.querySelectorAll('input[type="radio"][name]')].filter((r) => maydonTuri(maydonYorligi(r, form)) === "jins");
+      const kerak = radiolar.find((r) => jinsMos(nomJins, r.value));
+      const hozir = radiolar.find((r) => r.hasAttribute("checked"));
+      if (kerak && hozir !== kerak) {
+        qiymatlar.set(kerak, kerak.value);
+        ozgardi.push(`jins ${hozir ? hozir.value : "(tanlanmagan)"} → ${kerak.value}`);
+      }
+    }
+    if (!ozgardi.length) return { ok: true, jim: true };
+    izoh.push(`«${e.fio}» (${e.sinf || "sinfsiz"}) ↔ Turon «${t.fio}»: ${ozgardi.join(", ")}`);
+    if (opt.sinov) { izoh.push("SINOV — forma yuborilmadi"); return { ok: true, sinov: true, izoh }; }
+    const j = await formaYubor(form, url, formaYig(form, qiymatlar));
+    if (!j.ok) return { ok: false, sabab: `sana/jins saqlanmadi: ${j.xato || "HTTP " + j.holat}`, izoh };
+    return { ok: true, izoh, ozgardi: { asl: eSana, yangi: tSana, matn: ozgardi.join(", ") }, url: new URL(url, location.origin).href };
+  }
+
+  // Sanasi tekshiriladigan juftliklar: mos + ko'chiriladigan, Turon sanasi to'g'ri
+  function sanaIshlari(r) {
+    return [...(r.mos || []), ...(r.kochirish || [])]
+      .filter((x) => x.e && x.e.tahrir && /^\d{2}\.\d{2}\.\d{4}$/.test(sanaNorm(x.t.tugilgan || "")) && tugilganTekshir(x.t).ok);
+  }
+
   // Sahifadagi «Arxiv» yorlig'i havolasi (qidiruv so'zi bilan)
   function arxivUrl(doc, soz) {
     const a = [...doc.querySelectorAll("a[href]")].find((x) => /^(arxiv|архив|archive)$/i.test(txt(x)))
@@ -3074,6 +3128,9 @@
             <label><input type="checkbox" id="telefon"> telefon ham</label>
           </div>
           <div class="qator">
+            <label><input type="checkbox" id="aSana" checked> ismi mos bolaning tug'ilgan sanasi (va jinsi) Turondagidek to'g'rilansin</label>
+          </div>
+          <div class="qator">
             <button class="b b-main" id="yur" disabled>▶ Bajarish</button>
             <button class="b b-warn" id="toxta" style="display:none">■ To'xtatish</button>
             <span class="holat" id="yurHolat"></span>
@@ -3543,6 +3600,11 @@
         });
       }
     }
+    if ($("aSana").checked) {
+      // «Mos» ro'yxati F5 dan keyin saqlanmaydi — faqat sonni bor
+      if (!natija.mos.length && natija.mosSoni) log("ℹ Tug'ilgan sana: «mos» bolalar ro'yxati sahifa yangilangach saqlanmaydi — to'liq tekshiruv uchun «🔎» bilan qayta solishtiring (hozir faqat ko'chiriladiganlar).", "dim");
+      sanaIshlari(natija).forEach((x) => ishlar.push({ tur: "sana", x }));
+    }
     if (otkazildi.length) {
       natijaSaqla(false);
       log(`⚠ ${otkazildi.length} bola o'tkazib yuboriladi (server rad etgan yoki ma'lumoti xato — Turonda to'g'rilang, Excel «Amallar» varag'ida):\n   `
@@ -3562,15 +3624,17 @@
       const k = i.tur === "chiqarish" ? i.x.e._sinfK : i.x.t._sinfK;
       const m = String(k || "").match(/^(\d{1,2})(.*)$/);
       const nom = i.tur === "chiqarish" ? i.x.e.fio : i.x.t.fio;
-      return `${i.tur === "chiqarish" ? "9" : "0"}|${m ? String(m[1]).padStart(2, "0") + m[2] : k}|${normKey(nom)}`;
+      // Sana to'g'rilash ko'chirishdan keyin (bir bolaning ikki formasi ustma-ust ketmasin)
+      return `${i.tur === "chiqarish" ? "9" : (i.tur === "sana" ? "5" : "0")}|${m ? String(m[1]).padStart(2, "0") + m[2] : k}|${normKey(nom)}`;
     };
     ishlar.sort((a, b) => tartibKaliti(a).localeCompare(tartibKaliti(b)));
     const ish = ishlar.slice(0, opt.limit);
     if (!ichki) HOLAT.toxtat = false;
-    sinovUsta = 0; sinovKoch = 0; sinovChiq = 0; yolTashxisiSoni = 0;   // har yurishda sahifalar yana 3 marta tekshiriladi
+    sinovUsta = 0; sinovKoch = 0; sinovChiq = 0; sinovSana = 0; yolTashxisiSoni = 0;   // har yurishda sahifalar yana 3 marta tekshiriladi
     $("yur").disabled = true; $("toxta").style.display = "";
-    log(`▶ ${ish.length}/${ishlar.length} amal${opt.sinov ? " — SINOV, hech narsa yuborilmaydi" : ""}`, "ok");
-    let ok = 0, xato = 0, tuzatildiSoni = 0;
+    const sanaSoni = ish.filter((i) => i.tur === "sana").length;
+    log(`▶ ${ish.length}/${ishlar.length} amal${sanaSoni ? ` (shundan ${sanaSoni} tasi tug'ilgan sana tekshiruvi)` : ""}${opt.sinov ? " — SINOV, hech narsa yuborilmaydi" : ""}`, "ok");
+    let ok = 0, xato = 0, tuzatildiSoni = 0, sanaTeng = 0;
     const bajarilgan = [];
     // ⚠️ PARALLEL YURISH (maktab talabi, 22.09.2026: «juda ko'p vaqt ketadi»).
     //  2700 amal × 3–4 so'rov birma-bir ≈ 1.5 soat edi. Har bolaning ustasi
@@ -3591,11 +3655,12 @@
         if (i < 0) return;
         const { tur, x } = ish[i];
         const nom = tur === "chiqarish" ? x.e.fio : x.t.fio;
-        const belgi = { qoshish: "＋", kochirish: "➜", chiqarish: "－" }[tur];
+        const belgi = { qoshish: "＋", kochirish: "➜", chiqarish: "－", sana: "🩹" }[tur];
         let r;
         try {
           if (tur === "qoshish") r = await yaratOdam(x.t, x.t._emkSinf, opt);
           else if (tur === "kochirish") r = await kochirOdam(x.e, x.t._emkSinf, opt, x.t._sinfId);
+          else if (tur === "sana") r = await sanaTogirla(x.e, x.t, opt);
           else r = await chiqarOdam(x.e, opt);
         } catch (err) {
           if (err.message === TOXTATILDI) { log(`${TOXTATILDI} (${nom} yarmida uzildi — bajarilmadi)`, "ogoh"); return; }
@@ -3611,6 +3676,20 @@
         tugadi++;
         $("yurHolat").textContent = `${tugadi}/${ish.length}`;
         $("pbar").style.width = Math.round((tugadi / ish.length) * 100) + "%";
+        // Sanasi allaqachon to'g'ri (yoki sinovda tekshirilmagan) — jurnal to'lmasin
+        if (r.ok && r.jim) { sanaTeng++; continue; }
+        if (r.ok && tur === "sana") {
+          ok++;
+          log(`${belgi} ${nom}${r.sinov ? " (sinov)" : " ✔"} — ${(r.izoh || [])[0] || ""}`, "ok");
+          if (opt.sinov && r.izoh && r.izoh.length > 1) log("   " + r.izoh.slice(1).join("\n   "), "dim");
+          if (!r.sinov && r.ozgardi) {
+            tuzatYoz({ fio: x.t.fio, filial: x.t.filial, sinf: x.t.sinf, emkSinf: x.e.sinf || x.t._emkSinf || "",
+              asl: r.ozgardi.asl, yangi: r.ozgardi.yangi, sabab: `eMaktabda ism mos, ${r.ozgardi.matn} — Turondagidek to'g'rilandi`, url: r.url || "" });
+            tuzatildiSoni++;
+          }
+          if (opt.sinov) await sleep(20);
+          continue;
+        }
         if (r.ok) {
           ok++;
           log(`${belgi} ${nom}${r.sinov ? " (sinov)" : " ✔"}`, "ok");
@@ -3672,7 +3751,7 @@
     if (!opt.sinov) natijaSaqla(true);
     statKo(natija);
     $("toxta").style.display = "none"; $("yur").disabled = false; $("yurHolat").textContent = "";
-    log(`— Yakun: ${ok} ${opt.sinov ? "tekshirildi" : "bajarildi"}, ${xato} xato —`, xato ? "ogoh" : "ok");
+    log(`— Yakun: ${ok} ${opt.sinov ? "tekshirildi" : "bajarildi"}, ${xato} xato${sanaSoni ? `, tug'ilgan sanasi ${opt.sinov ? "tekshirilmagan/" : ""}to'g'ri: ${sanaTeng}` : ""} —`, xato ? "ogoh" : "ok");
     if (!opt.sinov && ok) log("🔄 Sahifani yangilab (F5) qayta solishtiring — natija tekshirilsin.", "dim");
     // Har haqiqiy yurish oxirida Excel hisobot o'zi yuklanadi
     if (!opt.sinov && (ok || xato || tuzatildiSoni)) {
@@ -3723,11 +3802,12 @@
       const tuzat = natija.qoshish.filter((x) => !x.sabab && tugilganTekshir(x.t).tuzat).length;
       const koch = natija.kochirish.filter((x) => !x.sabab && x.e.tahrir).length;
       const chiq = turonToliq ? natija.chiqarish.filter((x) => !x.sabab && x.e.tahrir).length : 0;
-      const n = qosh + koch + chiq;
+      const sanaN = $("aSana").checked ? sanaIshlari(natija).length : 0;
+      const n = qosh + koch + chiq + sanaN;
       const rad = natija.qoshish.length + natija.kochirish.length - qosh - koch;
       if (!n) { log(`＝ Qo'shadigan / ko'chiradigan / chiqaradigan bola yo'q — hammasi joyida.${rad ? ` (${rad} bola rad etilgan — Excel «Amallar» dagi sababni Turonda to'g'rilang.)` : ""}`, "ok"); return; }
       if (!turonToliq) log(`⚠ Turon ro'yxati to'liq emas (${turon.length}/${turonFaol}) — chiqarish o'tkazib yuboriladi.`, "ogoh");
-      if (!sinov && !window.confirm(`${qosh} ta qo'shiladi (${tuzat} tasining tug'ilgan sanasi tuzatib yoziladi), ${koch} ta ko'chiriladi, ${chiq} ta maktabdan CHIQARILADI (qaytarib bo'lmaydi).${rad ? `\n${rad} ta rad etilgan bola o'tkazib yuboriladi.` : ""}\nDavom etilsinmi?`)) {
+      if (!sinov && !window.confirm(`${qosh} ta qo'shiladi (${tuzat} tasining tug'ilgan sanasi tuzatib yoziladi), ${koch} ta ko'chiriladi, ${chiq} ta maktabdan CHIQARILADI (qaytarib bo'lmaydi).${sanaN ? `\n${sanaN} ta ismi mos bolaning tug'ilgan sanasi tekshiriladi, farq qilsa Turondagidek yoziladi.` : ""}${rad ? `\n${rad} ta rad etilgan bola o'tkazib yuboriladi.` : ""}\nDavom etilsinmi?`)) {
         log("■ Bekor qilindi", "ogoh"); return;
       }
       $("aQosh").checked = true; $("aKoch").checked = true; $("aChiq").checked = turonToliq;

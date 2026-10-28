@@ -1,13 +1,17 @@
 // ==UserScript==
 // @name         eMaktab ↔ ERP.MAKTAB.UZ o'quvchilarni biriktirish
 // @namespace    https://smartjadval.uz/
-// @version      0.4.0
+// @version      0.4.5
 // @description  eMaktab «Maktab shaxslarini ERP.MAKTAB.UZ bilan biriktirish» sahifasida o'quvchilarni avtomatik bog'laydi: sinf raqami bir xil ERP sinflaridan ism-familiya + tug'ilgan sana bo'yicha topadi, tasdiqlaydi; ikkala tomonda bog'lanmaganlarni Excel qiladi
 // @author       smartjadval.uz
 // @match        https://emaktab.uz/manual-erp-persons-mapping*
 // @match        https://*.emaktab.uz/manual-erp-persons-mapping*
 // @match        https://*.kundalik.com/manual-erp-persons-mapping*
 // @grant        unsafeWindow
+// @grant        GM_xmlhttpRequest
+// @connect      schools.emaktab.uz
+// @connect      emaktab.uz
+// @connect      kundalik.com
 // @noframes
 // @run-at       document-idle
 // @updateURL    https://smartjadval.uz/emaktab-erp-biriktirish.user.js
@@ -66,7 +70,7 @@
   const HOST_ID = "sj-erp-birik-host";
   if (document.getElementById(HOST_ID)) return;
   const W = (typeof unsafeWindow !== "undefined" && unsafeWindow) || window;
-  const VERSIYA = (typeof GM_info !== "undefined" && GM_info && GM_info.script && GM_info.script.version) || "0.4.0";
+  const VERSIYA = (typeof GM_info !== "undefined" && GM_info && GM_info.script && GM_info.script.version) || "0.4.5";
 
   const LS = {
     ochiq: "sj_erpb_panel_ochiq",
@@ -127,7 +131,7 @@
     try {
       for (;;) {
         toxta();
-        await sleep(120);
+        await sleep(50);
         if (Date.now() - oxirgi >= tinch) return true;
         if (Date.now() - t0 > max) return false;
       }
@@ -210,6 +214,88 @@
     const m2 = String(s || "").match(/(\d{4})-(\d{2})-(\d{2})/);
     return m2 ? `${m2[3]}.${m2[2]}.${m2[1]}` : "";
   };
+
+  // Ikki sanada kun / oy / yildan aynan BITTASI farq qiladimi
+  function bitQismFarq(a, b) {
+    const x = sanaNorm(a).split("."), y = sanaNorm(b).split(".");
+    if (x.length !== 3 || y.length !== 3) return false;
+    return x.filter((v, i) => v !== y[i]).length === 1;
+  }
+  // Sana «yaqin»: bitta qism farq qiladi, yoki yil bir xil (kun va oy farq)
+  function sanaYaqinmi(a, b) {
+    if (bitQismFarq(a, b)) return true;
+    const x = sanaNorm(a).split("."), y = sanaNorm(b).split(".");
+    return x.length === 3 && y.length === 3 && x[2] === y[2];
+  }
+
+  // ===================================================================
+  //  2B-QISM. eMAKTABDA TUG'ILGAN SANANI TO'G'RILASH (0.4.4)
+  //
+  //  Maktab talabi (27.10.2026): «ism familiya bir xil bo'lsa, sanasida bitta
+  //  farq bo'lsa ham tug'ilgan sanani to'g'rilasin». To'g'ri sana deb ERP
+  //  dagisi olinadi: ERP davlat ro'yxati, JSHSHIR bilan bog'langan.
+  //  eMaktab shaxs sahifasi «Shaxsiy ma'lumotlar» (view=personal: nlast,
+  //  nfirst, …, birthday, sex, save) ochiladi, faqat `birthday` almashtirilib
+  //  forma qolgan maydonlari bilan qayta yuboriladi, so'ng qayta o'qib
+  //  tekshiriladi.
+  //  ⚠️ Biriktirish sahifasi emaktab.uz da, admin esa schools.emaktab.uz da —
+  //  boshqa domen, oddiy fetch CORS bilan rad etiladi. Shuning uchun
+  //  GM_xmlhttpRequest (@connect) ishlatiladi; u eMaktab cookie'larini
+  //  o'zi qo'shadi.
+  // ===================================================================
+  const ADMIN = location.protocol + "//schools." + location.hostname.replace(/^(www\.|schools\.)/, "");
+  const SCHOOL_ID = new URLSearchParams(location.search).get("schoolId") || new URLSearchParams(location.search).get("school") || "";
+  function gmSorov(method, url, body) {
+    return new Promise((res, rej) => {
+      if (typeof GM_xmlhttpRequest !== "function") { rej(new Error("GM_xmlhttpRequest yo'q (skriptni Tampermonkey orqali o'rnating)")); return; }
+      GM_xmlhttpRequest({
+        method, url, data: body, anonymous: false, timeout: 30000,
+        headers: body ? { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" } : {},
+        onload: (r) => res({ status: r.status, text: r.responseText || "", url: r.finalUrl || url }),
+        onerror: () => rej(new Error("so'rov ketmadi")), ontimeout: () => rej(new Error("so'rov vaqti tugadi")),
+      });
+    });
+  }
+  async function emkSanaTuzat(personId, yangiSana) {
+    if (!personId) return { ok: false, sabab: "eMaktab shaxs ID si kartada yo'q" };
+    if (!SCHOOL_ID) return { ok: false, sabab: "sahifa manzilida schoolId yo'q" };
+    const url = `${ADMIN}/v2/admin/persons/person?person=${encodeURIComponent(personId)}&school=${encodeURIComponent(SCHOOL_ID)}&view=personal`;
+    const r = await gmSorov("GET", url);
+    if (/login|auth|signin/i.test(r.url)) return { ok: false, sabab: "eMaktab admin sessiyasi yo'q — schools.emaktab.uz ga kiring" };
+    if (r.status !== 200) return { ok: false, sabab: `shaxs sahifasi HTTP ${r.status}` };
+    const doc = new DOMParser().parseFromString(r.text, "text/html");
+    const el = doc.querySelector('input[name="birthday"]') || doc.querySelector('input[name*="birth" i]');
+    const form = el && el.closest("form");
+    if (!form) return { ok: false, sabab: "«Shaxsiy ma'lumotlar» formasida tug'ilgan sana maydoni topilmadi" };
+    const eski = sanaNorm(el.value || "");
+    const yangi = sanaNorm(yangiSana);
+    if (eski === yangi) return { ok: true, eski, yangi, ozgarmadi: true };
+    const qiymat = String(el.getAttribute("type") || "").toLowerCase() === "date" ? yangi.split(".").reverse().join("-") : yangi;
+    const fd = new URLSearchParams();
+    form.querySelectorAll("input, select, textarea").forEach((x) => {
+      const n = x.getAttribute("name"); if (!n) return;
+      const t = String(x.getAttribute("type") || "").toLowerCase();
+      if (["submit", "button", "image", "file"].includes(t)) return;
+      if (x === el) { fd.append(n, qiymat); return; }
+      if (t === "checkbox" || t === "radio") { if (x.hasAttribute("checked")) fd.append(n, x.getAttribute("value") || "on"); return; }
+      if (x.tagName === "SELECT") { [...x.options].filter((o) => o.selected).forEach((o) => fd.append(n, o.value)); return; }
+      fd.append(n, x.value || "");
+    });
+    const tugmalar = [...form.querySelectorAll('input[type="submit"][name], button[type="submit"][name], button[name]:not([type])')];
+    const yubor = tugmalar.find((b) => /^save\d*$|saqla/i.test(b.getAttribute("name"))) || tugmalar.find((b) => !/skip|back|cancel|delete/i.test(b.getAttribute("name")));
+    if (yubor) fd.append(yubor.getAttribute("name"), yubor.getAttribute("value") || txt(yubor) || "");
+    const action = form.getAttribute("action");
+    const post = (!action || action === "#") ? url : new URL(action, ADMIN).href;
+    const j = await gmSorov("POST", post, fd.toString());
+    const jd = new DOMParser().parseFromString(j.text, "text/html");
+    const xato = [...jd.querySelectorAll(".validation-summary-errors, .field-validation-error, .alert-danger, .errorMessage")].map((x) => tozaMatn(x.textContent)).filter(Boolean).join("; ");
+    if (j.status >= 400 || xato) return { ok: false, sabab: `saqlanmadi: ${xato || "HTTP " + j.status}`, eski, yangi };
+    // Tekshiruv: sahifa qayta o'qiladi
+    const t2 = await gmSorov("GET", url);
+    const el2 = new DOMParser().parseFromString(t2.text, "text/html").querySelector('input[name="birthday"]');
+    if (el2 && sanaNorm(el2.value || "") !== yangi) return { ok: false, sabab: `yuborildi, lekin sahifada hamon ${sanaNorm(el2.value || "")}`, eski, yangi };
+    return { ok: true, eski, yangi };
+  }
 
   // ===================================================================
   //  3-QISM. SINF NOMLARI VA FILIAL
@@ -375,6 +461,20 @@
     await menyuYop(w);
     return [...yig].filter((t) => !/^(no options|variant yo.?q|hech narsa topilmadi|ro.?yxat bo.?sh|list is empty|-)$/i.test(t));
   }
+  // Qidiruv inputiga teriladigan so'zlar, navbat bilan.
+  //  ⚠️ 0.4.1 (27.10.2026: «MAMATQULOV HUSANJON UMID O`G`LI» tanlanmadi).
+  //  Uzun ro'yxatda kerakli talaba ko'rinmaydi, qidiruvga to'liq ism
+  //  teriladi. Saytning qidiruvi «O`G`LI» dagi backtick (`) va boshqa
+  //  apostroflar bilan mos topmaydi. Shuning uchun to'liq matndan keyin
+  //  apostrofsiz so'zlar sinaladi: familiya + ism, keyin faqat familiya,
+  //  keyin faqat ism. Tanlash baribir to'liq kalitning aniq mosligi bilan.
+  function qidiruvSozlari(matn) {
+    const asl = String(matn).split("(")[0].trim();
+    const sozlar = asl.split(/\s+/).filter((s) => s && !/['‘’ʻʼ´`]/.test(s));
+    return [asl, sozlar.slice(0, 2).join(" "), sozlar[0] || "", sozlar[1] || ""]
+      .filter((s, i, a) => s && s.length >= 3 && a.indexOf(s) === i);
+  }
+
   // Variantni tanlash: ro'yxatda ko'rinmasa qidiruv inputiga terib filtrlanadi
   async function variantTanla(w, matn) {
     const kalit = normKey(matn);
@@ -387,9 +487,12 @@
     if (!el) {
       const inp = w.querySelector("input") || document.activeElement;
       if (inp && inp.tagName === "INPUT") {
-        qiymatYoz(inp, String(matn).split("(")[0].trim());
-        await sleep(300);
-        el = await waitFor(top, 2500, 80);
+        for (const soz of qidiruvSozlari(matn)) {
+          qiymatYoz(inp, soz);
+          await sleep(300);
+          el = await waitFor(top, 2500, 80);
+          if (el) break;
+        }
         if (!el) { qiymatYoz(inp, ""); await sleep(200); el = top(); }
       }
     }
@@ -414,11 +517,20 @@
     if (!m) return false;
     const inp = w.querySelector("input") || (document.activeElement && document.activeElement.tagName === "INPUT" ? document.activeElement : null);
     if (!inp) { await menyuYop(w); return false; }
-    qiymatYoz(inp, String(matn).split("(")[0].trim());
-    await sleep(350);
-    const bitta = await waitFor(() => { const v = ochiqVariantlar(); return v.length === 1 || v.find((el) => normKey(txt(el)) === kalit) ? v : null; }, 2500, 80);
-    if (!bitta) { await menyuYop(w); return false; }
-    tugma(inp, "ArrowDown", 40);
+    // Kerakli variant ro'yxatda nechanchi o'rinda — shuncha ArrowDown bosiladi
+    let joyi = -1;
+    for (const soz of qidiruvSozlari(matn)) {
+      qiymatYoz(inp, soz);
+      await sleep(350);
+      joyi = (await waitFor(() => {
+        const v = ochiqVariantlar();
+        const i = v.findIndex((el) => normKey(txt(el)) === kalit);
+        return i >= 0 ? i + 1 : (v.length === 1 ? 1 : 0);
+      }, 2500, 80) || 0) - 1;
+      if (joyi >= 0) break;
+    }
+    if (joyi < 0) { await menyuYop(w); return false; }
+    for (let k = 0; k <= joyi; k++) { tugma(inp, "ArrowDown", 40); await sleep(60); }
     await sleep(80);
     tugma(inp, "Enter", 13);
     const ok = await waitFor(() => normKey(vidjetQiymati(w)) === kalit, 3000, 80);
@@ -438,14 +550,14 @@
     if (!b) return false;
     sichqon(b);
     await sleep(150);
-    await barqaror(250, 8000);
+    await barqaror(150, 8000);
     return true;
   }
   const tugmaOchiqmi = (b) => !!b && !b.disabled && b.getAttribute("aria-disabled") !== "true" && !/disabled/i.test(b.className || "");
   // Birinchi sahifaga qaytish (sinf almashganda sahifa raqami qolib ketmasin)
   async function birinchiSahifa() {
     const b = tugmaMatnli(/^1$/);
-    if (b && tugmaOchiqmi(b)) { sichqon(b); await sleep(120); await barqaror(250, 6000); }
+    if (b && tugmaOchiqmi(b)) { sichqon(b); await sleep(120); await barqaror(150, 6000); }
   }
   // Keyingi sahifa: «>» bosiladi; qatorlar o'zgarmasa — oxirgi sahifa
   async function keyingiSahifa() {
@@ -454,7 +566,7 @@
     const oldin = chapKartalar().map(kartaId).join(",");
     sichqon(b);
     await sleep(150);
-    await barqaror(250, 8000);
+    await barqaror(150, 8000);
     return chapKartalar().map(kartaId).join(",") !== oldin;
   }
   // «Bog'lanmagan shaxslar soni: 22»
@@ -540,7 +652,7 @@
   }
   // Sahifadagi ro'yxat tinchishini kutish; «yana» tugmasi bo'lsa bosiladi
   async function royxatniToldir() {
-    await barqaror(250, 6000);
+    await barqaror(150, 6000);
     for (let k = 0; k < 20; k++) {
       const n = chapKartalar().length;
       const yana = [...document.querySelectorAll("button, a")].find((b) => visible(b) && !begonaYoki(b) && /ko.?proq|yana|load more|show more/i.test(txt(b)) && tugmaOchiqmi(b));
@@ -648,17 +760,25 @@
     //  sanasi va «tasdiqlash» tugmasi qolgan). Shuning uchun tanlangan ism
     //  kartada IKKI marta (ro'yxat qiymati + sarlavha) chiqishi kutiladi;
     //  chiqmasa — hech bo'lmaganda bir marta va tugma bor bo'lsin.
+    //  ⚠️ 0.4.2 TEZLIK (27.10.2026: «sekin biriktiryapti»). Ilgari «ism ikki
+    //  marta» sharti 5 s kutilardi. Ism kartada bir marta chiqsa ham har bola
+    //  uchun to'liq 5 s yonardi. Endi asosiy belgi — RO'YXAT QIYMATI aynan
+    //  tanlangan ism, ism kartada ham bor va «tasdiqlash» tugmasi chiqqan.
+    //  Eski kartada ro'yxat «-» ko'rsatadi, shuning uchun bu shart eski
+    //  ma'lumotni o'tkazib yubormaydi.
     const k0 = normKey(String(erpNom).split(/\s+/)[0]).replace(/x/g, "h");
+    const kN = normKey(erpNom);
     const necha = (x) => { const m = normKey(x.ong.matn).replace(/x/g, "h"); let c = 0, i = -1; while ((i = m.indexOf(k0, i + 1)) >= 0) c++; return c; };
-    let r2 = await waitFor(() => { const x = qatorTop(kalit); return x && x.ong.tasdiq && necha(x) >= 2 ? x : null; }, 5000, 150);
-    if (!r2) r2 = await waitFor(() => { const x = qatorTop(kalit); return x && x.ong.tasdiq && necha(x) >= 1 ? x : null; }, 3000, 150);
+    const tayyor = (x) => x && x.ong.tasdiq && necha(x) >= 1 && (necha(x) >= 2 || (x.ong.sel && normKey(vidjetQiymati(x.ong.sel)) === kN));
+    let r2 = await waitFor(() => { const x = qatorTop(kalit); return tayyor(x) ? x : null; }, 4000, 80);
+    if (!r2) r2 = await waitFor(() => { const x = qatorTop(kalit); return x && x.ong.tasdiq && necha(x) >= 1 ? x : null; }, 1500, 100);
     if (!r2) {
       // Sichqoncha bilan tanlov sahifa holatiga tushmadi — klaviatura bilan
       const r1 = qatorTop(kalit);
       const kl = r1 && r1.ong.sel ? await variantTanlaKlaviatura(r1.ong.sel, erpNom) : false;
-      if (kl) r2 = await waitFor(() => { const x = qatorTop(kalit); return x && x.ong.tasdiq && necha(x) >= 1 ? x : null; }, 5000, 150);
+      if (kl) r2 = await waitFor(() => { const x = qatorTop(kalit); return x && x.ong.tasdiq && necha(x) >= 1 ? x : null; }, 3000, 80);
     }
-    if (r2) { await barqaror(200, 2000); r2 = qatorTop(kalit) || r2; return { r2, tanlandi: true, izoh: [] }; }
+    if (r2) { await barqaror(120, 1200); r2 = qatorTop(kalit) || r2; return { r2, tanlandi: true, izoh: [] }; }
     const izoh = [];
     const x = qatorTop(kalit);
     if (x && TASHXIS_SONI < 2) {
@@ -669,7 +789,7 @@
     return { r2: null, tanlandi, izoh };
   }
   async function asligaQaytar(r2) {
-    if (r2 && r2.ong.qaytar) { sichqon(r2.ong.qaytar); await sleep(120); await barqaror(200, 2500); }
+    if (r2 && r2.ong.qaytar) { sichqon(r2.ong.qaytar); await sleep(60); await barqaror(120, 1500); }
   }
 
   // Bitta eMaktab o'quvchisini ERP ro'yxatidan tanlab tekshirish/tasdiqlash.
@@ -705,19 +825,46 @@
       const moslik = nz.daraja === "to'liq" ? "to'liq" : `o'xshash ${Math.round(nomzod.ball * 100)}%`;
       const yoz = { emkFio: c.fio, emkSinf: c.sinf, emkSana: c.sana, emkJins: c.jins, emkLogin: c.login, emkPinfl: c.pinfl,
         erpFio: erpNom, erpSinf: r2.ong.sinf || E.nom, erpSana, erpPinfl: r2.ong.pinfl, erpJins: r2.ong.jins, moslik, vaqt: bugun() };
-      // To'liq ism mos + «sana shart emas» rejimi — sanasiz ham qabul
-      const qabul = jinsMos && (sanaMos || (nz.daraja === "to'liq" && !opt.sanaShart));
+      // To'liq ism mos + «sana shart emas» rejimi — sanasiz ham qabul.
+      // ⚠️ 0.4.3 (27.10.2026: «Shaxobiddinov Sirojiddin Jamoliddin o'g'li»
+      //  eMaktab 28.12.2018 ↔ ERP 28.01.2018; «Munavvarova Imonaxon» 24.07 ↔
+      //  24.06). Bunday holat odatda sana terishdagi xato. To'liq ism (sharif
+      //  bilan) mos, nomzod BITTA va sanada FAQAT BITTA qism (kun / oy / yil)
+      //  farq qilsa ham biriktiriladi. Excelda «sana farqi» deb yoziladi.
+      // ⚠️ 0.4.5 (27.10.2026: «G`ofurjonova Zulfiyaxon Axadjon qizi» 17.06.2018
+      //  ↔ ERP «G`OFURJONOIVA …» 10.03.2018 — ERP da familiya xato terilgan,
+      //  sanada kun ham, oy ham farq). «Ism aniq» = to'liq moslik YOKI
+      //  o'xshashlik ≥ 95%; ikkala tomonda otasining ismi yozilgan; shunday
+      //  nomzod BITTA. Sana: bitta qism farq YOKI yil bir xil (kun/oy farq).
+      const aniqlar = nz.daraja === "to'liq" ? nz.ro : nz.ro.filter((x) => x.ball >= 0.95);
+      const ismAniq = aniqlar.length === 1 && (nz.daraja === "to'liq" || nomzod.ball >= 0.95)
+        && ismKalit(c.fio).sozlar.length >= 3 && ismKalit(erpNom).sozlar.length >= 3;
+      const sanaYaqin = !sanaMos && opt.sanaBirFarq && ismAniq && sanaYaqinmi(c.sana, erpSana);
+      const qabul = jinsMos && (sanaMos || sanaYaqin || (nz.daraja === "to'liq" && !opt.sanaShart));
       if (qabul) {
-        const sabab = sanaMos ? "" : "sana shart emas rejimi — faqat to'liq ism bo'yicha";
-        if (opt.sinov) { await asligaQaytar(r2); return { kod: "sinov", yoz: { ...yoz, sabab } }; }
+        const sabab = sanaMos ? "" : (sanaYaqin
+          ? `sana farqi: eMaktab ${sanaNorm(c.sana)} ↔ ERP ${sanaNorm(erpSana)} — ism (sharif bilan) mos (${moslik}), sanada ${bitQismFarq(c.sana, erpSana) ? "bitta qism" : "kun va oy"} farq qiladi`
+          : "sana shart emas rejimi — faqat to'liq ism bo'yicha");
+        const sanaTuzatKerak = sanaYaqin && opt.sanaTuzat;
+        if (opt.sinov) {
+          await asligaQaytar(r2);
+          return { kod: "sinov", yoz: { ...yoz, sabab: sabab + (sanaTuzatKerak ? ` · SINOV: eMaktab sanasi ${sanaNorm(c.sana)} → ${sanaNorm(erpSana)} qilinadi` : "") } };
+        }
+        // Avval eMaktabdagi sana ERP dagidek to'g'rilanadi, keyin tasdiqlanadi
+        let tuzatIzoh = "";
+        if (sanaTuzatKerak) {
+          let tz;
+          try { tz = await emkSanaTuzat(c.id, erpSana); } catch (err) { tz = { ok: false, sabab: err.message }; }
+          tuzatIzoh = tz.ok ? ` · ✔ eMaktab sanasi ${sanaNorm(c.sana)} → ${sanaNorm(erpSana)} TO'G'RILANDI` : ` · ✖ eMaktab sanasi to'g'rilanmadi: ${tz.sabab}`;
+        }
         const oldinSoni = boglanmaganSoni();
         sichqon(r2.ong.tasdiq);
-        await sleep(150);
-        const ketdi = await waitFor(() => { const x = qatorTop(kalit); return !x || x.ong.holat === "biriktirilgan" || (oldinSoni > 0 && boglanmaganSoni() === oldinSoni - 1); }, 10000, 150);
-        await barqaror(250, 3000);
+        await sleep(60);
+        const ketdi = await waitFor(() => { const x = qatorTop(kalit); return !x || x.ong.holat === "biriktirilgan" || (oldinSoni > 0 && boglanmaganSoni() === oldinSoni - 1); }, 10000, 80);
+        await barqaror(150, 1500);
         const xabar = xabarMatni();
         if (!ketdi) return { kod: "xato: «tasdiqlash» bosildi, lekin qator o'zgarmadi" + (xabar ? " — " + cut(xabar, 200) : ""), yoz };
-        return { kod: "tasdiq", yoz: { ...yoz, sabab, xabar } };
+        return { kod: "tasdiq", yoz: { ...yoz, sabab: sabab + tuzatIzoh, xabar } };
       }
       sinalgan.push(`${erpNom} [${moslik}] — ERP sana ${erpSana || "?"}${jinsMos ? "" : ", jinsi " + (r2.ong.jins || "?")}`);
       oxirgi = yoz;
@@ -770,7 +917,7 @@
       holatYoz(`${C.nom}: bog'lanmaganlar o'qilmoqda…`);
       await yorliqniTanla(/^Biriktirilmagan$/i);
       if (!(await variantTanla(emkSinfVidjet(), C.nom))) { log(`✖ ${C.nom}: eMaktab sinf ro'yxatidan tanlanmadi`, "xato"); continue; }
-      await barqaror(250, 8000);
+      await barqaror(150, 8000);
       await birinchiSahifa();
 
       // 1) Bog'lanmagan qatorlar — sahifama-sahifa, bir marta
@@ -791,7 +938,7 @@
         toxta();
         holatYoz(`ERP «${erpQisqa(E)}» ro'yxati o'qilmoqda…`);
         if (!(await variantTanla(erpSinfVidjet(), E.nom))) { log(`✖ ERP «${E.nom}» ro'yxatdan tanlanmadi`, "xato"); continue; }
-        await barqaror(250, 8000);
+        await barqaror(150, 8000);
         const birRo = await waitFor(() => qatorlarniOqi().find((r) => r.ong.sel), 4000, 150);
         const nomlar = birRo ? (await variantlarniOqi(birRo.ong.sel)) || [] : [];
         N.erpTalabalar[E.nom] = nomlar.filter((nm) => !/kiriting/i.test(nm));
@@ -819,7 +966,7 @@
         toxta();
         holatYoz(`${C.nom} ← ERP ${erpQisqa(E)}: ${kalitlar.length} nomzod…`);
         if (!(await variantTanla(erpSinfVidjet(), E.nom))) { log(`✖ ${C.nom}: ERP «${E.nom}» ro'yxatdan tanlanmadi`, "xato"); continue; }
-        await barqaror(250, 8000);
+        await barqaror(150, 8000);
         await birinchiSahifa();
         const ro = N.erpTalabalar[E.nom] || [];
         const kerak = new Set(kalitlar);
@@ -840,8 +987,8 @@
             if (res.kod === "yoq") continue;
             if (res.kod === "kop") { N.shubhali.push({ emkFio: r.chap.fio, emkSinf: r.chap.sinf, emkSana: r.chap.sana, emkLogin: r.chap.login, erpSinf: E.nom, sabab: res.izoh }); topildi.add(kalit); qoldi.delete(kalit); log(`⚠ ${belgi} — ${res.izoh}`, "ogoh"); continue; }
             if (res.kod === "sana") { N.shubhali.push({ ...res.yoz }); topildi.add(kalit); qoldi.delete(kalit); log(`⚠ ${belgi} ↔ ${res.yoz.erpFio} — ${res.yoz.sabab}`, "ogoh"); continue; }
-            if (res.kod === "sinov") { N.biriktirildi.push({ ...res.yoz, sinov: true }); topildi.add(kalit); qoldi.delete(kalit); log(`✔ (sinov) ${belgi} ↔ ${res.yoz.erpFio} [${res.yoz.erpSinf}] ${res.yoz.erpSana}${res.yoz.moslik === "to'liq" ? "" : " (" + res.yoz.moslik + ")"}`, "ok"); continue; }
-            if (res.kod === "tasdiq") { N.biriktirildi.push(res.yoz); N.bajarilgan[kalit] = 1; topildi.add(kalit); qoldi.delete(kalit); tasdiqlandi++; jamiTasdiq++; log(`＋ ${belgi} ↔ ${res.yoz.erpFio} [${res.yoz.erpSinf}] ✔${res.yoz.moslik === "to'liq" ? "" : " (" + res.yoz.moslik + ")"}${res.yoz.xabar ? " · " + cut(res.yoz.xabar, 120) : ""}`, "ok"); natijaSaqla(); continue; }
+            if (res.kod === "sinov") { N.biriktirildi.push({ ...res.yoz, sinov: true }); topildi.add(kalit); qoldi.delete(kalit); log(`✔ (sinov) ${belgi} ↔ ${res.yoz.erpFio} [${res.yoz.erpSinf}] ${res.yoz.erpSana}${res.yoz.moslik === "to'liq" ? "" : " (" + res.yoz.moslik + ")"}${/^sana farqi/.test(res.yoz.sabab || "") ? " · ⚠ " + res.yoz.sabab.split(" — ")[0] + res.yoz.sabab.split(" · ").slice(1).map((x) => " · " + x).join("") : ""}`, "ok"); continue; }
+            if (res.kod === "tasdiq") { N.biriktirildi.push(res.yoz); N.bajarilgan[kalit] = 1; topildi.add(kalit); qoldi.delete(kalit); tasdiqlandi++; jamiTasdiq++; log(`＋ ${belgi} ↔ ${res.yoz.erpFio} [${res.yoz.erpSinf}] ✔${res.yoz.moslik === "to'liq" ? "" : " (" + res.yoz.moslik + ")"}${/^sana farqi/.test(res.yoz.sabab || "") ? " · ⚠ " + res.yoz.sabab.split(" — ")[0] + res.yoz.sabab.split(" · ").slice(1).map((x) => " · " + x).join("") : ""}${res.yoz.xabar ? " · " + cut(res.yoz.xabar, 120) : ""}`, "ok"); natijaSaqla(); continue; }
             log(`✖ ${belgi} — ${res.kod}`, "xato");
             if (res.izoh && res.izoh.length) log("   " + res.izoh.join("\n   "), "dim");
             N.shubhali.push({ emkFio: r.chap.fio, emkSinf: r.chap.sinf, emkSana: r.chap.sana, emkLogin: r.chap.login, erpSinf: E.nom, erpFio: res.yoz ? res.yoz.erpFio : "", sabab: res.kod });
@@ -880,7 +1027,7 @@
         holatYoz(`${C.nom}: biriktirilganlar…`);
         await yorliqniTanla(/^Biriktirilgan$/i);
         if (!(await variantTanla(emkSinfVidjet(), C.nom))) continue;
-        await barqaror(250, 8000);
+        await barqaror(150, 8000);
         await birinchiSahifa();
         for (let tur = 0; tur < 300; tur++) {
           toxta();
@@ -1107,6 +1254,12 @@
         </div>
         <div class="qator">
           <label><input type="checkbox" id="sanaShart" checked> tug'ilgan sana mos bo'lishi SHART</label>
+        </div>
+        <div class="qator">
+          <label><input type="checkbox" id="sanaBirFarq" checked> ism (sharif bilan) mos yoki ≥95% o'xshash bo'lsa, sanada bitta farq (kun/oy/yil) yoki yil bir xil bo'lsa ham biriktirilsin</label>
+        </div>
+        <div class="qator">
+          <label><input type="checkbox" id="sanaTuzat" checked> shunda eMaktabdagi tug'ilgan sana ERP dagidek TO'G'RILANSIN</label>
           <label><input type="checkbox" id="birikOqi"> oxirida «Biriktirilgan» yorlig'ini o'qish (sekin, faqat ERP hisoboti uchun)</label>
           <label><input type="checkbox" id="keshSaqla" checked> ERP ro'yxatlari keshini saqlash (qayta yurish tez)</label>
         </div>
@@ -1176,6 +1329,8 @@
     const s = JSON.parse(lsOl(LS.sozlama, "{}")) || {};
     if (s.boshqaFilial != null) $("boshqaFilial").checked = !!s.boshqaFilial;
     if (s.sanaShart != null) $("sanaShart").checked = !!s.sanaShart;
+    if (s.sanaBirFarq != null) $("sanaBirFarq").checked = !!s.sanaBirFarq;
+    if (s.sanaTuzat != null) $("sanaTuzat").checked = !!s.sanaTuzat;
     if (s.birikOqi != null) $("birikOqi").checked = !!s.birikOqi;
     if (s.darajalar != null) $("darajalar").value = s.darajalar;
     if (s.chegara != null) $("chegara").value = s.chegara;
@@ -1183,14 +1338,14 @@
   } catch { /* */ }
   const sozlamaSaqla = () => {
     lsYoz(LS.filial, $("filial").value);
-    lsYoz(LS.sozlama, JSON.stringify({ boshqaFilial: $("boshqaFilial").checked, sanaShart: $("sanaShart").checked, birikOqi: $("birikOqi").checked, darajalar: $("darajalar").value, chegara: $("chegara").value, keshSaqla: $("keshSaqla").checked }));
+    lsYoz(LS.sozlama, JSON.stringify({ boshqaFilial: $("boshqaFilial").checked, sanaShart: $("sanaShart").checked, sanaBirFarq: $("sanaBirFarq").checked, sanaTuzat: $("sanaTuzat").checked, birikOqi: $("birikOqi").checked, darajalar: $("darajalar").value, chegara: $("chegara").value, keshSaqla: $("keshSaqla").checked }));
   };
-  ["filial", "boshqaFilial", "sanaShart", "birikOqi", "darajalar", "chegara", "keshSaqla"].forEach((id) => { $(id).onchange = sozlamaSaqla; });
+  ["filial", "boshqaFilial", "sanaShart", "sanaBirFarq", "sanaTuzat", "birikOqi", "darajalar", "chegara", "keshSaqla"].forEach((id) => { $(id).onchange = sozlamaSaqla; });
 
   $("yur").onclick = async () => {
     if (HOLAT.ishlayapti) return;
     sozlamaSaqla();
-    const opt = { sinov: $("sinov").checked, sanaShart: $("sanaShart").checked, boshqaFilial: $("boshqaFilial").checked,
+    const opt = { sinov: $("sinov").checked, sanaShart: $("sanaShart").checked, sanaBirFarq: $("sanaBirFarq").checked, sanaTuzat: $("sanaTuzat").checked, boshqaFilial: $("boshqaFilial").checked,
       biriktirilganOqi: $("birikOqi").checked, keshSaqla: $("keshSaqla").checked, darajalar: $("darajalar").value, filialMatni: $("filial").value, sinovSinf: 2,
       chegara: Math.min(1, Math.max(0.5, (Number(String($("chegara").value).replace(",", ".")) || 80) / 100)) };
     if (!opt.sinov && !window.confirm("HAQIQIY yurish: topilgan va tug'ilgan sanasi mos o'quvchilar uchun «Birikmani tasdiqlash» bosiladi.\nDavom etilsinmi?")) { log("■ Bekor qilindi", "ogoh"); return; }
