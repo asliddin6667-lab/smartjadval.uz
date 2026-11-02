@@ -11,6 +11,7 @@ import {
   adminSetLocation, syncAllDistricts,
 } from "../services/districtService";
 import { UZ_REGIONS, districtsOf } from "../utils/uzRegions";
+import { userMatchesQuery, eduIdExact, rankUsersByQuery, looksLikeEduId } from "../utils/userSearch";
 import { fetchSchoolData } from "../services/cloudSync";
 import { buildBackup, safeFileName, BACKUP_VERSION } from "../services/backupService";
 
@@ -449,23 +450,24 @@ export default function UsersPage({ currentUser, toast }) {
     if (st in counts) counts[st] += 1;
   }
 
-  const shownUsers = users.filter((u) => {
-    if (subFilter !== "all" && subState(u) !== subFilter) return false;
-    // Viloyat/tuman filtri
-    if (filterRegion && (u.regionName || "") !== filterRegion) return false;
-    if (filterDistrict && (u.districtName || "") !== filterDistrict) return false;
-    if (!q) return true;
-    if (
-      [u.uid, u.email, u.name, u.schoolName]
-        .filter(Boolean)
-        .some((field) => String(field).toLowerCase().includes(q))
-    ) return true;
-    const qDigits = q.replace(/\D/g, "");
-    if (qDigits && u.phone) {
-      return String(u.phone).replace(/\D/g, "").includes(qDigits);
-    }
-    return false;
-  });
+  // EDU-ID aniq mos kelgan foydalanuvchi: tab (obuna holati) va
+  // viloyat/tuman filtrlari uni YASHIRMAYDI — admin aynan shu odamni
+  // qidiryapti. Qolgan natijalar odatdagidek filtrlanadi.
+  const exactIdHit = q ? users.some((u) => eduIdExact(u.uid, q)) : false;
+
+  const shownUsers = rankUsersByQuery(
+    users.filter((u) => {
+      if (q && exactIdHit) return eduIdExact(u.uid, q);
+      if (subFilter !== "all" && subState(u) !== subFilter) return false;
+      // Viloyat/tuman filtri
+      if (filterRegion && (u.regionName || "") !== filterRegion) return false;
+      if (filterDistrict && (u.districtName || "") !== filterDistrict) return false;
+      if (!q) return true;
+      // ID (tire/bo'sh joy/registr/kirill farqsiz), email, ism, maktab, telefon
+      return userMatchesQuery(u, q);
+    }),
+    q,
+  );
 
   // Tumanlar bo'limida ko'rsatiladigan ro'yxat (viloyat filtri bilan)
   const shownDistricts = selRegion
@@ -1072,6 +1074,13 @@ export default function UsersPage({ currentUser, toast }) {
                       🔍 {q
                         ? `"${query}" bo'yicha hech narsa topilmadi`
                         : "Bu holatda foydalanuvchi yo'q"}
+                      {q && looksLikeEduId(q) && (
+                        <div style={{ fontSize: 12.5, marginTop: 6, opacity: .85 }}>
+                          Bunday EDU-ID li foydalanuvchi bazada yo'q. ID 6 ta belgidan
+                          iborat (I, O, 0, 1 ishlatilmaydi) — belgilarni tekshiring
+                          yoki «⟳ Yangilash» ni bosing.
+                        </div>
+                      )}
                     </td>
                   </tr>
                 )}

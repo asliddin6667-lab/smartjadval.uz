@@ -4,6 +4,7 @@ import {
   logAction, adminResetPassword,
 } from "../services/districtService";
 import { fetchExcelStore } from "../services/districtExcelService";
+import { userMatchesQuery, eduIdExact, rankUsersByQuery } from "../utils/userSearch";
 import {
   ExcelDataPage, SetkaMatrix, JadvalViewer,
   TeacherHoursTable, exportSchoolExcel, buildAutoExcelData,
@@ -584,14 +585,19 @@ function SchoolsPage({ loading, schools, onOpenSchool, currentUser, addToast }) 
   }, [schools]);
 
   const q = query.trim().toLowerCase();
-  const shown = schools.filter((s) => {
-    if (filter === "with" && !s.hasSchedule) return false;
-    if (filter === "without" && s.hasSchedule) return false;
-    if (!q) return true;
-    return [s.schoolName, s.name, s.email, s.uid, s.phone]
-      .filter(Boolean)
-      .some((f) => String(f).toLowerCase().includes(q));
-  });
+  // EDU-ID aniq mos kelsa — "jadvali bor/yo'q" filtri uni yashirmaydi
+  const exactIdHit = q ? schools.some((s) => eduIdExact(s.uid, q)) : false;
+  const shown = rankUsersByQuery(
+    schools.filter((s) => {
+      if (q && exactIdHit) return eduIdExact(s.uid, q);
+      if (filter === "with" && !s.hasSchedule) return false;
+      if (filter === "without" && s.hasSchedule) return false;
+      if (!q) return true;
+      // EDU-ID (tire/bo'sh joy/registr farqsiz), maktab, direktor, email, telefon
+      return userMatchesQuery(s, q);
+    }),
+    q,
+  );
 
   if (loading) return <div className="da-skel" style={{ height: 380 }} />;
 
