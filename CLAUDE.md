@@ -1602,7 +1602,7 @@ ro'yxatini eMaktab o'quvchilari bilan solishtirib qo'shish / ko'chirish / chiqar
 
 ### Turon ↔ ERP (erp.maktab.uz) o'quvchilar: ERP tugmachasini yoqish (alohida skript)
 
-[turon-erp-moslash.user.js](public/turon-erp-moslash.user.js) v6.3 (16.10.2026) — Turon
+[turon-erp-moslash.user.js](public/turon-erp-moslash.user.js) v6.7 (31.10.2026) — Turon
 jadvalidagi «ERP» tugmachasini (`input.erp-toggle[data-student-id]`) ERP
 ro'yxati bilan solishtirib yoqadi/o'chiradi. v4.2 (faqat sukutdagi Faol ro'yxat,
 «To'xtatish» GM holatini o'chirsa ham uchayotgan `async` davom etib yana
@@ -1628,9 +1628,38 @@ ishga tushmaydi.
   yaqin, Turonda bir xil ismli ikki qator, ikki Turon qatori bitta ERP
   nomzodga teng yaqin) — tegilmaydi, Excel «Shubhalilar». `birthKey` ikkala
   sana formatini (dd.mm.yyyy / yyyy-mm-dd) `yyyymmdd` ga keltiradi.
+- **Takror ismlar (v6.4, 2-daraja ichida)**: ism aynan bir xil bo'lib ikki
+  tomonda bir nechta bo'lsa avval shubhali deb tashlanmaydi, bosqichma-bosqich
+  ajratiladi: 2a) tug'ilgan sana aynan teng yagona juft → 2b) sinf kaliti
+  (`sinfKey`: «4-X»/«4 "X"»/«4-х» → `4x`) teng yagona juft (sana aniq farq
+  qilsa yo'q) → 2c) birga-bir qolsa bog'lanadi → 2d) ERPda yagona, Turonda
+  bir nechta → bo'lim ustuvorligi (Faol avval, `prio`), qolgan Turon qatori
+  «takror» izohi bilan bog'lanmagan qoladi (shubhali EMAS — o'chiriladi) →
+  2e) baribir ajralmasa shubhali, `nomzodlar[]` (ERP ism · sinf · sana) va
+  batafsil `sabab`. 1-/3-darajadagi «ikki nomzod yaqin» ham `nomzodlar`
+  beradi (`eng` endi `i2` qaytaradi). ERP yig'ish tugaganda bir xil ismli
+  guruhlar jurnalga chiqadi (`takrorlarHaqida`).
 - **Reja tasdig'i**: o'zgarishlar jadvali panel ichida, «Qo'llash/Bekor»;
   «Tasdiqsiz avtomatik» belgisi bilan o'tkazib yuboriladi. ERP bazasi
-  `erp_meta.jami` dan kam yig'ilgan bo'lsa qizil ogoh.
+  `erp_meta.jami` dan kam yig'ilgan bo'lsa qizil ogoh; `erp_meta.ts` dan
+  `SOZ.ERP_ESKI_KUN` (7) kun o'tgan bo'lsa «eskirgan» ogohi (v6.4). Rejada
+  yig'iladigan `<details>` ro'yxatlar: shubhalilar (sabab bilan), qulflangan,
+  tugmacha/ID yo'q; `tashqariOzgarish` — tanlanmagan bo'limlarda ham
+  o'zgarishi kerak bo'lganlar soni + «🌐 Barcha bo'limlar bilan» tugmasi
+  (`tasdiqKut` → `'hammasi'`, `boshla` tanlovni kengaytirib `rejaTuz` ni
+  qayta chaqiradi).
+- **Qulf / ID yo'q (v6.4)**: `rejaTuz(rows, tanlangan, qulfUrin)` — qulf va
+  ID-yo'q qatorlar `sabab` oladi; panel belgisi «Qulflangan tugmachalarni ham
+  urinib ko'rish» (`#tem-qulf`) bilan `iframeSahifa` `disabled` ni olib
+  tashlab bosadi, natija baribir `tekshir` orqali serverdan o'qiladi. ID
+  zaxira manbalari `sidOf` (data-id, tr[data-id], `/students/<id>` havola,
+  raqamli value) va `toggleTop` ularga mos qidiradi.
+- **🔍 Diagnostika (v6.4)**: panelda qidiruv (`#tem-qidir`, `diagnoz`) —
+  oxirgi `tem_natija` dan ism/kod bo'yicha qator(lar)ni topib xulosa beradi
+  (shubhali / ERPda yo'q / bo'lim tanlanmagan / qulf / ID yo'q / saqlanmadi /
+  joyida), tugmacha holati, ERP nomzod, sabab, `nomzodlar`; pastida ERP
+  bazasidan ham qidiradi, topilmasa «baza eskirgan bo'lishi mumkin» deydi.
+  Jurnalga ham shubhali/qulf/ID-yo'q ro'yxatlari ismlar bilan chiqadi.
 - **Yoqish** yashirin same-origin iframe'larda (`iframe.tem-iframe`,
   `#tem-iframe-N`): sahifama-sahifa haqiqiy tugmacha bosiladi, `confirm/alert`
   3 usulda o'chiriladi (wrapper, `unsafeWindow`, inline `<script>`),
@@ -1659,6 +1688,19 @@ ishga tushmaydi.
   Birinchi sahifada bosilgan-u birortasi saqlanmasa — **zaxira rejim**
   (`tem_nav`): haqiqiy sahifa `q=<kod>` bilan birma-bir ochiladi, panel
   yuklanganda `zaxiraDavom()` o'zi davom ettiradi.
+- **«Sana farq» ro'yxati (v6.7)**: moslashtirish v6.4 tartibida — ism aynan
+  bir xil bo'lsa sana farq qilsa ham bog'lanadi va yoqiladi («ism aniq (sana
+  farq)», 2c; 2d ham sanaga qaramaydi; 1-/3-daraja sana farqini
+  o'tkazmaydi). Hisobot uchun `sanaFarqmi(r)` = bog'langan + ERP tugmachasi
+  YONIQ (`holat(r)`) + ikkala sana bor-u `birthKey` farqli. To'liq hisobotda
+  doimiy `Sana farq` varag'i (bo'sh bo'lsa ham), Umumiy'da KPI «Sana farq
+  (yoniq)» (KPI qatorlari soni `kpi.length` dan), bo'lim/filial jadvallarida
+  «Sana farq» ustuni (11 ustun), Turon varaqlarida «ERP sana» katagi sariq;
+  oddiy Excelda `Sana farq` varag'i, Umumiy'da ustun, `qator` da «ERP sana».
+  `boshla` jurnalga 15 tagacha ismni Turon/ERP sanasi bilan chiqaradi.
+  Tarix (31.10.2026): v6.6 da sana to'siq qilingan (sana farq → bog'lanmas,
+  yoniqlari o'chirilar) edi; foydalanuvchi shu kuni v6.4 tartibiga
+  qaytarishni so'radi — faqat ro'yxat qoldi, `sanaFarq` belgisi olib tashlandi.
 - **To'xtatish haqiqiy**: `HOLAT.toxtat` + `ToxtashXato` (`chk()`/`kut()` har
   qadamda), fetch `AbortController`, reja tasdig'i `HOLAT.radEt`, iframe
   `about:blank`, `tem_nav` o'chiriladi. Headless Chrome'da sinalgan: to'xtatgach
@@ -1673,7 +1715,12 @@ ishga tushmaydi.
 - Sinov usuli: skript nusxasida `location.hostname` shartlari `true`,
   `base` soxta URL, `GM_*`/`fetch` mock (sahifa HTML generatori), iframe
   uchun `fr.src = url` → `fr.srcdoc = MOCK(url)`; headless Chrome
-  `--dump-dom` bilan panel matnini o'qish (qarang xotira).
+  `--dump-dom` bilan panel matnini o'qish (qarang xotira). Sof mantiq
+  (`moslashtir`/`rejaTuz`) uchun tezroq yo'l: fayldan izoh-markerlar
+  (`// ================= SOZLAMALAR`, `// ================= ISM SOLISHTIRISH`,
+  `// ---- ERP indeksi ----` … `// ---- YASHIRIN IFRAME'LAR`) orasidagi
+  bo'laklarni Python bilan kesib bitta test HTML ga qo'yish va headless
+  Chrome'da `--dump-dom` qilish — v6.4 da 38 ta holat shu usulda o'tgan.
 
 ### Deploy
 
@@ -1751,6 +1798,50 @@ nusxasi edi** — «Tabiiy fan (Science)» unda yo'q edi va o'sha dars
 
 eMaktabda uchragan qo'shimcha yozilishlar sinonimlarga kiritildi:
 «Естественные науки», «Букварь», «Изо», «Чтение», «Физическое воспитание».
+
+#### Dashboard oynasi va yuqori menyu bandi (02.11.2026, v1.14–1.15)
+
+Ko'prik endi **markazda ochiladigan katta oyna** (Shadow DOM, `#ov` overlay):
+chapda jadval fayli / chorak / sozlamalar, o'ngda **sinflar jadvali**
+(`qatorlar[]`: fayldagi sinf ↔ eMaktab guruhi ↔ tanlangan chorakdagi sxema
+↔ holat) va har sinf uchun «▶». Yon panel va dumaloq «SJ» tugma yo'q —
+tugma faqat menyu topilmasa zaxira sifatida chiqadi.
+
+- **Kirish nuqtasi — eMaktab yuqori menyusidagi «SJ DARS JADVALI» bandi**
+  (`menyuBandiQosh`, 2B-QISM): TA'LIM bandining kloni, shuning uchun sayt
+  uslubini meros oladi. TA'LIM «ta'lim» matni + yonida MULOQOT/O'QITUVCHIGA
+  borligi bilan topiladi.
+- **Host qoidasi** (`KOPRIK_HOST`): API va cookie `schools.emaktab.uz` da.
+  Boshqa subdomenda (emaktab.uz/teachers) faqat menyu bandi qo'yiladi, u
+  `https://schools.<ildiz>/v2/schedules/?school=…` ga o'tkazadi (nisbiy
+  `/v2/schedules/` 404 bergan edi). `schools.` ichida oyna ISTALGAN
+  sahifada ishlaydi.
+- **`API.initUmumiy()`** — sxema sahifasisiz ishlaydi: `school` URL'dan
+  yoki havolalardan, `xss` joriy sahifadan → ro'yxat sahifasidan →
+  generator sahifasidan. `init()` endi `schedule` yo'q bo'lsa xato
+  bermaydi; sxema `sinfniJoylashtir()` ichida sinfma-sinf beriladi
+  (`API.scheduleId/groupId/band/bosh` qayta sozlanadi, `fanlar` birinchi
+  formadan olinadi).
+- **Choraklar** `choraklarOqi(group)` — ko'p manbali (v1.15): joriy
+  sahifa → sinfning `generator` sahifasi → `/v2/schedules/view?school&group`
+  sahifasi (jonli maktabda yorliqlar aynan shu yerda, generator'da emas —
+  02.11.2026 da «topilmadi» shu sababdan). `choraklarDomdan()` id'ni
+  havoladan, bo'lmasa atributlardan, bo'lmasa xom HTML'dan oladi; faol
+  (havolasiz) yorliq id'si boshqa yorliq sahifasidan. Topilgan ro'yxat
+  `LS_CHORAK` da eslab qolinadi; topilmasa jurnalga `tashxis` chiqadi.
+  Sxema nomi chorak nomiga ergashadi (`chorakNomSinxron`), qo'lda
+  o'zgartirilsa ergashmaydi.
+- **Sxema tanlovi sinf qatorida.** `sxemalarYukla()` fon rejimida har
+  fayl sinfi uchun tanlangan chorakdagi sxemalarni o'qiydi (`q.sxemalar`),
+  qatorda `<select>` chiqadi: mavjud sxemalar + «＋ «N chorak» (yo'q bo'lsa
+  yaratiladi)». Odatiy tanlov — nomi mos sxema. `q.sxemaId` joylashda
+  ustun; `""` yoki noma'lum bo'lsa nom bo'yicha, bo'lmasa yaratiladi.
+  Amal boshlanganda fon yuklash to'xtaydi (`sxSeq`, `ishKetyapti`).
+- **Sinov** (`sinovApi`) birinchi tanlangan sinfda nomlarni tekshiradi,
+  hech narsa yozmaydi; sxemasi yo'q sinfda sinov sxema yaratmaydi.
+- Node yo'q mashinada butun skript headless Chrome'da `fetch` mock bilan
+  uchdan-uchiga sinaldi (soxta ro'yxat/generator/forma/ajax javoblari) —
+  sxema yaratish, band katakni o'tkazish, 2 dars joylash tekshirildi.
 
 #### Sxema yaratish va «Hamma sinfga» (18.09.2026)
 

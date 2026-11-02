@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         TURON ERP Moslash
 // @namespace    turon-erp-moslash
-// @version      6.3
-// @description  ERP ro'yxatini yig'adi; TURONda tanlangan bo'lim (Faol/Nofaol/Bitirgan/...) o'quvchilarini ERP bilan solishtirib ERP tugmachasini yoqadi/o'chiradi
+// @version      6.7
+// @description  ERP ro'yxatini yig'adi; TURONda tanlangan bo'lim (Faol/Nofaol/Bitirgan/...) o'quvchilarini ERP bilan solishtirib ERP tugmachasini yoqadi/o'chiradi; takror ismlarni sana/sinf/bo'lim bo'yicha ajratadi, o'quvchi bo'yicha diagnostika; hisobotda «Sana farq» (ism aynan mos, sana farq, tugma yoniq) ro'yxati
 // @match        https://erp.maktab.uz/StudentReports/StudentList*
 // @match        https://turon-odob-ilm.xususiy-maktab.uz/*
 // @grant        GM_setValue
@@ -38,6 +38,7 @@
         HAJM: 500,            // bitta sahifada so'raladigan qatorlar soni
         HAJM_NOMLARI: ['per_page', 'perPage', 'limit', 'page_size', 'pageSize', 'paginate', 'per-page', 'size', 'count', 'rows'],
         MAX_SAHIFA: 400,
+        ERP_ESKI_KUN: 7,      // ERP bazasi shundan eski bo'lsa ogohlantiriladi (kun)
     };
     const STUDENTS_PATH = '/head-office/students';
     const KEYS = {
@@ -73,6 +74,16 @@
         s = s.replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ').trim();
         return s.split(' ').filter(t => t && !KALIT_TASHLA.has(t)).sort().join(' ');
     }
+
+    // Sinf kaliti: «4-X», «4 "X"», «4х sinf», «4-x | Turon» → '4x'; topilmasa ''
+    function sinfKey(s) {
+        let t = String(s || '').toLowerCase();
+        t = t.split('').map(ch => CYR[ch] !== undefined ? CYR[ch] : ch).join('').replace(/[’'`ʻʼ‘´"«»]/g, '');
+        const m = /(\d{1,2})\s*[-–—]?\s*([a-z])?(?![a-z])/.exec(t);
+        return m ? m[1] + (m[2] || '') : '';
+    }
+    // ERP o'quvchisining qisqa tavsifi (nomzodlar ro'yxati uchun)
+    const erpTavsif = it => `${it.fish || ''}${it.sinf ? ' · ' + it.sinf : ''}${it.birth ? ' · ' + it.birth : " · sana yo'q"}`;
 
     function levRatio(a, b) {
         const m = a.length, n = b.length;
@@ -185,9 +196,33 @@
         }
         return null;
     }
-    const toggleTop = (doc, sid) =>
-        doc.querySelector('input.erp-toggle[data-student-id="' + sid + '"]')
-        || doc.querySelector('input[type="checkbox"][data-student-id="' + sid + '"]');
+    // Qatordagi ERP tugmachasi va uning ID si (data-student-id bo'lmasa — zaxira manbalar)
+    function toggleIn(td) {
+        return td.querySelector('input.erp-toggle') || td.querySelector('input[type="checkbox"]');
+    }
+    function sidOf(inp, tr) {
+        if (!inp) return '';
+        const v = inp.getAttribute('data-student-id') || inp.getAttribute('data-id') || inp.getAttribute('data-student')
+            || (tr && (tr.getAttribute('data-student-id') || tr.getAttribute('data-id'))) || '';
+        if (v) return String(v).trim();
+        const a = tr ? tr.querySelector('a[href*="/students/"]') : null;
+        const m = a ? /\/students\/(\d+)/.exec(a.getAttribute('href') || '') : null;
+        if (m) return m[1];
+        return /^\d+$/.test(inp.value || '') ? inp.value : '';
+    }
+    const toggleTop = (doc, sid) => {
+        const q = 'input.erp-toggle[data-student-id="' + sid + '"], input[type="checkbox"][data-student-id="' + sid + '"], '
+            + 'input.erp-toggle[data-id="' + sid + '"], input[type="checkbox"][data-id="' + sid + '"]';
+        let inp = null;
+        try { inp = doc.querySelector(q); } catch (e) { }
+        if (inp) return inp;
+        for (const tr of doc.querySelectorAll('tr[data-student-id="' + sid + '"], tr[data-id="' + sid + '"]')) {
+            inp = tr.querySelector('input.erp-toggle, input[type="checkbox"]'); if (inp) return inp;
+        }
+        const a = doc.querySelector('a[href*="/students/' + sid + '"]');
+        const tr = a ? a.closest('tr') : null;
+        return tr ? tr.querySelector('input.erp-toggle, input[type="checkbox"]') : null;
+    };
 
     // ================= PANEL (surish, o'lcham, masshtab, yig'ish) =================
     const CSS = `
@@ -461,9 +496,19 @@
         }
         function saqla(list) {
             GM_setValue(KEYS.erp, list);
-            GM_setValue(KEYS.erpMeta, { when: new Date().toLocaleString(), count: list.length, jami: jamiSoni() });
+            GM_setValue(KEYS.erpMeta, { when: new Date().toLocaleString(), ts: Date.now(), count: list.length, jami: jamiSoni() });
         }
         infoKorsat();
+        // ERP ro'yxatida bir xil ismlilar — TURON tomonida sana/sinf bilan ajratiladi, foydalanuvchiga ma'lumot
+        function takrorlarHaqida(list) {
+            const g = new Map();
+            list.forEach(e => { const n = normalize(e.fish); if (!n) return; if (!g.has(n)) g.set(n, []); g.get(n).push(e); });
+            const dup = [...g.values()].filter(a => a.length > 1);
+            if (!dup.length) { log("ℹ️ ERPda bir xil ismli o'quvchi yo'q", 'dim'); return; }
+            log(`ℹ️ ERPda bir xil ismli ${dup.length} guruh — TURONda tug'ilgan sana/sinf bo'yicha ajratiladi:`, 'warn');
+            dup.slice(0, 15).forEach(a => log('&nbsp;&nbsp;• ' + a.map(e => esc(erpTavsif(e))).join(' | '), 'dim'));
+            if (dup.length > 15) log(`&nbsp;&nbsp;… yana ${dup.length - 15} guruh`, 'dim');
+        }
 
         function scrapePage(list) {
             let yangi = 0;
@@ -575,6 +620,7 @@
                 if (jami && list.length < jami) {
                     log(`⚠️ Jami ${jami} ta bo'lishi kerak, ${list.length} ta yig'ildi — qolgan sahifalarga qo'lda o'tib «➕» ni bosing`, 'warn');
                 }
+                takrorlarHaqida(list);
             } catch (e) {
                 if (toxtashmi(e)) { saqla(list); infoKorsat(`⏹ To'xtatildi. Saqlandi: <b>${list.length}</b> ta.`); log("⏹ To'xtatildi", 'warn'); }
                 else { log('❌ ' + esc(e.message), 'err'); setDot('err'); }
@@ -648,8 +694,8 @@
                 const name = extractName(lines);
                 if (!name) continue;
                 n++;
-                const inp = tds[f.erpIdx].querySelector('input.erp-toggle') || tds[f.erpIdx].querySelector('input[type="checkbox"]');
-                const sid = inp ? (inp.getAttribute('data-student-id') || '') : '';
+                const inp = toggleIn(tds[f.erpIdx]);
+                const sid = sidOf(inp, tr);
                 const kod = extractKod(lines);
                 const birth = f.tugIdx >= 0 ? cellText(tds[f.tugIdx]) : '';
                 const key = sid || kod || (name + '|' + birth);
@@ -660,9 +706,9 @@
                     name, kod, sinf: f.sinfIdx >= 0 ? cellText(tds[f.sinfIdx]) : '',
                     filial: fil.filial, filialTola: fil.filialTola,
                     status: s.v, statusT: f.statusIdx >= 0 ? (cellText(tds[f.statusIdx]) || s.t) : s.t, prio: s.prio,
-                    birth, bd: birthKey(birth), sid, on: inp ? inp.checked : false, disabled: inp ? inp.disabled : true,
-                    page, norm: normalize(name),
-                    found: false, amb: false, near: '', score: 0, level: '', sabab: '', natija: '', onAfter: null,
+                    birth, bd: birthKey(birth), sid, on: inp ? inp.checked : false, disabled: inp ? inp.disabled : true, tugmaYoq: !inp,
+                    page, norm: normalize(name), sk: sinfKey(f.sinfIdx >= 0 ? cellText(tds[f.sinfIdx]) : ''),
+                    found: false, amb: false, near: '', score: 0, level: '', sabab: '', natija: '', onAfter: null, nomzodlar: [],
                 });
             }
             return n;
@@ -727,7 +773,7 @@
 
         // ---- ERP indeksi ----
         function erpIndeks(erpList) {
-            const items = erpList.map((e, i) => ({ i, fish: e.fish || '', sinf: e.sinf || '', birth: e.birth || '', norm: normalize(e.fish), bd: birthKey(e.birth) }));
+            const items = erpList.map((e, i) => ({ i, fish: e.fish || '', sinf: e.sinf || '', birth: e.birth || '', norm: normalize(e.fish), bd: birthKey(e.birth), sk: sinfKey(e.sinf) }));
             const byNorm = new Map(), byBd = new Map(), tokenIdx = new Map();
             for (const it of items) {
                 if (!byNorm.has(it.norm)) byNorm.set(it.norm, []);
@@ -743,13 +789,17 @@
             const used = new Set();
             const bagla = (r, i, s, level) => { r.found = true; r.erpIdx = i; r.near = E.items[i].fish; r.score = Math.round(s); r.level = level; used.add(i); };
             const eng = (r, pool) => {
-                let b = -1, bs = 0, s2 = 0;
+                let b = -1, bs = 0, s2 = 0, b2 = -1;
                 for (const i of pool) {
                     if (used.has(i)) continue;
                     const s = simNorm(r.norm, E.items[i].norm);
-                    if (s > bs) { s2 = bs; bs = s; b = i; } else if (s > s2) s2 = s;
+                    if (s > bs) { s2 = bs; b2 = b; bs = s; b = i; } else if (s > s2) { s2 = s; b2 = i; }
                 }
-                return { i: b, s: bs, s2 };
+                return { i: b, s: bs, s2, i2: b2 };
+            };
+            // Shubhali qatorga ERP nomzodlar ro'yxatini yozish (foydalanuvchiga ma'lumot)
+            const nomzodYoz = (r, idxs, scores) => {
+                r.nomzodlar = idxs.filter(i => i >= 0).map((i, k) => erpTavsif(E.items[i]) + (scores && scores[k] != null ? ` (${Math.round(scores[k])}%)` : ''));
             };
             const fuzzyEng = r => {
                 const counts = new Map();
@@ -778,28 +828,83 @@
                 if (c.i < 0 || c.s < SOZ.SANA_ISM_MIN) continue;
                 if (c.s < 100 && c.s2 >= SOZ.SANA_ISM_MIN && c.s - c.s2 < SOZ.SHUBHA_FARQ) {
                     r.amb = true; r.near = E.items[c.i].fish; r.score = Math.round(c.s);
-                    r.sabab = 'bir xil sanali ikki ERP nomzod juda yaqin';
+                    nomzodYoz(r, [c.i, c.i2], [c.s, c.s2]);
+                    r.sabab = `bir xil sanali (${r.birth}) ikki ERP nomzod juda yaqin: ${r.nomzodlar.join(' | ')}`;
                     continue;
                 }
                 bagla(r, c.i, c.s, c.s >= 100 ? 'ism+sana' : 'sana+ism≈');
             }
 
-            // 2-daraja: ism aynan bir xil (sana farq yoki yo'q) — ikkala tomonda yagona bo'lsa
+            // 2-daraja: ism aynan bir xil (sana farq yoki yo'q).
+            // Takrorlar bosqichma-bosqich ajratiladi: sana → sinf → bo'lim ustuvorligi (Faol avval); qolgani shubhali + nomzodlar ro'yxati
             const byNormT = new Map();
             rows.filter(r => !r.found && !r.amb).forEach(r => { if (!byNormT.has(r.norm)) byNormT.set(r.norm, []); byNormT.get(r.norm).push(r); });
-            for (const [n, rs] of byNormT) {
-                const cands = (E.byNorm.get(n) || []).filter(i => !used.has(i));
+            const olibTashla = (arr, x) => { const k = arr.indexOf(x); if (k >= 0) arr.splice(k, 1); };
+            for (const [n, rs0] of byNormT) {
+                let cands = (E.byNorm.get(n) || []).filter(i => !used.has(i));
                 if (!cands.length) continue;
-                if (rs.length > 1) {
-                    rs.forEach(r => { r.amb = true; r.near = E.items[cands[0]].fish; r.score = 100; r.sabab = `Turonda bir xil ismli ${rs.length} qator`; });
+                const rs = rs0.slice();
+                const candsBosh = cands.length;
+                const takror = rs0.length > 1 || cands.length > 1;
+                // 2a) tug'ilgan sana aynan bir xil bo'lgan yagona juftlar
+                if (takror) for (const r of rs.slice()) {
+                    if (!r.bd) continue;
+                    const sana = cands.filter(i => E.items[i].bd === r.bd);
+                    if (sana.length !== 1 || rs.filter(x => x.bd === r.bd).length !== 1) continue;
+                    bagla(r, sana[0], 100, 'ism aniq+sana (takror ajratildi)');
+                    r.sabab = `bir xil ismlilar (Turon ${rs0.length} / ERP ${candsBosh}) ichidan tug'ilgan sana (${r.birth}) bo'yicha ajratildi`;
+                    olibTashla(rs, r); olibTashla(cands, sana[0]);
+                }
+                // 2b) sinf bir xil bo'lgan yagona juftlar (sana bilan ajralmaganlar)
+                if (rs.length && cands.length && (rs.length > 1 || cands.length > 1)) for (const r of rs.slice()) {
+                    if (!r.sk) continue;
+                    const sinf = cands.filter(i => E.items[i].sk === r.sk);
+                    if (sinf.length !== 1 || rs.filter(x => x.sk === r.sk).length !== 1) continue;
+                    const it = E.items[sinf[0]];
+                    if (r.bd && it.bd && r.bd !== it.bd) continue; // sana aniq farq qilsa sinf yetarli emas
+                    bagla(r, sinf[0], 100, 'ism aniq+sinf (takror ajratildi)');
+                    r.sabab = `bir xil ismlilar ichidan sinf (${r.sinf}) bo'yicha ajratildi`;
+                    olibTashla(rs, r); olibTashla(cands, sinf[0]);
+                }
+                if (!rs.length || !cands.length) continue;
+                // 2c) birga-bir qoldi (sana farq qilsa ham bog'lanadi — v6.4 tartibi; hisobotda «Sana farq» ro'yxati)
+                if (rs.length === 1 && cands.length === 1) {
+                    const r = rs[0], it = E.items[cands[0]];
+                    const sanaFarq = r.bd && it.bd && r.bd !== it.bd;
+                    bagla(r, cands[0], 100, sanaFarq ? 'ism aniq (sana farq)' : 'ism aniq');
+                    if (sanaFarq) r.sabab = `sana farq: Turon ${r.birth} / ERP ${it.birth}`;
+                    else if (takror) r.sabab = r.sabab || 'bir xil ismlilar ichidan qolgan yagona juft';
                     continue;
                 }
-                const r = rs[0];
-                if (cands.length > 1) { r.amb = true; r.near = E.items[cands[0]].fish; r.score = 100; r.sabab = `ERPda bir xil ismli ${cands.length} kishi`; continue; }
-                const it = E.items[cands[0]];
-                const sanaFarq = r.bd && it.bd && r.bd !== it.bd;
-                bagla(r, cands[0], 100, sanaFarq ? 'ism aniq (sana farq)' : 'ism aniq');
-                if (sanaFarq) r.sabab = `sana farq: Turon ${r.birth} / ERP ${it.birth}`;
+                // 2d) ERPda yagona nomzod, Turonda bir nechta qator → bo'lim ustuvorligi (Faol avval), so'ng allaqachon yoniq
+                if (cands.length === 1) {
+                    const it = E.items[cands[0]];
+                    rs.sort((a, b) => (a.prio - b.prio) || ((b.on ? 1 : 0) - (a.on ? 1 : 0)));
+                    if (rs[0].prio !== rs[1].prio) {
+                        const r = rs[0];
+                        bagla(r, cands[0], 100, 'ism aniq (Turonda takror, ustuvor bo\'lim)');
+                        r.sabab = `Turonda bir xil ismli ${rs0.length} qator; ERPdagi yagona «${it.fish}» ustuvor «${r.statusT}» bo'limidagi qatorga bog'landi`;
+                        rs.slice(1).forEach(x => {
+                            x.near = it.fish; x.score = 100; x.nomzodlar = [erpTavsif(it)];
+                            x.sabab = `takror: ERPdagi yagona «${it.fish}» «${r.statusT}» bo'limidagi qatorga bog'landi (bu qator «${x.statusT}»)`;
+                        });
+                        continue;
+                    }
+                    rs.forEach(r => {
+                        r.amb = true; r.near = it.fish; r.score = 100; r.nomzodlar = [erpTavsif(it)];
+                        r.sabab = `Turonda «${r.statusT}» bo'limida bir xil ismli ${rs.length} qator, ERPda 1 kishi (${erpTavsif(it)}) — sana/sinf bilan ajratib bo'lmadi, qo'lda tekshiring`;
+                    });
+                    continue;
+                }
+                // 2e) ERPda bir nechta nomzod qoldi → shubhali, nomzodlar ro'yxati bilan
+                rs.forEach(r => {
+                    r.amb = true; r.near = E.items[cands[0]].fish; r.score = 100;
+                    nomzodYoz(r, cands);
+                    r.sabab = `ERPda bir xil ismli ${cands.length} kishi: ${r.nomzodlar.join(' | ')}`
+                        + (rs0.length > 1 ? `; Turonda ham ${rs0.length} qator` : '')
+                        + (r.bd ? ` — Turon sanasi ${r.birth} hech biriga mos kelmadi` : " — Turonda tug'ilgan sana yo'q")
+                        + (r.sk ? `, sinf ${r.sinf} ham ajratmadi` : '');
+                });
             }
 
             // 3-daraja: ism ≈ (≥ MIN_SCORE), ikkala tomonda sana bor-u farq qilsa — rad
@@ -817,7 +922,7 @@
                 if (js.length < 2) continue;
                 js.sort((a, b) => b.s - a.s);
                 if (js[0].s < 100 && js[0].s - js[1].s < SOZ.SHUBHA_FARQ) {
-                    js.forEach(j => { j.r.amb = true; j.r.sabab = `Turonda ${js.length} qator bitta ERP nomzodga (${E.items[i].fish}) teng yaqin`; });
+                    js.forEach(j => { j.r.amb = true; j.r.nomzodlar = [erpTavsif(E.items[i])]; j.r.sabab = `Turonda ${js.length} qator (${js.map(x => x.r.name + ' · ' + x.r.statusT).join(' | ')}) bitta ERP nomzodga (${erpTavsif(E.items[i])}) teng yaqin`; });
                 }
             }
             juft3.sort(tartib);
@@ -829,17 +934,20 @@
                 if (c.i < 0 || c.s < SOZ.MIN_SCORE) continue;
                 const it = E.items[c.i];
                 if (r.bd && it.bd && r.bd !== it.bd) { r.sabab = `ism ${r.score}% o'xshash, lekin sana farq (${r.birth} / ${it.birth})`; continue; }
-                if (c.s2 >= SOZ.MIN_SCORE && c.s - c.s2 < SOZ.SHUBHA_FARQ) { r.amb = true; r.sabab = 'ikki ERP nomzod juda yaqin'; continue; }
+                if (c.s2 >= SOZ.MIN_SCORE && c.s - c.s2 < SOZ.SHUBHA_FARQ) {
+                    r.amb = true; nomzodYoz(r, [c.i, c.i2], [c.s, c.s2]);
+                    r.sabab = `ikki ERP nomzod juda yaqin: ${r.nomzodlar.join(' | ')}`; continue;
+                }
                 bagla(r, c.i, c.s, 'ism≈');
             }
             rows.forEach(r => {
-                if (!r.found && !r.amb && !r.sabab) r.sabab = r.near ? `eng yaqin ${r.score}% (< ${SOZ.MIN_SCORE}%)` : "ERPda nomzod yo'q";
+                if (!r.found && !r.amb && !r.sabab) r.sabab = r.near ? `eng yaqin ${r.score}% (< ${SOZ.MIN_SCORE}%): ${r.near}` : "ERPda nomzod yo'q";
             });
             return used;
         }
 
         // ---- REJA: tanlangan bo'limlar uchun o'zgarishlar ----
-        function rejaTuz(rows, tanlangan) {
+        function rejaTuz(rows, tanlangan, qulfUrin) {
             const ops = [];
             for (const r of rows) {
                 r.natija = ''; r.onAfter = null;
@@ -847,11 +955,23 @@
                 if (r.amb) { r.natija = 'shubhali'; continue; }
                 const want = r.found;
                 if (r.on === want) { r.natija = 'bor'; continue; }
-                if (!r.sid) { r.natija = 'yoq'; r.sabab = r.sabab || 'tugmacha ID topilmadi'; continue; }
-                if (r.disabled) { r.natija = 'qulf'; continue; }
-                ops.push({ r, sid: r.sid, kod: r.kod, name: r.name, status: r.status, statusT: r.statusT, page: r.page, want, bosildi: false, ok: false, after: null, natija: '' });
+                if (!r.sid) {
+                    r.natija = 'yoq';
+                    r.sabab = (r.sabab ? r.sabab + '; ' : '') + (r.tugmaYoq ? "qatorda ERP tugmachasi yo'q (huquq yoki sahifa tuzilishi)" : 'tugmacha ID (data-student-id) topilmadi');
+                    continue;
+                }
+                if (r.disabled && !qulfUrin) {
+                    r.natija = 'qulf';
+                    r.sabab = (r.sabab ? r.sabab + '; ' : '') + "ERP tugmachasi sahifada qulflangan (disabled) — «Qulflanganlarni ham urinib ko'rish» belgisi bilan sinab ko'ring yoki Turon administratoriga ayting";
+                    continue;
+                }
+                ops.push({ r, sid: r.sid, kod: r.kod, name: r.name, status: r.status, statusT: r.statusT, page: r.page, want, qulfUrin: !!(r.disabled && qulfUrin), bosildi: false, ok: false, after: null, natija: '' });
             }
             return ops;
+        }
+        // Tanlanmagan bo'limlarda ham o'zgarishi kerak bo'lganlar (ma'lumot va «hammasini qo'llash» uchun)
+        function tashqariOzgarish(rows, tanlangan) {
+            return rows.filter(r => !tanlangan.has(r.status) && !r.amb && r.sid && !r.disabled && r.on !== r.found);
         }
 
         // ---- YASHIRIN IFRAME'LAR: haqiqiy tugmachani bosish (bir nechtasi parallel) ----
@@ -964,7 +1084,12 @@
                 if (!findTableIn(d)) { d = (await iframeJadval(fr)) || d; confirmYop(fr.contentWindow, d, fr); tarmoqKuzat(fr, d); }
                 const inp = toggleTop(d, o.sid);
                 if (!inp) { yoq.push(o); continue; }
-                if (inp.disabled) { o.natija = 'qulf'; continue; }
+                if (inp.disabled) {
+                    if (!o.qulfUrin) { o.natija = 'qulf'; continue; }
+                    // Foydalanuvchi ruxsati bilan: qulfni ochib bosamiz; natija baribir serverdan qayta o'qib tekshiriladi
+                    try { inp.disabled = false; inp.removeAttribute('disabled'); inp.removeAttribute('readonly'); } catch (e) { }
+                    log(`🔓 ${esc(o.name)} — qulflangan tugmacha ochib bosilmoqda (natija serverdan tekshiriladi)`, 'warn');
+                }
                 if (inp.checked === o.want) { o.bosildi = true; o.bor = true; continue; }
                 const net = tarmoqHolat(fr), jami0 = net ? net.jami : null;
                 inp.click();
@@ -1190,6 +1315,12 @@
                 <div class="tem-label">Bo'lim (status)</div>
                 <select class="tem-select" id="tem-bolim"><option value="__">⏳ Bo'limlar yuklanmoqda…</option></select>
                 <label class="tem-chk" style="margin-top:8px"><input type="checkbox" id="tem-avto"> Rejani tasdiqlamasdan avtomatik qo'llash</label>
+                <label class="tem-chk" style="margin-top:6px" title="Sahifada disabled bo'lgan tugmachani ochib bosadi; natija serverdan qayta o'qib tekshiriladi"><input type="checkbox" id="tem-qulf"> Qulflangan tugmachalarni ham urinib ko'rish</label>
+            </div>
+            <div class="tem-card">
+                <div class="tem-label">🔍 O'quvchini tekshirish (nega yoqilmadi?)</div>
+                <input class="tem-select" style="cursor:text" id="tem-qidir" placeholder="Ism yoki kod (STD-…) — oxirgi natijadan qidiradi" autocomplete="off">
+                <div id="tem-diag" style="margin-top:6px"></div>
             </div>
             <div class="tem-row">
                 <button class="tem-btn tem-p" id="tem-run">🚀 Solishtirish va sinxronlash</button>
@@ -1216,6 +1347,9 @@
         const exportBtn = body.querySelector('#tem-export');
         const export2Btn = body.querySelector('#tem-export2');
         const avtoEl = body.querySelector('#tem-avto');
+        const qulfEl = body.querySelector('#tem-qulf');
+        const qidirEl = body.querySelector('#tem-qidir');
+        const diagEl = body.querySelector('#tem-diag');
         const planEl = body.querySelector('#tem-plan');
         const statsEl = body.querySelector('#tem-stats');
         const bolimlarEl = body.querySelector('#tem-bolimlar');
@@ -1233,9 +1367,16 @@
         function erpInfo() {
             const erpList = GM_getValue(KEYS.erp, []);
             const meta = GM_getValue(KEYS.erpMeta, null) || {};
-            let html = `<b>${erpList.length}</b> ta o'quvchi` + (meta.when ? ` <span style="color:#94a3b8">· ${esc(meta.when)}</span>` : '');
+            const kun = meta.ts ? Math.floor((Date.now() - meta.ts) / 86400000) : null;
+            let html = `<b>${erpList.length}</b> ta o'quvchi` + (meta.when ? ` <span style="color:#94a3b8">· ${esc(meta.when)}${kun != null ? ` (${kun} kun oldin)` : ''}</span>` : '');
             if (!erpList.length) html += `<div class="tem-err" style="margin-top:6px">Baza bo'sh — avval <b>erp.maktab.uz</b> da ro'yxatni yig'ing.</div>`;
-            else if (meta.jami && erpList.length < meta.jami) html += `<div class="tem-warn" style="margin-top:6px">⚠️ ERPda jami ${meta.jami} ta, yig'ilgani ${erpList.length} ta — to'liq emas! Yetishmaganlar «ERPda yo'q» deb o'chirilishi mumkin.</div>`;
+            else {
+                if (meta.jami && erpList.length < meta.jami) html += `<div class="tem-warn" style="margin-top:6px">⚠️ ERPda jami ${meta.jami} ta, yig'ilgani ${erpList.length} ta — to'liq emas! Yetishmaganlar «ERPda yo'q» deb o'chirilishi mumkin.</div>`;
+                if (kun != null && kun >= SOZ.ERP_ESKI_KUN) html += `<div class="tem-warn" style="margin-top:6px">⚠️ ERP bazasi <b>${kun} kun</b> oldin yig'ilgan — shu orada ERPga qo'shilgan o'quvchilar unda yo'q va «ERPda topilmadi» bo'ladi. erp.maktab.uz da qayta yig'ing.</div>`;
+                const g = new Map(); erpList.forEach(e => { const n = normalize(e.fish); if (!n) return; g.set(n, (g.get(n) || 0) + 1); });
+                const dup = [...g.values()].filter(c => c > 1).length;
+                if (dup) html += `<div style="margin-top:4px;color:#94a3b8">ℹ️ Bir xil ismli ${dup} guruh — sana/sinf bo'yicha ajratiladi</div>`;
+            }
             body.querySelector('#tem-erpinfo').innerHTML = html;
             return erpList;
         }
@@ -1276,6 +1417,7 @@
                     name: r.name, kod: r.kod, sinf: r.sinf, filial: r.filial, filialTola: r.filialTola,
                     status: r.status, statusT: r.statusT, birth: r.birth, sid: r.sid, on: r.on, onAfter: r.onAfter,
                     found: r.found, near: r.near, score: r.score, level: r.level, amb: r.amb, sabab: r.sabab, disabled: r.disabled, natija: r.natija,
+                    nomzodlar: r.nomzodlar || [], page: r.page,
                     erpFish: r.found && erpList[r.erpIdx] ? (erpList[r.erpIdx].fish || '') : '',
                     erpSinf: r.found && erpList[r.erpIdx] ? (erpList[r.erpIdx].sinf || '') : '',
                     erpBirth: r.found && erpList[r.erpIdx] ? (erpList[r.erpIdx].birth || '') : '',
@@ -1317,9 +1459,57 @@
                 const tr = inp.closest('tr');
                 if (!r || !tr) return;
                 tr.style.background = r.amb ? 'rgba(250,204,21,.18)' : r.found ? 'rgba(34,197,94,.14)' : 'rgba(239,68,68,.10)';
-                tr.title = r.found ? `ERP: ${r.near} (${r.score}%, ${r.level})` : `ERPda topilmadi: ${r.sabab}` + (r.near ? ` — eng yaqin: ${r.near}` : '');
+                tr.title = (r.amb ? `SHUBHALI — tegilmadi: ${r.sabab}` : r.found ? `ERP: ${r.near} (${r.score}%, ${r.level})` + (r.sabab ? ` — ${r.sabab}` : '') : `ERPda topilmadi: ${r.sabab}`)
+                    + (r.natija && r.natija !== 'bor' ? ` | natija: ${natijaMatni(r)}` : '');
             });
         }
+
+        // ---- DIAGNOSTIKA: bitta o'quvchi bo'yicha «nega yoqilmadi?» ----
+        const diagQator = (t, v) => v ? `<div><span style="color:#94a3b8">${t}:</span> ${v}</div>` : '';
+        function diagnoz(q) {
+            q = String(q || '').trim();
+            if (q.length < 3) { diagEl.innerHTML = ''; return; }
+            const N = GM_getValue(KEYS.natija, null);
+            const erpList = GM_getValue(KEYS.erp, []);
+            const meta = GM_getValue(KEYS.erpMeta, null) || {};
+            const qn = normalize(q), kodQ = q.toUpperCase().replace(/\s/g, '');
+            const qidir = (arr, nomK) => arr.map(r => ({ r, s: (r.kod && kodQ.length >= 4 && r.kod.includes(kodQ)) ? 101 : simNorm(qn, normalize(r[nomK])) }))
+                .filter(x => x.s >= 60 || (qn && normalize(x.r[nomK]).includes(qn))).sort((a, b) => b.s - a.s).slice(0, 6);
+            let html = '';
+            const T = N && N.rows ? qidir(N.rows, 'name') : [];
+            if (!N || !N.rows) html += `<div class="tem-warn">Hali solishtirish natijasi yo'q — avval «🚀 Solishtirish»ni ishga tushiring.</div>`;
+            else if (!T.length) html += `<div class="tem-warn">Oxirgi natijada (${esc(N.when)}) bunday o'quvchi yo'q — Turon ro'yxatlarida topilmagan yoki ism boshqacha yozilgan.</div>`;
+            T.forEach(({ r, s }) => {
+                const tanl = N.tanlangan.length === 0 || N.tanlangan.includes(r.status);
+                let xulosa, rang;
+                if (r.amb) { xulosa = 'SHUBHALI — skript tegmadi'; rang = '#facc15'; }
+                else if (!r.found) { xulosa = 'ERP bazasida topilmadi → tugmacha o\'chiq qoladi/o\'chiriladi'; rang = '#f87171'; }
+                else if (!tanl) { xulosa = `ERP mos, lekin «${esc(r.statusT)}» bo'limi tanlanmagan edi — o'zgartirilmadi`; rang = '#fb923c'; }
+                else if (r.natija === 'qulf') { xulosa = 'ERP mos, lekin tugmacha QULFLANGAN'; rang = '#94a3b8'; }
+                else if (r.natija === 'yoq') { xulosa = 'ERP mos, lekin tugmacha/ID sahifada topilmadi'; rang = '#f87171'; }
+                else if (r.natija === 'saqlanmadi') { xulosa = 'ERP mos, bosildi, lekin server saqlamadi'; rang = '#f87171'; }
+                else if (r.natija === 'yoqildi' || r.natija === 'ochirildi') { xulosa = natijaMatni(r); rang = '#4ade80'; }
+                else { xulosa = holat(r) ? 'ERP mos, tugmacha yoniq — hammasi joyida' : 'ERP mos — bu yurishda o\'zgartirilmagan'; rang = holat(r) ? '#4ade80' : '#fb923c'; }
+                html += `<div class="tem-card" style="margin-top:6px;border-color:${rang}55">
+                    <div><b>${esc(r.name)}</b> <span style="color:#94a3b8">· ${esc(r.statusT)}${r.sinf ? ' · ' + esc(r.sinf) : ''}${r.birth ? ' · ' + esc(r.birth) : ''}${r.kod ? ' · ' + esc(r.kod) : ''}</span></div>
+                    <div style="color:${rang};font-weight:600;margin:3px 0">${xulosa}</div>
+                    ${diagQator('Tugmacha', (r.on ? 'yoniq' : "o'chiq") + (r.onAfter != null && r.onAfter !== r.on ? ` → ${r.onAfter ? 'yoniq' : "o'chiq"}` : '') + (r.disabled ? ' · <b>qulflangan</b>' : '') + (r.sid ? '' : " · <b>ID yo'q</b>"))}
+                    ${diagQator('ERP nomzod', r.near ? `${esc(r.near)} (${r.score}%${r.level ? ', ' + esc(r.level) : ''})` : '')}
+                    ${diagQator('Sabab', esc(r.sabab))}
+                    ${r.nomzodlar && r.nomzodlar.length ? `<div><span style="color:#94a3b8">ERP nomzodlar:</span><ul style="margin:2px 0 0 16px;padding:0">${r.nomzodlar.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
+                </div>`;
+            });
+            // ERP bazasi tomonidan
+            const Ek = qidir(erpList, 'fish');
+            if (erpList.length) {
+                if (Ek.length) html += `<div style="margin-top:6px;color:#94a3b8">ERP bazasida (${esc(meta.when || '')}): ${Ek.map(x => `<b style="color:#e2e8f0">${esc(erpTavsif(x.r))}</b> (${Math.round(x.s > 100 ? 100 : x.s)}%)`).join('; ')}</div>`;
+                else html += `<div class="tem-warn" style="margin-top:6px">ERP bazasida bunday ism yo'q. Baza ${esc(meta.when || '')} da yig'ilgan — o'quvchi ERPga undan keyin qo'shilgan bo'lsa, erp.maktab.uz da ro'yxatni qayta yig'ing.</div>`;
+            }
+            diagEl.innerHTML = html;
+        }
+        let diagT = null;
+        qidirEl.addEventListener('input', () => { clearTimeout(diagT); diagT = setTimeout(() => diagnoz(qidirEl.value), 250); });
+        qidirEl.addEventListener('keydown', e => { if (e.key === 'Enter') diagnoz(qidirEl.value); if (e.key === 'Escape') { qidirEl.value = ''; diagEl.innerHTML = ''; } });
 
         // ---- Reja tasdig'i (panel ichida) ----
         function tasdiqKut(ops, rows, tanlangan) {
@@ -1327,8 +1517,14 @@
                 HOLAT.radEt = rej;
                 const T = rows.filter(r => tanlangan.has(r.status));
                 const yoq = ops.filter(o => o.want).length, och = ops.filter(o => !o.want).length;
-                const shub = T.filter(r => r.amb).length, qulf = T.filter(r => r.natija === 'qulf').length;
+                const shubL = T.filter(r => r.amb), qulfL = T.filter(r => r.natija === 'qulf'), yoqL = T.filter(r => r.natija === 'yoq');
+                const shub = shubL.length, qulf = qulfL.length;
+                const tashqari = tashqariOzgarish(rows, tanlangan);
                 const bolimlar = [...new Set(T.map(r => r.status))];
+                const royxat = (sarl, arr, rang, fn) => !arr.length ? '' :
+                    `<details style="margin:6px 0"><summary style="cursor:pointer;color:${rang}">${sarl} (${arr.length})</summary><div style="font-size:.9em;max-height:160px;overflow:auto;margin-top:4px;user-select:text">`
+                    + arr.slice(0, 60).map(fn).join('') + (arr.length > 60 ? `<div class="dim">… yana ${arr.length - 60}</div>` : '') + '</div></details>';
+                const qatorHtml = r => `<div style="margin:3px 0"><b>${esc(r.name)}</b> <span style="color:#94a3b8">· ${esc(r.statusT)}${r.sinf ? ' · ' + esc(r.sinf) : ''}${r.birth ? ' · ' + esc(r.birth) : ''}</span><br><span style="color:#cbd5e1">${esc(r.sabab || '')}</span></div>`;
                 planEl.innerHTML = `<div class="tem-card" style="border-color:rgba(139,92,246,.5)">
                     <div class="tem-label">Reja</div>
                     <table class="tem-table"><tr><th>Bo'lim</th><th>Jami</th><th>Mos</th><th>✅ Yoqiladi</th><th>⛔ O'chiriladi</th><th>⚠️</th></tr>` +
@@ -1339,11 +1535,18 @@
                     `</table>
                     <div style="margin:8px 0;color:#cbd5e1">Jami o'zgarish: <b>${ops.length}</b> (yoqiladi ${yoq}, o'chiriladi ${och})${shub ? ` · shubhali ${shub} ta tegilmaydi` : ''}${qulf ? ` · qulflangan ${qulf}` : ''}</div>
                     ${och > 0 && och > yoq * 3 && och > 20 ? `<div class="tem-warn" style="margin-bottom:8px">⚠️ O'chiriladiganlar juda ko'p — ERP bazasi to'liq yig'ilganini tekshiring.</div>` : ''}
+                    ${royxat('⚠️ Shubhali — tegilmaydi', shubL, '#facc15', qatorHtml)}
+                    ${royxat('🔒 Qulflangan tugmachalar', qulfL, '#94a3b8', qatorHtml)}
+                    ${royxat("❌ Tugmacha/ID yo'q", yoqL, '#f87171', qatorHtml)}
+                    ${tashqari.length ? `<div class="tem-warn" style="margin:6px 0">ℹ️ Tanlanmagan bo'limlarda ham o'zgarishi kerak: <b>${tashqari.length}</b> ta (${[...new Set(tashqari.map(r => r.statusT))].map(t => esc(t) + ' ' + tashqari.filter(r => r.statusT === t).length).join(', ')}) — pastdagi «Barcha bo'limlar bilan» tugmasi ularni ham qo'shadi.</div>` : ''}
                     <div class="tem-row">
                         <button class="tem-btn tem-g" id="tem-ok">✅ Qo'llash (${ops.length})</button>
+                        ${tashqari.length ? `<button class="tem-btn tem-b" id="tem-ok-all">🌐 Barcha bo'limlar bilan (${ops.length + tashqari.length})</button>` : ''}
                         <button class="tem-btn tem-s" id="tem-cancel">✖ Bekor</button>
                     </div></div>`;
                 planEl.querySelector('#tem-ok').addEventListener('click', () => { HOLAT.radEt = null; planEl.innerHTML = ''; res(true); });
+                const okAll = planEl.querySelector('#tem-ok-all');
+                if (okAll) okAll.addEventListener('click', () => { HOLAT.radEt = null; planEl.innerHTML = ''; res('hammasi'); });
                 planEl.querySelector('#tem-cancel').addEventListener('click', () => { HOLAT.radEt = null; planEl.innerHTML = ''; rej(new ToxtashXato('Bekor qilindi')); });
             });
         }
@@ -1355,8 +1558,10 @@
             if (!erpList.length) { setStatus("❌ ERP bazasi bo'sh — avval erp.maktab.uz da ro'yxatni yig'ing."); return; }
             if (!STATUSLAR || selEl.value === '__') { setStatus("⏳ Bo'limlar hali yuklanmadi, biroz kuting."); return; }
             const tanlovV = selEl.value;
-            const tanlangan = new Set(tanlovV ? [tanlovV] : STATUSLAR.map(s => s.v));
-            const tanlanganT = tanlovV ? (STATUSLAR.find(s => s.v === tanlovV) || { t: tanlovV }).t : "Barcha bo'limlar";
+            let tanlangan = new Set(tanlovV ? [tanlovV] : STATUSLAR.map(s => s.v));
+            let tanlanganT = tanlovV ? (STATUSLAR.find(s => s.v === tanlovV) || { t: tanlovV }).t : "Barcha bo'limlar";
+            const qulfUrin = qulfEl.checked;
+            diagEl.innerHTML = '';
             ishUi(true);
             HOLAT.ac = new AbortController();
             planEl.innerHTML = ''; statsEl.style.display = 'none'; bolimlarEl.innerHTML = '';
@@ -1377,21 +1582,54 @@
                 await sleep(30);
                 const E = erpIndeks(erpList);
                 const used = moslashtir(rows, E);
-                const T = rows.filter(r => tanlangan.has(r.status));
+                let T = rows.filter(r => tanlangan.has(r.status));
                 log(`🧠 ${esc(tanlanganT)}: ${T.length} ta, ERP mos ${T.filter(r => r.found).length}, shubhali ${T.filter(r => r.amb).length}, topilmadi ${T.filter(r => !r.found && !r.amb).length}`, 'dim');
+                const ajratildi = rows.filter(r => r.found && /takror/.test(r.level));
+                if (ajratildi.length) log(`🔀 Bir xil ismlilar ajratildi: ${ajratildi.length} ta (sana/sinf/bo'lim bo'yicha)`, 'ok');
+                // Ism aynan mos, lekin tug'ilgan sana ikki tizimda farq qiladi — baribir bog'lanadi (v6.4 tartibi), hisobotda alohida varaq
+                const sanaFarqL = T.filter(r => r.found && r.bd && E.items[r.erpIdx].bd && r.bd !== E.items[r.erpIdx].bd);
+                if (sanaFarqL.length) {
+                    log(`📅 Ism mos, tug'ilgan sana farq: ${sanaFarqL.length} ta — yoqiladi, hisobotda «Sana farq» varag'ida (yoniqlari) ko'ring`, 'warn');
+                    sanaFarqL.slice(0, 15).forEach(r => log(`&nbsp;&nbsp;• ${esc(r.name)} (${esc(r.statusT)}) — Turon ${esc(r.birth)} / ERP ${esc(E.items[r.erpIdx].birth)}`, 'dim'));
+                    if (sanaFarqL.length > 15) log(`&nbsp;&nbsp;… yana ${sanaFarqL.length - 15} ta`, 'dim');
+                }
+                // Shubhalilar — har biri sabab bilan (foydalanuvchi ko'rsin)
+                const shubL = T.filter(r => r.amb);
+                if (shubL.length) {
+                    log(`⚠️ Shubhali ${shubL.length} ta — tegilmaydi, qo'lda tekshiring:`, 'warn');
+                    shubL.slice(0, 25).forEach(r => log(`&nbsp;&nbsp;• ${esc(r.name)} (${esc(r.statusT)}${r.birth ? ', ' + esc(r.birth) : ''}) — ${esc(r.sabab)}`, 'dim'));
+                    if (shubL.length > 25) log(`&nbsp;&nbsp;… yana ${shubL.length - 25} ta — Excel «Shubhalilar» varag'ida`, 'dim');
+                }
                 // 4) reja
-                const ops = rejaTuz(rows, tanlangan);
+                let ops = rejaTuz(rows, tanlangan, qulfUrin);
+                const qulfL = T.filter(r => r.natija === 'qulf'), yoqL = T.filter(r => r.natija === 'yoq');
+                if (qulfL.length) { log(`🔒 Qulflangan tugmacha ${qulfL.length} ta (yoqib bo'lmaydi):`, 'warn'); qulfL.slice(0, 15).forEach(r => log(`&nbsp;&nbsp;• ${esc(r.name)} (${esc(r.statusT)}) — ERP: ${r.found ? 'mos' : "yo'q"}, tugmacha ${r.on ? 'yoniq' : "o'chiq"}`, 'dim')); }
+                if (yoqL.length) { log(`❌ Tugmacha/ID topilmadi ${yoqL.length} ta:`, 'warn'); yoqL.slice(0, 15).forEach(r => log(`&nbsp;&nbsp;• ${esc(r.name)} (${esc(r.statusT)}) — ${esc(r.sabab)}`, 'dim')); }
+                const tashqari = tashqariOzgarish(rows, tanlangan);
+                if (tashqari.length) log(`ℹ️ Tanlanmagan bo'limlarda ham o'zgarishi kerak: ${tashqari.length} ta (${[...new Set(tashqari.map(r => r.statusT))].map(t => esc(t) + ' ' + tashqari.filter(r => r.statusT === t).length).join(', ')}) — ular uchun «Barcha bo'limlar»ni tanlang yoki rejadagi «🌐» tugmasini bosing`, 'warn');
                 let N = natijaSaqla(rows, tanlangan, erpList, used);
                 ranglarniQoy(N);
-                if (!ops.length) {
+                if (!ops.length && !tashqari.length) {
                     natijaKorsat(N);
                     setStatus(`✅ <b>${esc(tanlanganT)}</b>: hammasi joyida — yoqiladigan/o'chiriladigan yo'q.`);
                     log('✅ O\'zgarish kerak emas', 'ok'); setDot('ok');
                     ishUi(false); return;
                 }
                 setStatus(`📋 Reja tayyor: <b>${ops.length}</b> ta o'zgarish (yoqiladi ${ops.filter(o => o.want).length}, o'chiriladi ${ops.filter(o => !o.want).length})`);
-                if (!avtoEl.checked) await tasdiqKut(ops, rows, tanlangan);
-                else log(`⚡ Avtomatik rejim: ${ops.length} ta o'zgarish tasdiqsiz qo'llanmoqda`, 'warn');
+                if (!avtoEl.checked) {
+                    const javob = await tasdiqKut(ops, rows, tanlangan);
+                    if (javob === 'hammasi') {
+                        tanlangan = new Set(STATUSLAR.map(s => s.v)); tanlanganT = "Barcha bo'limlar";
+                        T = rows; ops = rejaTuz(rows, tanlangan, qulfUrin);
+                        N = natijaSaqla(rows, tanlangan, erpList, used);
+                        log(`🌐 Barcha bo'limlar bilan qo'llanmoqda: ${ops.length} ta o'zgarish`, 'ok');
+                    }
+                } else log(`⚡ Avtomatik rejim: ${ops.length} ta o'zgarish tasdiqsiz qo'llanmoqda`, 'warn');
+                if (!ops.length) {
+                    natijaKorsat(N);
+                    setStatus(`✅ <b>${esc(tanlanganT)}</b>: tanlangan bo'limda o'zgarish yo'q.`);
+                    setDot('ok'); ishUi(false); return;
+                }
                 // 5) qo'llash
                 const q = await qollash(ops, hajm);
                 ops.forEach(o => { o.r.natija = o.natija; o.r.onAfter = o.after != null ? o.after : (o.ok ? o.want : o.r.on); });
@@ -1441,22 +1679,24 @@
 
             const aoa = [
                 ['TURON ↔ ERP HISOBOT', N.when], ["Tanlangan bo'lim", N.tanlanganT], [],
-                ["Bo'lim", 'Jami', 'ERP mos', 'Yoniq', "O'chiq", 'Yoqildi', "O'chirildi", 'Shubhali', 'Yoqilmadi', 'Qulflangan'],
+                ["Bo'lim", 'Jami', 'ERP mos', 'Yoniq', "O'chiq", 'Yoqildi', "O'chirildi", 'Shubhali', 'Yoqilmadi', 'Qulflangan', 'Sana farq'],
                 ...bolimlar.map(b => {
                     const g = R.filter(r => r.statusT === b);
                     return [b, g.length, g.filter(r => r.found).length, g.filter(holat).length, g.filter(r => !holat(r)).length,
                         g.filter(r => r.natija === 'yoqildi').length, g.filter(r => r.natija === 'ochirildi').length, g.filter(r => r.amb).length,
-                        g.filter(r => r.natija === 'saqlanmadi' || r.natija === 'yoq').length, g.filter(r => r.natija === 'qulf').length];
+                        g.filter(r => r.natija === 'saqlanmadi' || r.natija === 'yoq').length, g.filter(r => r.natija === 'qulf').length, g.filter(sanaFarqmi).length];
                 }),
                 [], ['Filial', 'Jami', 'Yoniq', "O'chiq"],
                 ...filiallar.map(f => { const g = R.filter(r => (r.filial || "Filial ko'rsatilmagan") === f); return [f, g.length, g.filter(holat).length, g.filter(r => !holat(r)).length]; }),
                 [], ['ERP bazasi: jami', N.erpJami], ["ERP: TURONga bog'langan", N.erpJami - N.erpTopilmagan.length], ['ERP: TURONda topilmagan', N.erpTopilmagan.length],
+                [], ["Ism mos, tug'ilgan sana farq", R.filter(sanaFarqmi).length],
             ];
             XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'Umumiy');
 
             const qator = r => ({
-                "Bo'lim": r.statusT, "O'quvchi (TURON)": r.name, 'Kod': r.kod, 'Sinf': r.sinf, 'Filial': r.filial, "Tug'ilgan sana": r.birth,
+                "Bo'lim": r.statusT, "O'quvchi (TURON)": r.name, 'Kod': r.kod, 'Sinf': r.sinf, 'Filial': r.filial, "Tug'ilgan sana": r.birth, 'ERP sana': r.erpBirth || '',
                 'ERP holati': holatT(r), 'Amal': natijaT(r), 'ERP mos': r.found ? 'Ha' : "Yo'q", 'ERP ism': r.near, 'Foiz': r.score, 'Daraja': r.level, 'Izoh': r.sabab,
+                'ERP nomzodlar': (r.nomzodlar || []).join(' | '),
             });
             const oz = R.filter(r => ['yoqildi', 'ochirildi', 'saqlanmadi', 'yoq', 'qulf'].includes(r.natija));
             XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(oz.map(qator)), "O'zgarishlar");
@@ -1466,6 +1706,7 @@
             }
             XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(R.filter(r => !r.found && !r.amb).map(qator)), 'ERPda topilmaganlar');
             XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(R.filter(r => r.amb).map(qator)), 'Shubhalilar');
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(R.filter(sanaFarqmi).map(qator)), 'Sana farq');
             XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(R.filter(r => r.natija === 'saqlanmadi' || r.natija === 'yoq').map(qator)), 'Yoqilmadi');
             XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(N.erpTopilmagan.map(x => ({ "O'quvchi (ERP)": x.fish || '', 'Sinf': x.sinf || '', "Tug'ilgan sana": x.birth || '' }))), 'TURONda topilmagan ERP');
             XLSX.writeFile(wb, 'turon-erp-hisobot.xlsx');
@@ -1486,6 +1727,9 @@
             kul: teg(RANG.kul, RANG.kulM), toq: teg(RANG.toq, RANG.toqM), kok: teg(RANG.kok, RANG.kokM), binafsha: teg(RANG.binafsha, RANG.binafshaM),
         };
         const faolmi = r => /^faol/i.test(r.statusT || '') || r.status === 'active';
+        // Ism mos (ERP bog'langan), lekin ikkala tomonda sana bor-u farq qiladi
+        // «Sana farq» ro'yxati: ERP bilan bog'langan (ism aynan mos), ikkala tomonda sana bor-u farq qiladi va ERP tugmachasi YONIQ
+        const sanaFarqmi = r => !!(r.found && holat(r) && r.birth && r.erpBirth && birthKey(r.birth) !== birthKey(r.erpBirth));
         const nofaolmi = r => /nofaol/i.test(r.statusT || '') || r.status === 'inactive';
         const sinfKalit = s => { const m = /(\d+)/.exec(s || ''); return m ? Number(m[1]) : 9999; };
         const tartibla = (arr, nom) => arr.slice().sort((a, b) => (sinfKalit(a.sinf) - sinfKalit(b.sinf)) || String(a.sinf || '').localeCompare(String(b.sinf || '')) || String(a[nom] || '').localeCompare(String(b[nom] || '')));
@@ -1547,11 +1791,12 @@
             { h: 'ERPda bor', k: q => q.amb ? 'SHUBHALI' : q.found ? 'HA' : "YO'Q", w: 12, teg: q => q.amb ? TEG.sariq : q.found ? TEG.yashil : TEG.qizil },
             { h: "O'quvchi (ERP)", k: q => q.erpFish || (q.found || q.amb ? q.near : '') || '', max: 48 },
             { h: 'ERP sinf', k: q => q.erpSinf || '', w: 12 },
-            { h: 'ERP sana', k: q => q.erpBirth || '', w: 12, markaz: true },
+            { h: 'ERP sana', k: q => q.erpBirth || '', w: 12, markaz: true, teg: q => sanaFarqmi(q) ? TEG.sariq : null },
             { h: 'Moslik %', k: q => (q.found || q.amb) ? q.score : '', w: 10, markaz: true },
             { h: 'Daraja', k: q => q.level || '', w: 18 },
             { h: 'Amal (natija)', k: natijaMatni, w: 22, teg: natijaTeg },
             { h: 'Izoh', k: q => q.sabab || '', max: 60, wrap: true },
+            { h: 'ERP nomzodlar', k: q => (q.nomzodlar || []).join('\n'), max: 60, wrap: true },
         ];
         // ERP o'quvchilari uchun ustunlar
         const ustErp = () => [
@@ -1572,13 +1817,13 @@
         // Umumiy varaq: KPI kartalar + bo'limlar + filiallar + ERP jadvallari
         function umumiyVaraq(wb, N, R, E) {
             const ws = wb.addWorksheet('Umumiy', { views: [{ showGridLines: false }] });
-            for (let i = 1; i <= 10; i++) ws.getColumn(i).width = i === 1 ? 30 : 15;
+            for (let i = 1; i <= 11; i++) ws.getColumn(i).width = i === 1 ? 30 : 15;
             const yoz = (r, c, v, st) => { const cell = ws.getCell(r, c); cell.value = v; if (st) Object.keys(st).forEach(k => { cell[k] = st[k]; }); return cell; };
             let r = 1;
-            ws.mergeCells(r, 1, r, 10);
+            ws.mergeCells(r, 1, r, 11);
             yoz(r, 1, 'TURON ↔ ERP · TO\'LIQ HISOBOT', { font: { bold: true, size: 18, color: { argb: 'FF' + RANG.sarlavha } }, alignment: { vertical: 'middle' } });
             ws.getRow(r).height = 34; r++;
-            ws.mergeCells(r, 1, r, 10);
+            ws.mergeCells(r, 1, r, 11);
             yoz(r, 1, `Sana: ${N.when} · Tanlangan bo'lim: ${N.tanlanganT} · Turon: ${R.length} ta · ERP: ${N.erpJami} ta`, { font: { italic: true, size: 10, color: { argb: 'FF' + RANG.izoh } } });
             r += 2;
             // KPI kartalar
@@ -1588,6 +1833,7 @@
                 ['ERP yoniq', R.filter(holat).length, TEG.yashil], ["ERP o'chiq", R.filter(x => !holat(x)).length, TEG.qizil],
                 ['Yoqildi', R.filter(x => x.natija === 'yoqildi').length, TEG.yashil], ["O'chirildi", R.filter(x => x.natija === 'ochirildi').length, TEG.toq],
                 ['ERP jami', N.erpJami, TEG.binafsha], ['ERP · Turonda yo\'q', E.filter(x => !x.r).length, TEG.qizil],
+                ['Sana farq (yoniq)', R.filter(sanaFarqmi).length, TEG.sariq],
             ];
             kpi.forEach((k, i) => {
                 const c = (i % 5) + 2, rr = r + Math.floor(i / 5) * 3;
@@ -1596,7 +1842,7 @@
                 ws.getRow(rr).height = 30;
             });
             yoz(r, 1, "Ko'rsatkichlar", { font: { bold: true, size: 12, color: { argb: 'FF' + RANG.sarlavha } } });
-            r += 7;
+            r += 3 * Math.ceil(kpi.length / 5) + 1;
             // kichik jadval yozuvchi
             const jadval = (sarl, heads, rows, tegFn) => {
                 yoz(r, 1, sarl, { font: { bold: true, size: 12, color: { argb: 'FF' + RANG.sarlavha } } }); r++;
@@ -1614,11 +1860,11 @@
                 });
                 r += 2;
             };
-            const hisob = g => [g.length, g.filter(x => x.found).length, g.filter(x => !x.found && !x.amb).length, g.filter(x => x.amb).length,
+            const hisob = g => [g.length, g.filter(x => x.found).length, g.filter(x => !x.found && !x.amb).length, g.filter(x => x.amb).length, g.filter(sanaFarqmi).length,
                 g.filter(holat).length, g.filter(x => !holat(x)).length, g.filter(x => x.natija === 'yoqildi').length, g.filter(x => x.natija === 'ochirildi').length,
                 g.filter(x => x.natija === 'saqlanmadi' || x.natija === 'yoq').length];
-            const HEADS = ['', 'Jami', 'ERP mos', 'Topilmadi', 'Shubhali', 'Yoniq', "O'chiq", 'Yoqildi', "O'chirildi", 'Xato'];
-            const tegUst = (i, v) => (!v || typeof v !== 'number') ? null : ({ 2: TEG.yashil, 3: TEG.qizil, 4: TEG.sariq, 5: TEG.yashil, 6: TEG.qizil, 7: TEG.yashil, 8: TEG.toq, 9: TEG.qizil }[i] || null);
+            const HEADS = ['', 'Jami', 'ERP mos', 'Topilmadi', 'Shubhali', 'Sana farq', 'Yoniq', "O'chiq", 'Yoqildi', "O'chirildi", 'Xato'];
+            const tegUst = (i, v) => (!v || typeof v !== 'number') ? null : ({ 2: TEG.yashil, 3: TEG.qizil, 4: TEG.sariq, 5: TEG.toq, 6: TEG.yashil, 7: TEG.qizil, 8: TEG.yashil, 9: TEG.toq, 10: TEG.qizil }[i] || null);
             const bolimlar = [...new Set(R.map(x => x.statusT))];
             jadval("Bo'limlar bo'yicha", ["Bo'lim"].concat(HEADS.slice(1)),
                 bolimlar.map(b => [b].concat(hisob(R.filter(x => x.statusT === b)))).concat([['JAMI'].concat(hisob(R))]), tegUst);
@@ -1631,8 +1877,8 @@
                 ["Turonga bog'langan", erpBor, N.erpJami ? Math.round(100 * erpBor / N.erpJami) + '%' : ''],
                 ['Turonda topilmagan', N.erpJami - erpBor, N.erpJami ? Math.round(100 * (N.erpJami - erpBor) / N.erpJami) + '%' : ''],
             ], (i, v, row) => i ? (row[0].startsWith('Turonga') ? TEG.yashil : row[0].startsWith('Turonda') ? TEG.qizil : TEG.binafsha) : null);
-            ws.mergeCells(r, 1, r, 10);
-            yoz(r, 1, "Varaqlar: Faol · ERP yoniq / o'chiq · Nofaol · ERP bor / yo'q · boshqa bo'limlar · ERP hisobot · Barcha filiallar · har bir filial alohida", { font: { italic: true, size: 9, color: { argb: 'FF' + RANG.izoh } } });
+            ws.mergeCells(r, 1, r, 11);
+            yoz(r, 1, "Varaqlar: Faol · ERP yoniq / o'chiq · Nofaol · ERP bor / yo'q · boshqa bo'limlar · Sana farq · ERP hisobot · Barcha filiallar · har bir filial alohida", { font: { italic: true, size: 9, color: { argb: 'FF' + RANG.izoh } } });
             return ws;
         }
 
@@ -1685,6 +1931,8 @@
                 // Shubhali / xato — bo'lsa
                 const shub = R.filter(x => x.amb); if (shub.length) turonVaraq('Shubhalilar', 'SHUBHALI mosliklar — tegilmagan', shub);
                 const xato = R.filter(x => x.natija === 'saqlanmadi' || x.natija === 'yoq'); if (xato.length) turonVaraq('Yoqilmadi', "O'ZGARTIRIB BO'LMAGANLAR", xato);
+                // Ism mos, tug'ilgan sana farq — har doim chiqadi (bo'sh bo'lsa ham), qaysi tizimda xato kiritilganini tekshirish uchun
+                turonVaraq('Sana farq', "ISM AYNAN MOS, TUG'ILGAN SANA FARQ — ERP tugmachasi YONIQ", R.filter(sanaFarqmi), "Ism-familiya ERP bilan 100% bir xil, lekin «Tug'ilgan sana» (Turon) va «ERP sana» farq qiladi; sana qaysi tizimda xato kiritilganini tekshiring");
                 // ERP hisobot
                 jadvalVaraq(wb, nomTozala('ERP hisobot'), 'ERP BAZASI — Turon bilan bog\'lanish', `${E.length} ta · bog'langan ${E.filter(x => x.r).length} · topilmagan ${E.filter(x => !x.r).length} · ${N.when}`, ustErp(), raqamla(E));
                 jadvalVaraq(wb, nomTozala("ERP · Turonda yo'q"), "ERP o'quvchilari — TURONDA TOPILMAGAN", izoh(E.filter(x => !x.r)), ustErp(), raqamla(E.filter(x => !x.r)));

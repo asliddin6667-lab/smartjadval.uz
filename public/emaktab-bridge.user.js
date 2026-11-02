@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Smartjadval → eMaktab ko'prigi
 // @namespace    https://smartjadval.uz/
-// @version      1.11.0
+// @version      1.15.1
 // @description  Smartjadval.uz da tuzilgan dars jadvalini eMaktab (kundalik.com) «Darslar jadvali sxemasi» setkasiga joylashtiradi
 // @author       smartjadval.uz
 // @match        https://schools.emaktab.uz/*
@@ -29,8 +29,13 @@
 //  bajariladi.
 //
 //  ISHLATISH (ikki yo'l):
-//    1) Tampermonkey — shu faylni o'rnating, eMaktab sahifasida
-//       o'ng pastda «SJ» tugmasi chiqadi.
+//    1) Tampermonkey — shu faylni o'rnating. eMaktab'ning yuqori
+//       menyusida (TA'LIM · MULOQOT · …) «SJ DARS JADVALI» bandi
+//       chiqadi — bosilsa markazda katta dashboard oynasi ochiladi:
+//       chapda jadval fayli, chorak va sozlamalar, o'ngda sinflar
+//       jadvali (har sinfning sxemasi va holati bilan). Istalgan
+//       sahifadan ishlaydi — schools.emaktab.uz dan tashqarida
+//       bosilsa avval o'sha yerga o'tkazadi.
 //    2) Tampermonkeysiz — Smartjadval «eMaktab» bo'limidagi tugma
 //       skriptni nusxalab beradi, uni eMaktab sahifasida F12 →
 //       Console ga qo'yib Enter bosiladi.
@@ -65,15 +70,19 @@
     return;
   }
 
-  // ⚠️ FAQAT DARS JADVALI BO'LIMIDA ISHLAYDI.
+  // ⚠️ KO'PRIK `schools.<domen>` DA ISHLAYDI.
   //
-  //  `@match` butun `*.emaktab.uz` ni qamraydi (URL oldindan ma'lum
-  //  emas edi), lekin panel jurnallarda, hisobotlarda, sinflar
-  //  ro'yxatida — hech qayerda kerak emas. U yerlarda «SJ» tugmasi
-  //  faqat xalaqit beradi. Konsolga qo'lda qo'yilganda esa cheklov
-  //  ishlamasligi kerak: foydalanuvchi ataylab ishga tushirgan bo'ladi.
+  //  eMaktab API'si va sessiya cookie'si `schools.emaktab.uz` da
+  //  (kundalik.com uchun `schools.kundalik.com`). `emaktab.uz/teachers`
+  //  kabi boshqa subdomendan u yerga so'rov yuborib bo'lmaydi (CORS).
+  //  Shuning uchun boshqa subdomenda faqat yuqori menyu bandi qo'yiladi
+  //  (2B-QISM) — bosilsa `schools.` ga o'tkazadi va oyna u yerda ochiladi.
+  //  `schools.` ichida esa dashboard ISTALGAN sahifada ishlaydi: sxema
+  //  id'lari URL'dan emas, so'rovlar bilan topiladi.
+  //  Konsolga qo'lda qo'yilganda cheklov yo'q — foydalanuvchi ataylab
+  //  ishga tushirgan bo'ladi.
   const QOLDA = typeof GM_info === "undefined";   // Tampermonkeysiz — Console
-  if (!QOLDA && !/\/v2\/schedules/i.test(location.pathname)) return;
+  const KOPRIK_HOST = QOLDA || /^schools\./i.test(location.hostname);
 
   // Qabul qilinadigan jadval formati versiyalari (emaktabExport.js dagi
   // `EMAKTAB_FORMAT_VERSION`). 2 — `emaktab` id xaritasi bilan, 1 — usiz
@@ -84,6 +93,7 @@
   const LS_OCHIQ = "sj_emaktab_panel_ochiq"; // panel ochiq turganmi
   const LS_REC_ON = "sj_emaktab_rec_on";     // «O'rganish» yozuvi yoqiqmi
   const LS_REC = "sj_emaktab_rec_data";      // yozib olingan so'rovlar
+  const LS_CHORAK = "sj_emaktab_choraklar_v1"; // topilgan chorak yorliqlari (maktab bo'yicha)
 
   // ⚠️ eMAKTAB — KLASSIK KO'P SAHIFALI SAYT.
   //
@@ -422,6 +432,104 @@
   }
 
   // ===================================================================
+  //  2B-QISM. YUQORI MENYU BANDI — «SJ DARS JADVALI»
+  //
+  //  eMaktab'ning asosiy menyusi (TA'LIM · MULOQOT · O'QITUVCHIGA ·
+  //  TO'LOVLAR) oldiga o'z bandimiz qo'yiladi. O'ng pastdagi dumaloq
+  //  «SJ» tugma ko'zga tashlanmas edi — foydalanuvchi ko'prikni qayerdan
+  //  ochishni bilmay qolardi. Menyu bandi esa HAR sahifada, sayt
+  //  uslubida turadi.
+  //
+  //  NEGA KLON: band TA'LIM bandining nusxasidan yasaladi — shrift,
+  //  bo'shliq, hover rangi saytnikidan meros oladi; eMaktab uslubini
+  //  o'zgartirsa ham band chetda qolmaydi. Faqat ichidagi matn va
+  //  havola almashtiriladi, «faol» belgisi olib tashlanadi.
+  //
+  //  BOSILGANDA: dars jadvali bo'limida — panel ochiladi; boshqa
+  //  sahifada — panel «ochiq» deb belgilanib, «Darslar jadvali»
+  //  bo'limiga o'tiladi (u yerda skript qayta yuklanib panelni ochadi).
+  //
+  //  Menyu topilmasa hech narsa bo'lmaydi — eski «SJ» tugmasi qoladi.
+  // ===================================================================
+  const MENYU_BIRINCHI = new Set(["talim", "obrazovanie", "obuchenie", "education"]);
+  const MENYU_QOSHNI = new Set(["muloqot", "obshenie", "communication",
+    "oqituvchiga", "uchitelyu", "teacher", "tolovlar", "oplata", "platezhi", "payments"]);
+
+  // Menyuning birinchi bandi (TA'LIM) — yonida MULOQOT/O'QITUVCHIGA turgani.
+  // Sahifada «Ta'lim» so'zi boshqa joyda ham uchrashi mumkin, shuning
+  // uchun qo'shni bandlar ham tekshiriladi.
+  function menyuBirinchiBand() {
+    for (const el of document.querySelectorAll("a")) {
+      if (el.closest("#sj-bridge-host") || el.closest("#sj-menyu")) continue;
+      if (!MENYU_BIRINCHI.has(normKey(txt(el))) || !visible(el)) continue;
+      const qator = (el.closest("li") || el).parentElement;
+      if (!qator) continue;
+      const qoshni = [...qator.querySelectorAll("a")].some((x) => MENYU_QOSHNI.has(normKey(txt(x))));
+      if (qoshni) return el;
+    }
+    return null;
+  }
+
+  function maktabId() {
+    const q = new URLSearchParams(location.search).get("school");
+    if (q) return q;
+    for (const a of document.querySelectorAll('a[href*="school="]')) {
+      const m = String(a.getAttribute("href") || "").match(/[?&]school=(\d+)/);
+      if (m) return m[1];
+    }
+    return "";
+  }
+
+  // «Darslar jadvali» bo'limining TO'LIQ manzili — `schools.` subdomenida.
+  //  Ilgari nisbiy `/v2/schedules/` edi: emaktab.uz/teachers dan bosilganda
+  //  emaktab.uz/v2/schedules/ ga ketib 404 berardi (02.11.2026).
+  function jadvalBolimiUrl() {
+    const id = maktabId();
+    const ildiz = location.hostname.split(".").slice(-2).join(".");   // emaktab.uz / kundalik.com
+    return `https://schools.${ildiz}/v2/schedules/` + (id ? "?school=" + encodeURIComponent(id) : "");
+  }
+
+  // Bandni qo'yish. Qaytadi: true — qo'yildi (yoki allaqachon bor),
+  // false — menyu hali topilmadi (chaqiruvchi kutib qayta uradi).
+  function menyuBandiQosh(onClick) {
+    if (document.getElementById("sj-menyu")) return true;
+    const a = menyuBirinchiBand();
+    if (!a) return false;
+    const asl = a.closest("li") || a;
+    const yangi = asl.cloneNode(true);
+    yangi.id = "sj-menyu";
+    // Klonda «faol» belgisi va sahifaning id'lari qolmasin
+    [yangi, ...yangi.querySelectorAll("*")].forEach((el) => {
+      if (el !== yangi) el.removeAttribute("id");
+      [...el.classList].filter((c) => /active|selected|current/i.test(c))
+        .forEach((c) => el.classList.remove(c));
+    });
+    const havola = yangi.matches("a") ? yangi : yangi.querySelector("a");
+    if (!havola) return false;
+    havola.href = KOPRIK_HOST ? "#smartjadval" : jadvalBolimiUrl();
+    havola.title = "Smartjadval → eMaktab: dars jadvalini sxemaga joylashtirish";
+    havola.innerHTML =
+      '<span style="display:inline-flex;align-items:center;gap:7px;white-space:nowrap;">'
+      + '<span style="display:inline-block;padding:1px 7px;border-radius:999px;font-size:.72em;'
+      + 'font-weight:800;letter-spacing:.05em;line-height:1.55;color:#fff;'
+      + 'background:linear-gradient(135deg,#6366f1,#a855f7);'
+      + 'box-shadow:0 2px 8px rgba(99,102,241,.45);">SJ</span>'
+      + '<span>DARS JADVALI</span></span>';
+    havola.addEventListener("click", (e) => { e.preventDefault(); onClick(); });
+    asl.parentNode.insertBefore(yangi, asl);
+    return true;
+  }
+
+  // `schools.` dan TASHQARIDA — faqat menyu bandi, oyna yo'q.
+  // Menyu ba'zan skriptdan keyin chiziladi, shuning uchun 6 s kutiladi.
+  if (!KOPRIK_HOST) {
+    // Oyna «ochiq» deb belgilanadi — `schools.` da skript qayta yuklanib
+    // uni darrov ochadi (menyudan bosgan odam oynani kutadi).
+    waitFor(() => menyuBandiQosh(() => { ochiqYoz(true); location.href = jadvalBolimiUrl(); }), 6000, 250);
+    return;
+  }
+
+  // ===================================================================
   //  3-QISM. YOZUVCHI (o'rganish rejimi)
   //
   //  Foydalanuvchi BITTA darsni qo'lda qo'shadi — skript esa sahifa
@@ -644,6 +752,50 @@
     return m2 ? m2[1].trim() : "";
   }
 
+  // Sahifada QAYSI CHORAK ochiq — yuqoridagi «1 chorak | 2 chorak | …»
+  // yorliqlaridan. Sxema nomi shunga qarab taklif qilinadi.
+  //
+  //  ⚠️ ILGARI NOM «1 chorak» DEB QATTIQ YOZILGAN EDI. 2-chorak
+  //  yorlig'ida turib «Hamma sinfga» bosilsa, 2-chorak davriga
+  //  «1 chorak» nomli sxema yaratilardi — ro'yxatda chalg'ituvchi nom
+  //  qolar, keyingi yurishda esa «1 chorak» nomli sxema izlanib
+  //  topilmasdi (jonli maktabda 6-A da aynan shunday bo'ldi, 02.11.2026).
+  //
+  //  Aniqlash tartibi:
+  //   1) havolasida URL dagi joriy `period` turgan yorliq;
+  //      (sxema havolalari — `schedule=` lisi — chetlab o'tiladi: sxemaning
+  //       o'zi ham «1 chorak» deb nomlangan bo'lishi mumkin)
+  //   2) faol yorliq: havolasiz turgani yoki active/selected klasslisi.
+  //  Topilmasa bo'sh qaytadi — chaqiruvchi «1 chorak» ni qoldiradi.
+  const CHORAK_RE = /^\d{1,2}\s*[-–—]?\s*(chorak|четверть|yarim\s*yil|полугодие|semestr|семестр|trimestr|триместр)$/i;
+
+  function joriyChorakNomi() {
+    const period = new URLSearchParams(location.search).get("period") || "";
+    const havola = (el) => el.closest("a") || el.querySelector("a");
+    const nomzodlar = [...document.querySelectorAll("a, span, li, b, div")]
+      .filter((el) => !el.closest("#sj-bridge-host") && el.children.length <= 1
+        && CHORAK_RE.test(txt(el)) && visible(el));   // yashirin shablonlar emas
+    if (!nomzodlar.length) return "";
+
+    if (period) {
+      const re = new RegExp("[?&]period=" + period + "(&|$)");   // 111 ≠ 1110
+      const f = nomzodlar.find((el) => {
+        const a = havola(el);
+        const h = a ? String(a.getAttribute("href") || "") : "";
+        return re.test(h) && !/[?&]schedule=/.test(h);
+      });
+      if (f) return txt(f);
+    }
+
+    const faol = nomzodlar.find((el) => {
+      const a = havola(el);
+      if (a && /[?&]schedule=/.test(String(a.getAttribute("href") || ""))) return false;
+      const kl = [el, el.parentElement, a].filter(Boolean).map((x) => String(x.className || "")).join(" ");
+      return /active|selected|current/i.test(kl) || !a;
+    });
+    return faol ? txt(faol) : "";
+  }
+
   function gridReport() {
     const g = findGrid();
     if (!g) return { topildi: false, jadvallar: document.querySelectorAll("table").length };
@@ -705,26 +857,87 @@
   // ===================================================================
   const enc = encodeURIComponent;
 
+  // `xss` — sessiyaga bog'liq token, sahifa ichidagi havolalarda turadi
+  const xssIzla = (html) => {
+    const m = String(html == null ? "" : html).match(/[?&]xss=([0-9a-f]{16,})/);
+    return m ? m[1] : "";
+  };
+
   const API = {
-    tayyor: false,
+    tayyor: false,         // sxemaga ulangan: token, fanlar, bo'sh katak bor
+    umumiy: false,         // maktab id va xss bor (sxemasiz ham ishlaydigan qism)
+    maktabNomi: "",
     xss: "", token: "", schoolId: "", scheduleId: "", groupId: "",
     bosh: null,            // { kun, soat } — ro'yxat so'rash uchun BO'SH katak
     band: new Set(),       // shu yurishda TO'LDIRILGAN kataklar ("kun_soat")
     fanlar: [],            // [{ v, label }] — butun maktab fanlari
     fanKesh: new Map(),    // fanId → { guruhlar, ustozlar, xonalar }
 
-    async init() {
+    // ⚠️ SXEMA SAHIFASIDA BO'LMASAK HAM ISHLAYDI.
+    //
+    //  Ilgari init URL'dagi `schedule` bo'lmasa to'xtab qolardi — dashboard
+    //  esa istalgan sahifadan ochiladi. Maktab id'si URL'dan yoki sahifa
+    //  havolalaridan, `xss` joriy sahifadan, bo'lmasa «Darslar jadvali»
+    //  ro'yxati sahifasidan, u yerda ham bo'lmasa birinchi sinfning
+    //  generator sahifasidan olinadi.
+    async initUmumiy() {
+      if (this.umumiy) return;
       const q = new URLSearchParams(location.search);
-      this.schoolId = q.get("school") || "";
-      this.scheduleId = q.get("schedule") || "";
-      this.groupId = q.get("group") || "";
-      if (!this.scheduleId) {
-        throw new Error("URL da `schedule` yo'q — chorak sxemasi sahifasida emassiz");
+      this.schoolId = this.schoolId || q.get("school") || maktabId() || "";
+      this.scheduleId = this.scheduleId || q.get("schedule") || "";
+      this.groupId = this.groupId || q.get("group") || "";
+      this.xss = this.xss || xssIzla(document.documentElement.innerHTML);
+      // Maktab nomi — `/v2/school` havolasi (menyu bandi emas: TA'LIM ham shunga olib borishi mumkin)
+      // «Mening maktabim», «Maktab sahifasi» kabi umumiy yorliqlar emas —
+      // yo'lakchadagi haqiqiy nom («TURON ODOB-ILM») kerak.
+      // Menyu va pastki menyu bandlari («O'qituvchi», «Mening sinflarim»…)
+      // ham `/v2/school…` ga olib boradi — ular chetlab o'tiladi. Eng ishonchlisi
+      // yo'lakchadagi havola: `…/v2/school?school=<id>` dan boshqa hech narsasi yo'q.
+      const UMUMIY = new Set(["meningmaktabim", "maktabsahifasi", "maktab", "moyashkola", "shkola", "school",
+        "myschool", "oqituvchi", "oqituvchiga", "uchitel", "uchitelyu", "teacher", "meningsinflarim", "moiklassy",
+        "hisobotlar", "otchety", "jurnallar", "jurnaly", "darsjadvali", "raspisanie", "uyvazifasi", "domashniezadaniya",
+        "administratsiya", "administraciya", "sinflar", "klassy", "oquvchilar", "ucheniki", "xodimlar", "sotrudniki"]);
+      const maktabHavola = (root) => {
+        let eng = "", engBall = -1;
+        for (const a of root.querySelectorAll('a[href*="/v2/school"]')) {
+          const t = txt(a), k = normKey(t);
+          if (!t || !k || MENYU_BIRINCHI.has(k) || MENYU_QOSHNI.has(k) || UMUMIY.has(k)) continue;
+          const h = String(a.getAttribute("href") || "");
+          const ball = /\/v2\/school\/?\?school=\d+$/.test(h) ? 2 : (/[?&]school=\d+/.test(h) ? 1 : 0);
+          if (ball > engBall) { eng = t; engBall = ball; }
+          if (ball === 2) break;
+        }
+        return eng;
+      };
+      this.maktabNomi = this.maktabNomi || maktabHavola(document);
+      if (!this.xss || !this.schoolId || !this.maktabNomi) {
+        const r = await fetch(`/v2/schedules/${this.schoolId ? "?school=" + enc(this.schoolId) : ""}`,
+          { credentials: "same-origin" });
+        if (r.ok) {
+          const html = await r.text();
+          if (!this.xss) this.xss = xssIzla(html);
+          if (!this.schoolId) { const m = html.match(/[?&]school=(\d+)/); if (m) this.schoolId = m[1]; }
+          if (!this.maktabNomi) {
+            this.maktabNomi = maktabHavola(new DOMParser().parseFromString(html, "text/html"));
+          }
+          if (!this.xss) {
+            const g = html.match(/[?&]group=(\d+)/);
+            if (g && this.schoolId) {
+              const r2 = await fetch(sxemaUrl(g[1], ""), { credentials: "same-origin" });
+              if (r2.ok) this.xss = xssIzla(await r2.text());
+            }
+          }
+        }
       }
-      // `xss` — sessiyaga bog'liq token, sahifa ichidagi havolalarda turadi
-      const m = document.documentElement.innerHTML.match(/[?&]xss=([0-9a-f]{16,})/);
-      this.xss = m ? m[1] : "";
-      if (!this.xss) throw new Error("sahifadan `xss` tokeni topilmadi");
+      if (!this.schoolId) throw new Error("maktab id (`school`) topilmadi — schools.emaktab.uz da ekaningizni tekshiring");
+      if (!this.xss) throw new Error("`xss` tokeni topilmadi — bironta chorak sxemasi sahifasini oching");
+      this.umumiy = true;
+    },
+
+    async init() {
+      await this.initUmumiy();
+      // Sxema sahifasida emasmiz — sxema sinfma-sinf beriladi (dashboard)
+      if (!this.scheduleId) return { fanlar: 0, katak: null };
 
       const { katak, f } = await this.boshKatak();
       this.bosh = katak;
@@ -734,6 +947,26 @@
       if (!this.fanlar.length) throw new Error("fanlar ro'yxati bo'sh");
       this.tayyor = true;
       return { fanlar: this.fanlar.length, katak };
+    },
+
+    // Fanlar ro'yxati uchun BIRORTA sxema kerak (forma sxemaga bog'liq).
+    // Dashboard sxema sahifasidan tashqarida ochilganda: sinflar bo'ylab
+    // yurib, topilgan birinchi sxemaga ulanadi.
+    async birorSxema() {
+      await this.initUmumiy();
+      const g = await sinfGuruhlari();
+      for (const gr of g.values()) {
+        let royxat = [];
+        try { royxat = await sxemalar(gr.id, ""); } catch { royxat = []; }
+        if (!royxat.length) continue;
+        this.scheduleId = royxat[0].id;
+        this.groupId = gr.id;
+        this.bosh = null; this.band = new Set(); this.fanKesh = new Map();
+        const { katak, f } = await this.boshKatak();
+        this.bosh = katak; this.token = f.token; this.fanlar = f.fanlar;
+        if (this.token && this.fanlar.length) { this.tayyor = true; return; }
+      }
+      throw new Error("maktabda bironta sxema yo'q — avval «🗂 Hammasiga sxema yaratish» ni bosing");
     },
 
     // ⚠️ FORMA FAQAT BO'SH KATAK UCHUN TO'LIQ QAYTADI.
@@ -895,6 +1128,7 @@
   // ===================================================================
   async function collectSchoolData({ xonalarHam = true, onProgress } = {}) {
     if (!API.tayyor) await API.init();
+    if (!API.fanlar.length) await API.birorSxema();
     const say = (matn) => { if (onProgress) onProgress(matn); };
 
     // ——— Sinflar: jadvallar ro'yxati sahifasidagi `group=` havolalari ———
@@ -934,7 +1168,7 @@
       if (xonalarHam) info.xonalar.forEach((x) => { if (!xonaMap.has(x.v)) xonaMap.set(x.v, { id: x.v, nom: x.label }); });
     }
 
-    const maktabNomi = txt(document.querySelector('a[href*="/v2/school"]')) || "";
+    const maktabNomi = API.maktabNomi || txt(document.querySelector('a[href*="/v2/school"]')) || "";
     return {
       sj_emaktab_malumot: 1,
       sana: new Date().toISOString(),
@@ -1079,7 +1313,88 @@
   // ===================================================================
   function sxemaUrl(group, period, qoshimcha) {
     return `/v2/schedules/generator?school=${enc(API.schoolId)}`
-      + `&group=${enc(group)}&period=${enc(period)}${qoshimcha || ""}`;
+      + `&group=${enc(group)}${period ? "&period=" + enc(period) : ""}${qoshimcha || ""}`;
+  }
+
+  // Hujjatdagi CHORAK YORLIQLARI → Map(periodId → nom) va havolasiz
+  // (faol) yorliqning nomi. Id yorliq havolasidan, bo'lmasa element yoki
+  // ota-onasining istalgan atributidan (onclick, data-*) olinadi. Shunda
+  // ham topilmasa xom HTML'da `period=…` dan keyingi `</a>` gacha matn
+  // ko'riladi — tuzilishi kutilmagan bo'lsa ham ishlasin.
+  function choraklarDomdan(doc, html) {
+    const out = new Map();
+    let nomsiz = "";
+    doc.querySelectorAll("a, span, li, b, div, td, button").forEach((el) => {
+      if (el.children.length > 1 || !CHORAK_RE.test(txt(el))) return;
+      const a = el.closest("a") || el.querySelector("a");
+      const h = a ? String(a.getAttribute("href") || "") : "";
+      if (/[?&]schedule=/.test(h)) return;
+      const atr = [el, a, el.parentElement].filter(Boolean)
+        .map((x) => [...x.attributes].map((at) => at.value).join(" ")).join(" ");
+      const m = (h + " " + atr).match(/period=(\d+)/);
+      if (m) { if (!out.has(m[1])) out.set(m[1], txt(el)); }
+      else if (!nomsiz) nomsiz = txt(el);
+    });
+    if (out.size < 2 && html) {
+      const re = /period=(\d+)[^>]*>([\s\S]{0,300}?)<\/a>/g;
+      let m;
+      while ((m = re.exec(html))) {
+        const t = m[2].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+        if (CHORAK_RE.test(t) && !out.has(m[1])) out.set(m[1], t);
+      }
+    }
+    return { out, nomsiz };
+  }
+
+  // Choraklar ro'yxati: [{ id, nom }] va faol yorliq nomi.
+  //
+  //  Manbalar ketma-ket, yetarlisi topilguncha: 1) joriy sahifa (view yoki
+  //  generator sahifasida yorliqlar turadi), 2) sinfning generator
+  //  sahifasi, 3) sinfning `view` sahifasi. Faol yorliq havolasiz bo'lsa
+  //  uning id'si URL'dan, bo'lmasa BOSHQA yorliq sahifasidan olinadi —
+  //  u yerda avvalgi faol yorliq havolaga aylanadi.
+  //  `tashxis` — topilmaganda jurnalga chiqariladi (markup o'zgargan bo'lsa
+  //  sababini shu yerdan bilib olamiz).
+  async function choraklarOqi(group) {
+    const out = new Map();
+    let nomsiz = "";
+    const tashxis = [];
+    const qosh = (res) => {
+      res.out.forEach((v, k) => { if (!out.has(k)) out.set(k, v); });
+      if (!nomsiz) nomsiz = res.nomsiz;
+    };
+    const urlP = new URLSearchParams(location.search).get("period") || "";
+    const joriy = choraklarDomdan(document, "");
+    qosh(joriy);
+    if (joriy.nomsiz && urlP && !out.has(urlP)) out.set(urlP, joriy.nomsiz);
+    tashxis.push(`sahifa: ${joriy.out.size} havola${joriy.nomsiz ? ", faol «" + joriy.nomsiz + "»" : ""}`);
+
+    const oqi = async (nom, url) => {
+      try {
+        const r = await fetch(url, { credentials: "same-origin" });
+        if (!r.ok) { tashxis.push(`${nom}: HTTP ${r.status}`); return; }
+        const html = await r.text();
+        if (!API.xss) API.xss = xssIzla(html);
+        const res = choraklarDomdan(new DOMParser().parseFromString(html, "text/html"), html);
+        qosh(res);
+        const mu = String(r.url || "").match(/[?&]period=(\d+)/);
+        if (res.nomsiz && mu && !out.has(mu[1]) && ![...out.values()].includes(res.nomsiz)) out.set(mu[1], res.nomsiz);
+        tashxis.push(`${nom}: ${res.out.size} havola, period= ${(html.match(/period=\d+/g) || []).length} ta, `
+          + `«chorak» ${(html.match(/chorak|четверть/gi) || []).length} ta${res.nomsiz ? ", faol «" + res.nomsiz + "»" : ""}`);
+      } catch (err) { tashxis.push(`${nom}: ${err.message}`); }
+    };
+    if (out.size < 2) await oqi("generator", sxemaUrl(group, ""));
+    if (out.size < 2) await oqi("view", `/v2/schedules/view?school=${enc(API.schoolId)}&group=${enc(group)}`);
+    // Faol yorliqning id'si yo'q — boshqa yorliq sahifasida u havolaga aylanadi
+    const yetmaydi = () => nomsiz && ![...out.values()].includes(nomsiz) && out.size;
+    if (yetmaydi()) {
+      const boshqa = [...out.keys()][0];
+      await oqi("view (boshqa yorliq)", `/v2/schedules/view?school=${enc(API.schoolId)}&group=${enc(group)}&period=${enc(boshqa)}`);
+      if (yetmaydi()) await oqi("generator (boshqa yorliq)", sxemaUrl(group, boshqa));
+    }
+    const royxat = [...out.entries()].map(([id, nom]) => ({ id, nom }))
+      .sort((x, y) => (parseInt(x.nom, 10) || 0) - (parseInt(y.nom, 10) || 0));
+    return { royxat, faol: nomsiz || joriyChorakNomi(), tashxis: tashxis.join("; ") };
   }
 
   // Sinfning mavjud sxemalari: [{ id, nom }]
@@ -1432,184 +1747,259 @@
   }
 
   // ===================================================================
-  //  7-QISM. PANEL (Shadow DOM — sahifa uslublari aralashmasin)
+  //  7-QISM. DASHBOARD (Shadow DOM — sahifa uslublari aralashmasin)
+  //
+  //  Ilgari ko'prik o'ng pastda kichkina yon panel edi: 400px kenglikda
+  //  43 sinfning holatini ko'rib bo'lmasdi, «qaysi sinf tushdi, qaysi
+  //  qoldi» faqat jurnal matnidan bilinardi. Endi bu markazda ochiladigan
+  //  katta oyna: chapda sozlamalar (jadval fayli, chorak, parametrlar),
+  //  o'ngda sinflar jadvali — har sinf uchun fayldagi dars soni, eMaktab
+  //  mosligi, sxema holati va alohida «▶» tugmasi.
+  //
+  //  Oyna yuqori menyudagi «SJ DARS JADVALI» bandidan ochiladi (2B-QISM).
+  //  Menyu topilmasa zaxira sifatida o'ng pastda dumaloq «SJ» tugma chiqadi.
   // ===================================================================
   const host = document.createElement("div");
   host.id = "sj-bridge-host";
-  host.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:2147483647;";
   const sh = host.attachShadow({ mode: "open" });
   document.body.appendChild(host);
 
   sh.innerHTML = `
     <style>
       :host,*{box-sizing:border-box;}
-      .wrap{font:13px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;color:#e5e7eb;}
-      .fab{width:54px;height:54px;border-radius:50%;border:none;cursor:pointer;
-        background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;font-weight:800;font-size:15px;
-        box-shadow:0 8px 24px rgba(79,70,229,.45);}
-      .panel{display:none;width:400px;max-height:82vh;overflow:auto;background:#0f172a;
-        border:1px solid #1e293b;border-radius:16px;padding:14px;box-shadow:0 24px 60px rgba(0,0,0,.5);}
-      .panel.ochiq{display:block;}
-      h3{margin:0 0 2px;font-size:15px;color:#fff;}
-      .sub{color:#94a3b8;font-size:11.5px;margin-bottom:10px;}
-      .qadam{border:1px solid #1e293b;border-radius:11px;padding:10px;margin-bottom:9px;background:#111a2e;}
-      .qadam b{color:#c7d2fe;font-size:12px;display:block;margin-bottom:6px;}
-      button.b{border:none;border-radius:9px;padding:8px 11px;font-weight:700;font-size:12px;
-        cursor:pointer;margin:2px 3px 2px 0;font-family:inherit;}
+      .wrap{font:13px/1.45 -apple-system,"Segoe UI",Roboto,sans-serif;color:#e5e7eb;}
+      .fab{position:fixed;right:18px;bottom:18px;z-index:2147483646;display:none;width:54px;height:54px;
+        border-radius:50%;border:none;cursor:pointer;background:linear-gradient(135deg,#6366f1,#8b5cf6);
+        color:#fff;font-weight:800;font-size:15px;box-shadow:0 8px 24px rgba(79,70,229,.45);}
+      .fab.kor{display:block;}
+      .ov{position:fixed;inset:0;z-index:2147483647;display:none;align-items:center;justify-content:center;
+        padding:16px;background:rgba(2,6,23,.66);backdrop-filter:blur(6px);}
+      .ov.ochiq{display:flex;}
+      .panel{width:min(1260px,100%);height:min(92vh,920px);display:flex;flex-direction:column;
+        background:#0b1220;border:1px solid #1e293b;border-radius:20px;overflow:hidden;
+        box-shadow:0 40px 120px rgba(0,0,0,.65);}
+      .hd{display:flex;align-items:center;gap:14px;padding:13px 20px;border-bottom:1px solid #1e293b;
+        background:linear-gradient(90deg,#121c33,#0b1220);}
+      .logo{width:42px;height:42px;border-radius:13px;flex:none;display:grid;place-items:center;
+        background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;font-weight:900;font-size:15px;
+        box-shadow:0 6px 18px rgba(99,102,241,.45);}
+      .hd h3{margin:0;font-size:17px;color:#fff;line-height:1.2;}
+      .hd .sub{color:#94a3b8;font-size:12px;}
+      .sp{flex:1;}
+      .chip{font-size:11px;padding:4px 10px;border-radius:999px;background:#1e293b;color:#cbd5e1;
+        border:1px solid #334155;white-space:nowrap;}
+      .chip.ok{background:#052e2b;color:#6ee7b7;border-color:#065f46;}
+      .chip.xato{background:#3b0d0d;color:#fca5a5;border-color:#7f1d1d;}
+      .chip.ogoh{background:#3b2305;color:#fcd34d;border-color:#78350f;}
+      .x{background:#1e293b;border:1px solid #334155;color:#cbd5e1;cursor:pointer;font-size:15px;
+        width:34px;height:34px;border-radius:10px;}
+      .x:hover{background:#334155;color:#fff;}
+      .body{flex:1;display:grid;grid-template-columns:360px 1fr;min-height:0;}
+      .side{overflow:auto;padding:14px;border-right:1px solid #1e293b;background:#0d1526;}
+      .main{display:flex;flex-direction:column;min-height:0;padding:14px 16px;gap:10px;}
+      .qadam{border:1px solid #1e293b;border-radius:12px;padding:11px;margin-bottom:10px;background:#111a2e;}
+      .qadam>b{color:#c7d2fe;font-size:12px;display:block;margin-bottom:7px;letter-spacing:.02em;}
+      .qadam>b i{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:6px;
+        background:#312e81;color:#c7d2fe;font-style:normal;font-size:11px;margin-right:6px;}
+      details.qadam summary{cursor:pointer;color:#94a3b8;font-size:12px;font-weight:600;list-style:none;}
+      details.qadam summary::before{content:"▸ ";color:#64748b;}
+      details.qadam[open] summary::before{content:"▾ ";}
+      details.qadam[open] summary{margin-bottom:8px;}
+      button.b{border:none;border-radius:9px;padding:8px 12px;font-weight:700;font-size:12px;
+        cursor:pointer;margin:2px 4px 2px 0;font-family:inherit;transition:filter .15s,transform .05s;}
+      button.b:hover{filter:brightness(1.12);} button.b:active{transform:translateY(1px);}
+      button.b:disabled{opacity:.45;cursor:not-allowed;filter:none;}
       .b-main{background:linear-gradient(135deg,#10b981,#059669);color:#fff;}
+      .b-hero{background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:11px 18px;font-size:13px;
+        box-shadow:0 6px 18px rgba(99,102,241,.35);}
       .b-alt{background:#1e293b;color:#cbd5e1;border:1px solid #334155;}
       .b-warn{background:#7c2d12;color:#fed7aa;}
-      textarea{width:100%;height:76px;background:#020617;border:1px solid #1e293b;border-radius:9px;
+      .b-mini{padding:4px 9px;font-size:11px;margin:0;}
+      textarea{width:100%;height:70px;background:#020617;border:1px solid #1e293b;border-radius:9px;
         color:#cbd5e1;padding:7px;font:11px/1.4 ui-monospace,Consolas,monospace;resize:vertical;}
-      .log{background:#020617;border:1px solid #1e293b;border-radius:9px;padding:7px;height:150px;
-        overflow:auto;font:11px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;}
-      .ok{color:#4ade80;} .xato{color:#f87171;} .ogoh{color:#fbbf24;} .dim{color:#64748b;}
-      .qator{display:flex;gap:6px;align-items:center;margin:5px 0;flex-wrap:wrap;}
+      input[type=text],input[type=number],select.s{background:#020617;border:1px solid #1e293b;border-radius:7px;
+        color:#e2e8f0;padding:5px 7px;font-size:12px;font-family:inherit;}
+      input[type=number]{width:62px;}
+      select.s{max-width:100%;}
+      .qator{display:flex;gap:7px;align-items:center;margin:5px 0;flex-wrap:wrap;}
       label{font-size:11.5px;color:#94a3b8;display:flex;gap:5px;align-items:center;}
-      input[type=number]{width:58px;background:#020617;border:1px solid #1e293b;border-radius:6px;color:#cbd5e1;padding:3px 5px;}
-      select.s{background:#020617;border:1px solid #1e293b;border-radius:6px;color:#cbd5e1;padding:4px 6px;font-size:12px;max-width:200px;}
-      .x{position:absolute;right:10px;top:10px;background:none;border:none;color:#64748b;cursor:pointer;font-size:16px;}
-      .holat{font-size:11.5px;color:#93c5fd;margin:6px 0;}
-      .pb{height:5px;background:#1e293b;border-radius:3px;overflow:hidden;margin:6px 0;}
+      .holat{font-size:11.5px;color:#93c5fd;margin:5px 0;}
+      .dim{color:#64748b;} .ok{color:#4ade80;} .xato{color:#f87171;} .ogoh{color:#fbbf24;}
+      .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+      .stat{background:#111a2e;border:1px solid #1e293b;border-radius:12px;padding:9px 12px;}
+      .stat .n{font-size:22px;font-weight:800;color:#fff;line-height:1.1;}
+      .stat .l{font-size:11px;color:#94a3b8;margin-top:2px;}
+      .tb{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+      .tbw{flex:1;min-height:140px;overflow:auto;border:1px solid #1e293b;border-radius:12px;background:#0f172a;}
+      table{width:100%;border-collapse:collapse;font-size:12.5px;}
+      th{position:sticky;top:0;z-index:1;background:#111a2e;color:#94a3b8;font-weight:600;text-align:left;
+        padding:8px 10px;border-bottom:1px solid #1e293b;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;}
+      td{padding:6px 10px;border-bottom:1px solid #16213a;vertical-align:middle;white-space:nowrap;}
+      tr:hover td{background:#111a2e;}
+      td.c{text-align:center;} th.c{text-align:center;}
+      .nom{font-weight:700;color:#fff;}
+      .tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;white-space:nowrap;}
+      .t-ok{background:#052e2b;color:#6ee7b7;} .t-yoq{background:#1e293b;color:#94a3b8;}
+      .t-ogoh{background:#3b2305;color:#fcd34d;} .t-xato{background:#3b0d0d;color:#fca5a5;}
+      .t-ish{background:#1e3a8a;color:#bfdbfe;}
+      .pb{height:6px;background:#1e293b;border-radius:3px;overflow:hidden;}
       .pb i{display:block;height:100%;width:0;background:linear-gradient(90deg,#6366f1,#22d3ee);transition:width .2s;}
+      .log{height:150px;flex:none;background:#020617;border:1px solid #1e293b;border-radius:10px;padding:8px;
+        overflow:auto;font:11px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;}
+      .bosh{padding:28px;text-align:center;color:#64748b;font-size:12.5px;}
+      code{background:#1e293b;padding:1px 5px;border-radius:4px;font-size:11px;}
+      @media (max-width:900px){.body{grid-template-columns:1fr;}.side{border-right:none;border-bottom:1px solid #1e293b;max-height:40vh;}.stats{grid-template-columns:repeat(2,1fr);}}
     </style>
     <div class="wrap">
       <button class="fab" id="fab" title="Smartjadval ko'prigi">SJ</button>
-      <div class="panel" id="panel" style="position:relative;">
-        <button class="x" id="yopish">✕</button>
-        <h3>Smartjadval → eMaktab</h3>
-        <div class="sub">Sxema setkasini to'ldiradi. «Nashr etish» ni siz bosasiz.</div>
-
-        <div class="qadam">
-          <b>1. Jadval ma'lumoti</b>
-          <textarea id="json" placeholder="Smartjadval → eMaktab bo'limidan nusxa olingan JSON shu yerga qo'yiladi…"></textarea>
-          <div class="qator">
-            <button class="b b-alt" id="fayl">📂 Fayldan</button>
-            <button class="b b-alt" id="oqish">✔ Tekshirish</button>
-            <button class="b b-alt" id="unut" title="Brauzerda saqlangan jadvalni o'chirish">🗑</button>
-            <span class="holat" id="holat"></span>
+      <div class="ov" id="ov">
+      <div class="panel" id="panel">
+        <div class="hd">
+          <div class="logo">SJ</div>
+          <div>
+            <h3>Dars jadvali — Smartjadval → eMaktab</h3>
+            <div class="sub">Sxema setkasini to'ldiradi. «Nashr etish» ni siz bosasiz.</div>
           </div>
-          <input type="file" id="fileinp" accept=".json,application/json" style="display:none">
+          <div class="sp"></div>
+          <span class="chip" id="maktabChip">maktab…</span>
+          <span class="chip" id="apiChip">API: tekshirilmadi</span>
+          <button class="x" id="yopish" title="Yopish (Esc)">✕</button>
         </div>
 
-        <div class="qadam">
-          <b>2. Sinf</b>
-          <div class="qator">
-            <select class="s" id="sinf"><option value="">— avval JSON tekshirilsin —</option></select>
+        <div class="body">
+        <div class="side">
+          <div class="qadam">
+            <b><i>1</i>Jadval fayli</b>
+            <textarea id="json" placeholder="Smartjadval → eMaktab bo'limidan nusxa olingan JSON shu yerga qo'yiladi…"></textarea>
+            <div class="qator">
+              <button class="b b-alt" id="fayl">📂 Fayldan</button>
+              <button class="b b-alt" id="oqish">✔ Tekshirish</button>
+              <button class="b b-alt" id="unut" title="Brauzerda saqlangan jadvalni o'chirish">🗑</button>
+            </div>
+            <div class="holat" id="holat"></div>
+            <input type="file" id="fileinp" accept=".json,application/json" style="display:none">
+            <select class="s" id="sinf" style="display:none"><option value="">— avval JSON tekshirilsin —</option></select>
           </div>
-          <div class="holat" id="setkaHolat">Setka hali tekshirilmadi.</div>
+
+          <div class="qadam">
+            <b><i>2</i>Chorak va sxema</b>
+            <div class="qator">
+              <label>chorak <select class="s" id="chorakSel"><option value="">— yuklanmoqda… —</option></select></label>
+            </div>
+            <div class="qator">
+              <label>sxema nomi <input type="text" id="chorakNom" value="1 chorak" style="width:130px"></label>
+            </div>
+            <div class="dim" style="font-size:10.5px;">
+              Sxemasi yo'q sinfga «<span id="nomKo"></span>» nomli sxema yaratiladi,
+              bo'sh kataklari to'ldiriladi, darsi bor katakka tegilmaydi.
+            </div>
+          </div>
+
+          <div class="qadam">
+            <b><i>3</i>Sozlamalar</b>
+            <div class="qator">
+              <label><input type="checkbox" id="xona"> xona ham</label>
+              <label><input type="checkbox" id="otkaz" checked> band katakni o'tkazib yuborish</label>
+            </div>
+            <div class="qator">
+              <label><input type="checkbox" id="mavjudHam"> DARSI BOR sxemaga ham yozish (darslar ikkilanadi!)</label>
+            </div>
+            <div class="qator">
+              <label>tanaffus <input type="number" id="tanaffus" value="350" min="0" step="50"> ms</label>
+              <label>kutish <input type="number" id="kutish" value="8000" min="1000" step="500"> ms</label>
+            </div>
+          </div>
+
+          <details class="qadam">
+            <summary>📥 eMaktab'dan ma'lumot olish</summary>
+            <div class="dim" style="font-size:11px;margin-bottom:6px;">
+              Sinflar, fanlar, ustozlar (qaysi fanga ruxsat berilgani bilan) va
+              xonalar fayl bo'lib yuklanadi. Uni Smartjadval «eMaktab» bo'limiga
+              yuklasangiz — nomlar taxmin qilinmay, id bo'yicha aniq ishlaydi.
+            </div>
+            <div class="qator">
+              <label><input type="checkbox" id="xonaYig" checked> xonalar ham</label>
+              <button class="b b-alt" id="yigish">📥 Yig'ish va saqlash</button>
+            </div>
+            <div class="holat" id="yigHolat"></div>
+          </details>
+
+          <details class="qadam">
+            <summary>🔤 Nom mosligi (kerak bo'lsa)</summary>
+            <div class="dim" style="font-size:11px;margin-bottom:6px;">
+              Avtomatik topilmagan nomlar uchun. Har qatorda:
+              <code>Smartjadval nomi = eMaktab nomi</code>
+            </div>
+            <textarea id="xarita" style="height:58px"
+              placeholder="Rus tili = Русский язык&#10;Munavvarov A.M. = Munavvarov Akmal Murodovich"></textarea>
+            <div class="qator">
+              <button class="b b-alt" id="xaritaSaqla">💾 Saqlash</button>
+              <span class="holat" id="xaritaHolat"></span>
+            </div>
+          </details>
+
+          <details class="qadam">
+            <summary>🛠 Zaxira va nosozlik</summary>
+            <div class="dim" style="font-size:11px;margin-bottom:6px;">
+              Shu sahifada sxema setkasi ochiq bo'lsa, darslarni API'siz —
+              oynani ochib-yopib (DOM orqali) ham joylash mumkin.
+            </div>
+            <div class="holat" id="setkaHolat">Setka hali tekshirilmadi.</div>
+            <div class="qator">
+              <button class="b b-alt" id="sinov">🧪 Sinov (1 dars)</button>
+              <button class="b b-alt" id="yur">▶ Shu sahifa setkasiga</button>
+            </div>
+            <div class="dim" style="font-size:11px;margin:8px 0 6px;">
+              <b style="color:#93c5fd">O'rganish rejimi</b> — eMaktab so'rov shaklini
+              o'zgartirsa: «Yozishni boshlash» → setkada BITTA darsni QO'LDA
+              qo'shing → «To'xtatish» → natijani dasturchiga bering.
+            </div>
+            <div class="qator">
+              <button class="b b-alt" id="recOn">⏺ Yozishni boshlash</button>
+              <button class="b b-alt" id="recOff">⏹ To'xtatish va nusxalash</button>
+              <button class="b b-alt" id="recSave">💾 Faylga saqlash</button>
+            </div>
+          </details>
         </div>
 
-        <div class="qadam">
-          <b>3. Joylashtirish</b>
-          <div class="qator">
-            <label><input type="checkbox" id="xona"> xona ham</label>
-            <label><input type="checkbox" id="otkaz" checked> band katakni o'tkazib yuborish</label>
+        <div class="main">
+          <div class="stats">
+            <div class="stat"><div class="n" id="stSinf">–</div><div class="l">sinf (fayl / eMaktab)</div></div>
+            <div class="stat"><div class="n" id="stDars">–</div><div class="l">dars fayl ichida</div></div>
+            <div class="stat"><div class="n" id="stSxema">–</div><div class="l">sxemasi bor</div></div>
+            <div class="stat"><div class="n" id="stTayyor">–</div><div class="l">joylangan sinf</div></div>
           </div>
-          <div class="qator">
-            <label>tanaffus <input type="number" id="tanaffus" value="350" min="0" step="50"> ms</label>
-            <label>kutish <input type="number" id="kutish" value="8000" min="1000" step="500"> ms</label>
-          </div>
-          <div class="qator">
-            <button class="b b-alt" id="sinov">🧪 Sinov (1 dars, saqlamaydi)</button>
-            <button class="b b-main" id="yur">▶ Shu sinfga</button>
+
+          <div class="tb">
+            <button class="b b-hero" id="hamma">🚀 Tanlangan sinflarga joylashtirish</button>
+            <button class="b b-alt" id="sinovApi" title="Birinchi tanlangan sinfda nomlarni tekshiradi, hech narsa yozmaydi">🧪 Sinov</button>
+            <button class="b b-alt" id="tekshir" title="Har sinfning sxemasi bor-yo'qligini va band kataklarini o'qiydi">🔄 Holatni tekshirish</button>
+            <button class="b b-alt" id="sxemaHamma" title="Faqat sxema yaratadi, dars yozmaydi">🗂 Hammasiga sxema yaratish</button>
             <button class="b b-warn" id="toxta" style="display:none">■ To'xtatish</button>
+            <div class="sp"></div>
+            <span class="holat" id="hammaHolat"></span>
           </div>
-          <!-- ⚠️ ASOSIY TUGMA SHU YERDA TURADI.
-               Ilgari u faqat panelning pastidagi «Hamma sinfga» bo'limida
-               edi va ko'rinmay qolardi — foydalanuvchi sinfma-sinf kirib
-               «Joylashtirish» bosib chiqardi. Endi eng kerakli amal
-               ko'z oldida: bir bosishda hamma sinf. -->
-          <div class="qator">
-            <button class="b b-main" id="hamma"
-              style="width:100%;padding:11px;font-size:13px;
-                background:linear-gradient(135deg,#6366f1,#8b5cf6);">
-              🚀 HAMMA SINFGA JOYLASHTIRISH
-            </button>
-          </div>
-          <div class="dim" style="font-size:10.5px;margin:-2px 0 4px;">
-            Sinf nomi bo'yicha mos keladi. Sxemasi yo'q sinfga «<span id="nomKo"></span>»
-            nomli sxema yaratadi, bo'shini to'ldiradi, darsi borga tegmaydi.
-          </div>
-          <div class="qator"><span class="holat" id="hammaHolat"></span></div>
           <div class="pb"><i id="pbar"></i></div>
-        </div>
 
-        <div class="qadam">
-          <b>🏫 Hamma sinfga (ketma-ket)</b>
-          <div class="dim" style="font-size:11px;margin-bottom:6px;">
-            <b style="color:#93c5fd;">🗂</b> — shu nomli sxemani HAMMA sinfga
-            yaratadi (dars yozmaydi, jadval fayli ham kerak emas).<br>
-            <b style="color:#93c5fd;">🏫</b> — sxemani yaratib, darslarni ham
-            to'ldiradi. Ichida allaqachon dars bor sxemaga TEGILMAYDI.<br>
-            «Nashr etish» ikkalasida ham bosilmaydi — u sizda qoladi.
+          <div class="tbw">
+            <table>
+              <thead><tr>
+                <th class="c" style="width:34px"><input type="checkbox" id="hammasiBelgi" checked title="Hammasini belgilash"></th>
+                <th>Sinf</th><th>eMaktab</th><th class="c">Dars</th><th>Sxema</th><th>Holat</th><th class="c" style="width:60px"></th>
+              </tr></thead>
+              <tbody id="sinflarJadval"><tr><td colspan="7" class="bosh">Jadval fayli yuklanmagan. Chapda «📂 Fayldan» bilan yuklang yoki JSON ni qo'ying.</td></tr></tbody>
+            </table>
           </div>
-          <div class="qator">
-            <label>sxema nomi <input type="text" id="chorakNom" value="1 chorak"
-              style="width:110px;background:#020617;border:1px solid #1e293b;border-radius:6px;color:#cbd5e1;padding:3px 6px;"></label>
-          </div>
-          <div class="qator">
-            <label><input type="checkbox" id="mavjudHam"> DARSI BOR sxemaga ham yozish (darslar ikkilanadi!)</label>
-          </div>
-          <!-- ⚠️ «Hamma sinfga» tugmasi 3-BO'LIMGA ko'chirildi (yuqoriga).
-               Bu yerda faqat sxema yaratish qoldi — u alohida amal:
-               jadval fayli hali tayyor bo'lmaganda ham ishlaydi.
-               Bir id ni IKKINCHI MARTA yozmang: getElementById
-               birinchisini oladi va tugma ishlamay qoladi.
-               (Izohda teskari apostrof ISHLATILMAYDI — bu blok
-                shablon-satr ichida, u yerda belgi satrni uzib yuboradi.) -->
-          <div class="qator">
-            <button class="b b-alt" id="sxemaHamma"
-              title="Faqat sxema yaratadi, dars yozmaydi">🗂 Hammasiga shu nomli sxema</button>
-          </div>
-        </div>
 
-        <div class="qadam">
-          <b>📥 eMaktab'dan ma'lumot olish</b>
-          <div class="dim" style="font-size:11px;margin-bottom:6px;">
-            Sinflar, fanlar, ustozlar (qaysi fanga ruxsat berilgani bilan) va
-            xonalar fayl bo'lib yuklanadi. Uni Smartjadval «eMaktab» bo'limiga
-            yuklasangiz — nomlar taxmin qilinmay, id bo'yicha aniq ishlaydi.
-          </div>
-          <div class="qator">
-            <label><input type="checkbox" id="xonaYig" checked> xonalar ham</label>
-            <button class="b b-alt" id="yigish">📥 Yig'ish va saqlash</button>
-            <span class="holat" id="yigHolat"></span>
-          </div>
+          <div class="log" id="log"></div>
         </div>
-
-        <div class="qadam">
-          <b>🔤 Nom mosligi (kerak bo'lsa)</b>
-          <div class="dim" style="font-size:11px;margin-bottom:6px;">
-            Avtomatik topilmagan nomlar uchun. Har qatorda:
-            <code>Smartjadval nomi = eMaktab nomi</code>
-          </div>
-          <textarea id="xarita" style="height:58px"
-            placeholder="Rus tili = Русский язык&#10;Munavvarov A.M. = Munavvarov Akmal Murodovich"></textarea>
-          <div class="qator">
-            <button class="b b-alt" id="xaritaSaqla">💾 Saqlash</button>
-            <span class="holat" id="xaritaHolat"></span>
-          </div>
         </div>
-
-        <div class="qadam">
-          <b>🔍 O'rganish rejimi — birinchi marta shuni bajaring</b>
-          <div class="dim" style="font-size:11px;margin-bottom:6px;">
-            «Yozishni boshlash» → setkada BITTA darsni QO'LDA qo'shing →
-            «Yozishni to'xtatish» → natijani nusxalab dasturchiga bering.
-          </div>
-          <div class="qator">
-            <button class="b b-alt" id="recOn">⏺ Yozishni boshlash</button>
-            <button class="b b-alt" id="recOff">⏹ To'xtatish va nusxalash</button>
-            <button class="b b-alt" id="recSave">💾 Faylga saqlash</button>
-          </div>
-        </div>
-
-        <div class="log" id="log"></div>
+      </div>
       </div>
     </div>`;
 
   const $ = (id) => sh.getElementById(id);
+  const ov = $("ov");
   const panel = $("panel");
   let paket = null;
   let toxtat = false;
@@ -1624,8 +2014,16 @@
     el.scrollTop = el.scrollHeight;
   }
 
-  $("fab").onclick = () => ochiqYoz(panel.classList.toggle("ochiq"));
-  $("yopish").onclick = () => { panel.classList.remove("ochiq"); ochiqYoz(false); };
+  function ochish() { ov.classList.add("ochiq"); ochiqYoz(true); }
+  function yopish() { ov.classList.remove("ochiq"); ochiqYoz(false); }
+  $("fab").onclick = () => (ov.classList.contains("ochiq") ? yopish() : ochish());
+  $("yopish").onclick = yopish;
+  // Qoraygan fonga bosilsa yopiladi; ish ketayotganda yopilmaydi (tasodifan).
+  ov.addEventListener("click", (e) => { if (e.target === ov && $("toxta").style.display === "none") yopish(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && ov.classList.contains("ochiq") && $("toxta").style.display === "none") yopish();
+  });
+
   $("fayl").onclick = () => $("fileinp").click();
   $("fileinp").onchange = (e) => {
     const f = e.target.files[0]; if (!f) return;
@@ -1633,6 +2031,225 @@
     r.onload = () => { $("json").value = String(r.result || ""); parse(); };
     r.readAsText(f);
   };
+
+  // ===================================================================
+  //  SINFLAR JADVALI — dashboardning asosiy qismi
+  //
+  //  Har qator = fayldagi bitta sinf. Unga eMaktab'dagi guruh (nom
+  //  bo'yicha), tanlangan chorakdagi sxema va joylash holati biriktiriladi.
+  //  Faylsiz ham ishlaydi: u holda eMaktab sinflari ko'rsatiladi (sxema
+  //  yaratish uchun jadval fayli kerak emas).
+  // ===================================================================
+  let guruhlar = null;      // Map(classKey → { id, nom }) — eMaktab sinflari
+  let qatorlar = [];        // [{ key, nom, sinf, g, sxema, tag, holat, tanlangan }]
+  let choraklar = [];       // [{ id, nom }] — eMaktab choraklari
+
+  const joriyPeriod = () => $("chorakSel").value
+    || new URLSearchParams(location.search).get("period") || "";
+
+  async function guruhlarYukla(qayta) {
+    if (guruhlar && !qayta) return guruhlar;
+    await API.initUmumiy();
+    guruhlar = await sinfGuruhlari();
+    $("maktabChip").textContent = `${API.maktabNomi || "maktab"} · ${guruhlar.size} sinf`;
+    return guruhlar;
+  }
+
+  function qatorlarQur() {
+    const eski = new Map(qatorlar.map((q) => [q.key, q]));
+    qatorlar = [];
+    if (paket) {
+      paket.sinflar.forEach((s) => {
+        const key = classKey(s.nom);
+        const q = eski.get(key) || { key, tanlangan: true, sxema: null, sxemalar: null, sxemaId: undefined, tag: "", holat: "" };
+        q.nom = s.nom; q.sinf = s;
+        q.g = guruhlar ? (guruhlar.get(key) || null) : null;
+        if (!s.darslar.length) q.tanlangan = false;
+        qatorlar.push(q);
+      });
+    } else if (guruhlar) {
+      guruhlar.forEach((g, key) => {
+        const q = eski.get(key) || { key, tanlangan: false, sxema: null, sxemalar: null, sxemaId: undefined, tag: "", holat: "" };
+        q.nom = g.nom; q.sinf = null; q.g = g;
+        qatorlar.push(q);
+      });
+    }
+    qatorlar.sort((a, b) => {
+      const da = parseInt(a.nom, 10) || 0, db = parseInt(b.nom, 10) || 0;
+      return da - db || String(a.nom).localeCompare(String(b.nom));
+    });
+    chiz();
+  }
+
+  const tagHtml = (q) => {
+    if (q.tag) return q.tag;
+    if (!q.sinf) return '<span class="tag t-yoq">faylda yo\'q</span>';
+    if (!q.sinf.darslar.length) return '<span class="tag t-yoq">dars yo\'q</span>';
+    if (guruhlar && !q.g) return '<span class="tag t-xato">eMaktab\'da yo\'q</span>';
+    return '<span class="tag t-yoq">kutmoqda</span>';
+  };
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  function chiz() {
+    const tb = $("sinflarJadval");
+    if (!qatorlar.length) {
+      tb.innerHTML = '<tr><td colspan="7" class="bosh">Jadval fayli yuklanmagan. Chapda «📂 Fayldan» bilan yuklang yoki JSON ni qo\'ying.</td></tr>';
+    } else {
+      tb.innerHTML = qatorlar.map((q, i) => {
+        const dars = q.sinf ? q.sinf.darslar.length : 0;
+        const em = guruhlar ? (q.g ? `<span class="ok">✔ ${esc(q.g.nom)}</span>` : '<span class="xato">✖ topilmadi</span>') : '<span class="dim">…</span>';
+        // Sxema: shu chorakdagi sxemalar ro'yxati (tanlanadi) + joylash holati
+        const chorakNom = String($("chorakNom").value || "").trim() || "1 chorak";
+        let sx;
+        // Faylda yo'q / darsi yo'q sinf uchun sxema o'qilmaydi — «yuklanmoqda» yolg'on bo'lardi
+        if (!q.sxemalar) sx = (q.g && q.sinf && dars) ? '<span class="dim">yuklanmoqda…</span>' : '<span class="dim">—</span>';
+        else {
+          const tanlov = q.sxemaId == null ? sxemaTanlovOdatiy(q, chorakNom) : q.sxemaId;
+          sx = `<select class="s" data-sx="${i}" style="max-width:170px;padding:2px 4px;font-size:11.5px;">`
+            + q.sxemalar.map((x) => `<option value="${esc(x.id)}" ${x.id === tanlov ? "selected" : ""}>${esc(x.nom)}</option>`).join("")
+            + `<option value="" ${tanlov === "" ? "selected" : ""}>＋ «${esc(chorakNom)}» (yo'q bo'lsa yaratiladi)</option></select>`;
+          if (q.sxema && q.sxema.band != null) {
+            sx += q.sxema.band.size ? ` <span class="ogoh">${q.sxema.band.size} band</span>` : ' <span class="dim">bo\'sh</span>';
+          }
+        }
+        const mumkin = q.sinf && dars && q.g;
+        return `<tr data-i="${i}">
+          <td class="c"><input type="checkbox" data-belgi="${i}" ${q.tanlangan ? "checked" : ""} ${mumkin ? "" : "disabled"}></td>
+          <td class="nom">${esc(q.nom)}</td>
+          <td>${em}</td>
+          <td class="c">${dars || '<span class="dim">0</span>'}</td>
+          <td>${sx}</td>
+          <td>${tagHtml(q)}${q.holat ? ` <span class="dim">${esc(q.holat)}</span>` : ""}</td>
+          <td class="c">${mumkin ? `<button class="b b-main b-mini" data-yur="${i}" title="Faqat shu sinfga joylashtirish">▶</button>` : ""}</td>
+        </tr>`;
+      }).join("");
+    }
+    // Statistika
+    const faylSinf = paket ? paket.sinflar.length : 0;
+    $("stSinf").textContent = `${faylSinf} / ${guruhlar ? guruhlar.size : "–"}`;
+    $("stDars").textContent = paket ? paket.sinflar.reduce((n, s) => n + s.darslar.length, 0) : "–";
+    const sxBor = qatorlar.filter((q) => q.sxema).length;
+    $("stSxema").textContent = qatorlar.some((q) => q.sxema !== null) ? sxBor : "–";
+    $("stTayyor").textContent = qatorlar.filter((q) => q.tayyor).length || "–";
+  }
+
+  // Odatiy tanlov: nomi sxema nomiga mos sxema; bo'lmasa «yangi»
+  const sxemaTanlovOdatiy = (q, nom) => {
+    const f = (q.sxemalar || []).find((x) => normKey(x.nom) === normKey(nom));
+    return f ? f.id : "";
+  };
+  $("sinflarJadval").addEventListener("change", (e) => {
+    const i = e.target.getAttribute("data-belgi");
+    if (i != null) qatorlar[Number(i)].tanlangan = e.target.checked;
+    const j = e.target.getAttribute("data-sx");
+    if (j != null) { qatorlar[Number(j)].sxemaId = e.target.value; qatorlar[Number(j)].sxema = null; }
+  });
+
+  // ===================================================================
+  //  SXEMALARNI YUKLASH — har sinfning tanlangan chorakdagi sxemalari
+  //
+  //  Foydalanuvchi joylashtirishdan OLDIN qaysi sinfda qaysi sxema borligini
+  //  ko'radi va kerak bo'lsa boshqasini tanlaydi. Fon rejimida, sinfma-sinf;
+  //  chorak almashsa yoki amal boshlansa to'xtaydi (`sxSeq`).
+  // ===================================================================
+  let sxSeq = 0;
+  let ishKetyapti = false;
+  async function sxemalarYukla() {
+    const seq = ++sxSeq;
+    const period = joriyPeriod();
+    if (!period || !guruhlar) return;
+    const ish = qatorlar.filter((q) => q.g && q.sinf && q.sinf.darslar.length && !q.sxemalar);
+    for (const q of ish) {
+      if (seq !== sxSeq || ishKetyapti) return;
+      try {
+        const royxat = await sxemalar(q.g.id, period);
+        if (seq !== sxSeq) return;
+        q.sxemalar = royxat;
+      } catch { q.sxemalar = null; }
+      chiz();
+      await sleep(120);
+    }
+  }
+  $("sinflarJadval").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-yur]");
+    if (b) bittaSinf(Number(b.getAttribute("data-yur")), false);
+  });
+  $("hammasiBelgi").onchange = (e) => {
+    qatorlar.forEach((q) => { if (q.sinf && q.sinf.darslar.length && q.g) q.tanlangan = e.target.checked; });
+    chiz();
+  };
+
+  function qatorBelgila(q, tagClass, matn, holat) {
+    q.tag = `<span class="tag ${tagClass}">${esc(matn)}</span>`;
+    q.holat = holat || "";
+    chiz();
+  }
+
+  // ——— Choraklar: eMaktab'dan o'qiladi, URL dagi period oldindan tanlanadi ———
+  async function choraklarYukla() {
+    const sel = $("chorakSel");
+    try {
+      const g = await guruhlarYukla();
+      const birinchi = g.values().next().value;
+      if (!birinchi) throw new Error("eMaktab'da sinf topilmadi");
+      const r = await choraklarOqi(birinchi.id);
+      choraklar = r.royxat;
+      // Topilgan ro'yxat eslab qolinadi: keyingi safar yorliqsiz sahifada
+      // ham (masalan ro'yxat sahifasida) chorak tanlash mumkin bo'lsin.
+      if (choraklar.length >= 2) {
+        try { localStorage.setItem(LS_CHORAK, JSON.stringify({ maktab: API.schoolId, royxat: choraklar })); } catch { /* */ }
+      } else {
+        let kesh = null;
+        try { kesh = JSON.parse(localStorage.getItem(LS_CHORAK) || "null"); } catch { kesh = null; }
+        if (kesh && kesh.maktab === API.schoolId && Array.isArray(kesh.royxat) && kesh.royxat.length) {
+          kesh.royxat.forEach((c) => { if (!choraklar.some((x) => x.id === c.id)) choraklar.push(c); });
+          choraklar.sort((x, y) => (parseInt(x.nom, 10) || 0) - (parseInt(y.nom, 10) || 0));
+          log("📅 Choraklar oldingi sahifada eslab qolingan ro'yxatdan olindi", "dim");
+        }
+      }
+      if (!choraklar.length) throw new Error("chorak yorliqlari topilmadi [" + r.tashxis + "]");
+      sel.innerHTML = choraklar.map((c) => `<option value="${esc(c.id)}">${esc(c.nom)}</option>`).join("");
+      const urlP = new URLSearchParams(location.search).get("period") || "";
+      const faol = choraklar.find((c) => c.id === urlP) || choraklar.find((c) => c.nom === r.faol) || choraklar[0];
+      sel.value = faol.id;
+      chorakNomSinxron();
+      log(`📅 Choraklar: ${choraklar.map((c) => c.nom).join(" · ")} — «${faol.nom}» tanlandi`, "dim");
+      sxemalarYukla();
+    } catch (err) {
+      const urlP = new URLSearchParams(location.search).get("period") || "";
+      sel.innerHTML = urlP ? `<option value="${esc(urlP)}">joriy sahifa choragi</option>`
+                           : '<option value="">— topilmadi —</option>';
+      log(`⚠ Choraklar ro'yxati olinmadi (${err.message})`
+        + (urlP ? " — URL dagi chorak ishlatiladi" : " — biror sinfning «Dars jadvali» sahifasini (1 chorak … 4 chorak yorliqlari bor) ochib, oynani qayta oching"), "ogoh");
+      if (urlP) sxemalarYukla();
+    }
+  }
+
+  // Sxema nomi chorak nomiga ergashadi — foydalanuvchi qo'lda o'zgartirmaguncha
+  let nomQolda = false;
+  function chorakNomSinxron() {
+    if (nomQolda) return;
+    const sel = $("chorakSel");
+    const o = sel.options[sel.selectedIndex];
+    const nom = o && o.value ? o.textContent.trim() : joriyChorakNomi();
+    if (nom) $("chorakNom").value = nom;
+    nomKoYangila();
+  }
+  const nomKoYangila = () => {
+    $("nomKo").textContent = String($("chorakNom").value || "").trim() || "1 chorak";
+  };
+  $("chorakNom").oninput = () => { nomQolda = true; nomKoYangila(); };
+  $("chorakSel").onchange = () => {
+    chorakNomSinxron();
+    // Boshqa chorak — sxemalar ham, holat ham boshqa
+    qatorlar.forEach((q) => { q.sxemalar = null; q.sxemaId = undefined; q.sxema = null; q.tag = ""; q.holat = ""; q.tayyor = false; });
+    chiz();
+    sxemalarYukla();
+  };
+  // Sxema nomi o'zgarsa odatiy tanlovlar qayta hisoblanadi
+  $("chorakNom").addEventListener("input", () => { qatorlar.forEach((q) => { q.sxemaId = undefined; }); chiz(); });
+  (() => { const t = joriyChorakNomi(); if (t) $("chorakNom").value = t; })();
+  nomKoYangila();
 
   function parse() {
     try {
@@ -1664,33 +2281,26 @@
         log("ℹ eMaktab id'lari yo'q — nomlar bo'yicha moslashtiriladi. «📥 Yig'ish» ni bajarib, faylni Smartjadval'ga import qilsangiz aniqroq bo'ladi.", "dim");
       }
 
-      // Sahifadagi sinfni ro'yxatdan O'ZI tanlaymiz — noto'g'ri sinf
-      // tanlash eng xavfli xato, uni imkon qadar oldindan yopamiz.
+      // Sahifadagi sinfni ro'yxatdan O'ZI tanlaymiz (zaxira DOM yo'li uchun) —
+      // noto'g'ri sinf tanlash eng xavfli xato.
       const sahifaSinf = pageClassName();
       if (sahifaSinf) {
         const i = p.sinflar.findIndex((s) => classKey(s.nom) === classKey(sahifaSinf));
-        if (i >= 0) {
-          sel.value = String(i);
-          log(`Sahifa «${sahifaSinf}» sinfiniki — ro'yxatdan o'zi tanlandi.`, "dim");
-        } else {
-          log(`⚠ Sahifadagi «${sahifaSinf}» sinfi jadval faylida yo'q.`, "ogoh");
-        }
+        if (i >= 0) sel.value = String(i);
       }
 
-      // ⚠️ JADVAL BRAUZERDA ESLAB QOLINADI.
-      //
-      //  Maktabda 40+ sinf bor, har birining eMaktabdagi sxemasi ALOHIDA
-      //  sahifa (`schedule` id sinfga xos). Ya'ni foydalanuvchi sahifadan
-      //  sahifaga o'tadi va har o'tishda panel noldan quriladi. Faylni
-      //  40 marta qayta tanlash — bekorga sarflangan vaqt, shuning uchun
-      //  jadval shu yerda saqlanadi va keyingi sahifada o'zi yuklanadi.
+      // ⚠️ JADVAL BRAUZERDA ESLAB QOLINADI — har sahifada qayta tanlanmasin.
       try { localStorage.setItem(LS_JADVAL, raw); } catch { /* kvota to'lsa e'tiborsiz */ }
 
+      qatorlarQur();
+      guruhlarYukla().then(() => { qatorlarQur(); sxemalarYukla(); })
+        .catch((err) => log(`⚠ eMaktab sinflari olinmadi: ${err.message}`, "ogoh"));
       checkGrid();
       return true;
     } catch (err) {
       $("holat").textContent = "✖ " + err.message;
       paket = null;
+      qatorlarQur();
       return false;
     }
   }
@@ -1702,19 +2312,50 @@
     $("sinf").innerHTML = '<option value="">— jadval yo\'q —</option>';
     $("holat").textContent = "";
     paket = null;
+    qatorlarQur();
     log("🗑 Saqlangan jadval o'chirildi.", "dim");
   };
 
   function checkGrid() {
     const g = findGrid();
     if (!g) {
-      $("setkaHolat").innerHTML = "<span class='xato'>Setka topilmadi — «Darslarni ishlab chiqish» ichidagi chorak sxemasini oching.</span>";
+      $("setkaHolat").innerHTML = "<span class='dim'>Bu sahifada setka yo'q — zaxira yo'l ishlamaydi (asosiy yo'lga ta'sir qilmaydi).</span>";
+      $("yur").disabled = true; $("sinov").disabled = true;
       return null;
     }
     $("setkaHolat").innerHTML = `<span class='ok'>Setka topildi: ${g.cols.size} kun, ${g.soatlar.size} soat.</span>`;
+    $("yur").disabled = false; $("sinov").disabled = false;
     return g;
   }
 
+  const sozlamalar = (sinov) => ({
+    tanaffus: Number($("tanaffus").value) || 350,
+    kutish: Number($("kutish").value) || 8000,
+    xona: $("xona").checked,
+    otkaz: $("otkaz").checked,
+    mavjudHam: $("mavjudHam").checked,
+    sinov: !!sinov,
+  });
+
+  function ishBoshlandi() {
+    toxtat = false;
+    ishKetyapti = true;
+    sxSeq++;
+    $("toxta").style.display = "";
+    ["hamma", "sinovApi", "tekshir", "sxemaHamma", "yur", "sinov"].forEach((id) => { $(id).disabled = true; });
+  }
+  function ishTugadi() {
+    ishKetyapti = false;
+    $("toxta").style.display = "none";
+    ["hamma", "sinovApi", "tekshir", "sxemaHamma"].forEach((id) => { $(id).disabled = false; });
+    $("hammaHolat").textContent = "";
+    checkGrid();
+  }
+  $("toxta").onclick = () => { toxtat = true; };
+
+  // ===================================================================
+  //  ZAXIRA: shu sahifa setkasiga DOM orqali (API ishlamay qolsa)
+  // ===================================================================
   async function run(sinov) {
     if (!paket && !parse()) { log("✖ Avval JSON ni tekshiring", "xato"); return; }
     const idx = Number($("sinf").value || 0);
@@ -1722,83 +2363,42 @@
     if (!sinf) { log("✖ Sinf tanlanmadi", "xato"); return; }
 
     // ⚠️ Darslar URL dagi `schedule` ga yoziladi — sahifa qaysi sinfniki
-    // bo'lsa, o'shanga. Panelda boshqa sinf tanlangan bo'lsa TO'XTAYMIZ.
+    // bo'lsa, o'shanga. Jadvalda boshqa sinf tanlangan bo'lsa TO'XTAYMIZ.
     const sahifaSinf = pageClassName();
-    if (sahifaSinf && classKey(sahifaSinf) !== classKey(sinf.nom)) {
-      log(`✖ Sahifa «${sahifaSinf}» sinfiniki, panelda esa «${sinf.nom}» tanlangan.`, "xato");
-      log("   Darslar shu sahifadagi sxemaga yoziladi — boshqa sinfnikini yuborib bo'lmaydi.", "xato");
-      log(`   «${sahifaSinf}» ni tanlang yoki «${sinf.nom}» sinfining sxemasini oching.`, "dim");
+    if (!sahifaSinf) { log("✖ Bu sahifa qaysi sinfniki — aniqlanmadi. Chorak sxemasi sahifasini oching.", "xato"); return; }
+    if (classKey(sahifaSinf) !== classKey(sinf.nom)) {
+      log(`✖ Sahifa «${sahifaSinf}» sinfiniki, faylda shu sinf topilmadi (tanlangan: «${sinf.nom}»).`, "xato");
       return;
     }
 
-    const opt = {
-      tanaffus: Number($("tanaffus").value) || 350,
-      kutish: Number($("kutish").value) || 8000,
-      xona: $("xona").checked,
-      otkaz: $("otkaz").checked,
-      sinov: !!sinov,
-    };
+    const opt = sozlamalar(sinov);
     const ish = sinov ? sinf.darslar.slice(0, 1) : sinf.darslar;
     if (!ish.length) { log("✖ Bu sinfda dars yo'q", "xato"); return; }
 
     const g = checkGrid();
+    if (!g) { log("✖ Setka topilmadi — chorak sxemasi sahifasini oching", "xato"); return; }
 
-    // API ni bir marta tayyorlaymiz. Ulanmasa — zaxira DOM yo'li qoladi.
-    if (!API.tayyor) {
-      try {
-        const info = await API.init();
-        log(`✔ eMaktab API ulandi — ${info.fanlar} ta fan `
-          + `(ro'yxat ${info.katak.kun}-kun ${info.katak.soat}-soat bo'sh katagidan olindi)`, "ok");
-      } catch (err) {
-        log(`⚠ API ulanmadi (${err.message}) — zaxira DOM yo'liga o'tildi`, "ogoh");
-      }
-    }
-    if (!API.tayyor && !g) {
-      log("✖ Na API, na setka topildi — chorak sxemasi sahifasini oching", "xato");
-      return;
-    }
-
-    toxtat = false;
-    $("toxta").style.display = "";
-    $("yur").disabled = true; $("sinov").disabled = true;
-    log(`▶ ${sinf.nom}: ${ish.length} ta dars${sinov ? " (SINOV — yuborilmaydi)" : ""}`, "ok");
+    ishBoshlandi();
+    log(`▶ ${sinf.nom} (zaxira DOM yo'li): ${ish.length} ta dars${sinov ? " (SINOV — yuborilmaydi)" : ""}`, "ok");
 
     let ok = 0, xato = 0, otkazildi = 0;
     for (let i = 0; i < ish.length; i++) {
       if (toxtat) { log("■ To'xtatildi", "ogoh"); break; }
       const d = ish[i];
       const yorliq = `${d.kun}-kun ${d.soat}-soat ${d.fan}${d.guruh ? " (" + d.guruh + ")" : ""}`;
-      const cell = g ? cellAt(g, d.kun, d.soat) : null;
-
-      // Band katak. API rejimida setka DOM'i yangilanmaydi, shuning uchun
-      // bu tekshiruv faqat OLDINDAN turgan darsni ushlaydi — ayni yurishda
-      // qo'yilganlari halaqit bermaydi (guruhli darslar shu sababli ishlaydi).
-      //
-      // SINOVDA o'tkazib yuborilmaydi: sinov hech narsa yozmaydi, ya'ni
-      // ikkilanish xavfi yo'q. Aks holda birinchi dars band katakka tushsa
-      // sinov hech narsani tekshirmay tugab qolardi.
+      const cell = cellAt(g, d.kun, d.soat);
       if (opt.otkaz && !sinov && cell && txt(cell)) {
         otkazildi++;
         log(`↷ ${yorliq} — katakda dars bor, o'tkazib yuborildi`, "dim");
-        $("pbar").style.width = Math.round(((i + 1) / ish.length) * 100) + "%";
         continue;
       }
-
       let r;
-      try {
-        r = API.tayyor
-          ? await placeLessonApi(d, paket, xarita, opt)
-          : await placeLesson(g, d, paket, xarita, opt);
-      } catch (err) {
-        r = { ok: false, sabab: "kutilmagan xato: " + err.message };
-      }
-
+      try { r = await placeLesson(g, d, paket, xarita, opt); }
+      catch (err) { r = { ok: false, sabab: "kutilmagan xato: " + err.message }; }
       if (r.ok) {
         ok++;
         log(`✔ ${yorliq} — ${r.izoh || ""}`, r.ogoh ? "ogoh" : "ok");
         if (r.ogoh) log("   ⚠ " + r.ogoh, "ogoh");
-        // API rejimida katak o'zi yangilanmaydi — belgilab qo'yamiz,
-        // foydalanuvchi ish borayotganini ko'rib tursin.
         if (cell && !sinov) cell.style.background = "#dcfce7";
       } else {
         xato++;
@@ -1807,281 +2407,317 @@
       $("pbar").style.width = Math.round(((i + 1) / ish.length) * 100) + "%";
       await sleep(opt.tanaffus);
     }
-
-    $("toxta").style.display = "none";
-    $("yur").disabled = false; $("sinov").disabled = false;
+    ishTugadi();
     log(`— Yakun: ${ok} joylandi, ${xato} xato${otkazildi ? `, ${otkazildi} o'tkazib yuborildi` : ""} —`, xato ? "ogoh" : "ok");
-    if (!sinov && ok) {
-      if (API.tayyor) log("🔄 Sahifani yangilang (F5) — darslar setkada ko'rinadi.", "dim");
-      log("Keyin «Nashr etish» ni O'ZINGIZ bosing.", "dim");
-    }
+    if (!sinov && ok) log("Keyin «Nashr etish» ni O'ZINGIZ bosing.", "dim");
   }
-
   $("yur").onclick = () => run(false);
   $("sinov").onclick = () => run(true);
-  $("toxta").onclick = () => { toxtat = true; };
 
   // ===================================================================
-  //  HAMMA SINFGA — ketma-ket
+  //  BITTA SINFNI JOYLASHTIRISH — API orqali, sahifadan mustaqil
   //
-  //  Har sinfning eMaktabdagi sxemasi ALOHIDA (`schedule` id sinfga xos),
-  //  shuning uchun sinfma-sinf yuriladi: sxema yaratiladi, `API` o'sha
-  //  sxemaga qayta sozlanadi va darslar joylanadi.
+  //  Har sinfning eMaktabdagi sxemasi ALOHIDA (`schedule` id sinfga xos):
+  //  sxema topiladi (yo'q bo'lsa yaratiladi), `API` o'sha sxemaga qayta
+  //  sozlanadi va darslar joylanadi. Qaysi sahifada turganimiz ahamiyatsiz —
+  //  hamma narsa so'rovlar bilan bajariladi.
   //
-  //  ⚠️ MAVJUD SXEMA O'TKAZIB YUBORILADI. Ichida allaqachon dars bo'lishi
-  //  mumkin va biz uni ko'ra olmaymiz (boshqa sinfning DOM'i bizda yo'q) —
-  //  ustiga yozsak darslar IKKILANADI. Shuning uchun faqat YANGI yaratilgan
-  //  sxema to'ldiriladi; mavjudini to'ldirish alohida belgi bilan yoqiladi.
+  //  ⚠️ MAVJUD SXEMANING BAND KATAKLARIGA TEGILMAYDI. Band kataklar
+  //  aniqlanmasa (sahifa ochilmadi) sxemaga umuman yozilmaydi — ustiga
+  //  yozilsa darslar IKKILANADI. «DARSI BOR sxemaga ham yozish» belgisi
+  //  shu to'siqni ONGLI ravishda ochadi.
+  //
+  //  Qaytadi: { ok, xato, oldindan, otkazildi(bool), xatoSabab }
+  async function sinfniJoylashtir(q, period, chorakNomi, opt) {
+    const sinf = q.sinf, g = q.g;
+    const nat = { ok: 0, xato: 0, oldindan: 0, otkazildi: false };
+    if (!g) {
+      const dj = String(sinf.nom).match(/\d{1,2}/);
+      const yaqin = dj && guruhlar
+        ? [...guruhlar.values()].filter((x) => (String(x.nom).match(/\d{1,2}/) || [])[0] === dj[0]).map((x) => x.nom).join(", ")
+        : "";
+      log(`✖ ${sinf.nom} — eMaktabda bunday sinf yo'q${yaqin ? ` (shu darajada: ${yaqin})` : ""}`, "xato");
+      qatorBelgila(q, "t-xato", "eMaktab'da yo'q", yaqin ? `o'xshash: ${yaqin}` : "");
+      nat.xato = sinf.darslar.length;
+      return nat;
+    }
+
+    qatorBelgila(q, "t-ish", "sxema…");
+    let schedId;
+    let band = new Set();
+    try {
+      const royxat = await sxemalar(g.id, period);
+      q.sxemalar = royxat;
+      // Jadvalda tanlangan sxema; tanlanmagan yoki «yangi» bo'lsa — nom bo'yicha
+      const bor = (q.sxemaId && royxat.find((x) => x.id === q.sxemaId))
+        || royxat.find((x) => normKey(x.nom) === normKey(chorakNomi)) || null;
+      if (bor) {
+        q.sxemaId = bor.id;
+        band = await sxemaBandKataklar(g.id, period, bor.id);
+        if (band == null) {
+          if (!opt.mavjudHam) {
+            log(`↷ ${sinf.nom} — «${chorakNomi}» sxemasining holati aniqlanmadi, tegilmadi`, "dim");
+            q.sxema = { id: bor.id, nom: bor.nom, band: null };
+            qatorBelgila(q, "t-ogoh", "tegilmadi", "sxema holati noma'lum");
+            nat.otkazildi = true;
+            return nat;
+          }
+          band = new Set();
+        }
+        if (opt.mavjudHam) band = new Set();
+        q.sxema = { id: bor.id, nom: bor.nom, band };
+      } else if (opt.sinov) {
+        log(`↷ ${sinf.nom} — «${chorakNomi}» sxemasi yo'q; sinovda yaratilmaydi`, "dim");
+        q.sxema = false;
+        qatorBelgila(q, "t-ogoh", "sxema yo'q", "sinovda yaratilmaydi");
+        nat.otkazildi = true;
+        return nat;
+      }
+      schedId = bor ? bor.id : await sxemaYarat(g.id, period, chorakNomi);
+      if (!bor) {
+        q.sxema = { id: schedId, nom: chorakNomi, band: new Set() };
+        q.sxemalar = royxat.concat([{ id: schedId, nom: chorakNomi }]);
+        q.sxemaId = schedId;
+      }
+      log(bor
+        ? `＝ ${sinf.nom} — mavjud «${bor.nom}» sxemasi` + (band.size ? ` (${band.size} katak band — ularga tegilmaydi)` : " bo'sh")
+        : `＋ ${sinf.nom} — «${chorakNomi}» sxemasi yaratildi`, "dim");
+    } catch (err) {
+      log(`✖ ${sinf.nom} — sxema: ${err.message}`, "xato");
+      qatorBelgila(q, "t-xato", "sxema xatosi", err.message.slice(0, 60));
+      nat.xato = sinf.darslar.length;
+      return nat;
+    }
+
+    const qoldi = sinf.darslar.filter((d) => !band.has(`${d.kun}_${d.soat}`));
+    nat.oldindan = sinf.darslar.length - qoldi.length;
+    if (!qoldi.length) {
+      log(`↷ ${sinf.nom} — hamma dars allaqachon joyida (${sinf.darslar.length} ta)`, "dim");
+      q.tayyor = true;
+      qatorBelgila(q, "t-ok", "joyida", `${sinf.darslar.length} dars oldindan`);
+      return nat;
+    }
+
+    // API ni SHU sinfga sozlaymiz. Kesh tozalanishi SHART: `guruhlar`
+    // (subgroup) ro'yxati sinfga xos. `band` oldindan to'ldiriladi —
+    // ro'yxat so'raladigan «bo'sh katak» band katakka tushmasin.
+    API.scheduleId = schedId;
+    API.groupId = g.id;
+    API.band = new Set(band);
+    API.bosh = null;
+    API.fanKesh = new Map();
+    for (let soat = 1; soat <= 12 && !API.bosh; soat++) {
+      for (let kun = 1; kun <= 6; kun++) {
+        if (!band.has(`${kun}_${soat}`)) { API.bosh = { kun, soat }; break; }
+      }
+    }
+    try {
+      const f0 = await API.formaBoshda(0);
+      if (f0.token) API.token = f0.token;
+      if (!API.fanlar.length) API.fanlar = f0.fanlar;
+      if (!API.fanlar.length) throw new Error("fanlar ro'yxati bo'sh");
+      if (!API.bosh) API.bosh = { kun: 1, soat: 1 };
+      API.tayyor = true;
+      $("apiChip").textContent = `API: ulandi · ${API.fanlar.length} fan`;
+      $("apiChip").className = "chip ok";
+    } catch (err) {
+      log(`✖ ${sinf.nom} — forma: ${err.message}`, "xato");
+      qatorBelgila(q, "t-xato", "forma xatosi", err.message.slice(0, 60));
+      nat.xato = qoldi.length;
+      return nat;
+    }
+
+    qatorBelgila(q, "t-ish", opt.sinov ? "sinov…" : "joylanmoqda…");
+    let ok = 0, xato = 0;
+    for (let i = 0; i < qoldi.length; i++) {
+      if (toxtat) break;
+      const d = qoldi[i];
+      let r;
+      try { r = await placeLessonApi(d, paket, xarita, opt); }
+      catch (err) { r = { ok: false, sabab: "kutilmagan xato: " + err.message }; }
+      if (r.ok) {
+        ok++;
+        if (opt.sinov) log(`   ✔ ${d.kun}-kun ${d.soat}-soat ${d.fan} → ${r.izoh}`, "ok");
+        if (r.ogoh) log(`   ⚠ ${sinf.nom} ${d.kun}/${d.soat}: ${r.ogoh}`, "ogoh");
+      } else {
+        xato++;
+        log(`   ✖ ${sinf.nom} ${d.kun}-kun ${d.soat}-soat ${d.fan} — ${r.sabab}`, "xato");
+      }
+      if (!opt.sinov && (i + 1) % 5 === 0) q.holat = `${i + 1}/${qoldi.length}`;
+      await sleep(opt.sinov ? 0 : opt.tanaffus);
+    }
+    nat.ok = ok; nat.xato = xato;
+    if (opt.sinov) {
+      qatorBelgila(q, ok && !xato ? "t-ok" : (ok ? "t-ogoh" : "t-xato"), "sinov", `${ok} mos, ${xato} xato (yozilmadi)`);
+    } else {
+      q.tayyor = ok > 0 && xato === 0;
+      qatorBelgila(q, xato ? (ok ? "t-ogoh" : "t-xato") : "t-ok",
+        xato ? (ok ? "qisman" : "xato") : "joylandi",
+        `${ok} joylandi${xato ? `, ${xato} xato` : ""}${nat.oldindan ? `, ${nat.oldindan} oldindan` : ""}`);
+    }
+    log(`${xato ? "⚠" : "✔"} ${sinf.nom}: ${ok} joylandi, ${xato} xato`
+      + `${nat.oldindan ? `, ${nat.oldindan} oldindan joyida` : ""}${opt.sinov ? " (SINOV — yozilmadi)" : ""}`,
+      xato ? "ogoh" : "ok");
+    return nat;
+  }
+
+  // Umumiy tayyorgarlik: fayl, chorak, API, eMaktab sinflari
+  async function tayyorla() {
+    if (!paket && !parse()) { log("✖ Avval jadval faylini yuklang", "xato"); return null; }
+    const period = joriyPeriod();
+    if (!period) { log("✖ Chorak tanlanmagan — ro'yxat yuklanmagan bo'lsa chorak sxemasi sahifasini oching", "xato"); return null; }
+    const chorakNomi = String($("chorakNom").value || "").trim();
+    if (!chorakNomi) { log("✖ Sxema nomi bo'sh", "xato"); return null; }
+    await guruhlarYukla();
+    qatorlarQur();
+    return { period, chorakNomi };
+  }
+
+  async function bittaSinf(i, sinov) {
+    const q = qatorlar[i];
+    if (!q || !q.sinf) return;
+    ishBoshlandi();
+    try {
+      const t = await tayyorla();
+      if (t) {
+        $("hammaHolat").textContent = q.nom;
+        await sinfniJoylashtir(q, t.period, t.chorakNomi, sozlamalar(sinov));
+        if (!sinov) log("🔄 Sinfni ochib ko'zdan kechiring va «Nashr etish» ni O'ZINGIZ bosing.", "dim");
+      }
+    } catch (err) { log("✖ " + err.message, "xato"); }
+    ishTugadi();
+  }
+
+  // ===================================================================
+  //  TANLANGAN SINFLARGA — ketma-ket
   //
   //  ⚠️ TIZIMLI XATODA TO'XTAYMIZ. Bir sinfda hech narsa joylashmasa,
   //  qolgan 42 sinfda ham joylashmaydi — 43 marta xato yozib chiqishning
   //  ma'nosi yo'q, sababini darrov ko'rsatgan afzal.
-  async function hammaSinf() {
-    if (!paket && !parse()) { log("✖ Avval jadvalni yuklang", "xato"); return; }
-    const period = new URLSearchParams(location.search).get("period") || "";
-    if (!period) {
-      log("✖ URL da `period` yo'q — istalgan sinfning chorak sxemasi sahifasidan boshlang", "xato");
-      return;
-    }
-    const chorakNomi = String($("chorakNom").value || "").trim();
-    if (!chorakNomi) { log("✖ Sxema nomi bo'sh", "xato"); return; }
-
-    const opt = {
-      tanaffus: Number($("tanaffus").value) || 350,
-      xona: $("xona").checked,
-      mavjudHam: $("mavjudHam").checked,
-      sinov: false,
-    };
-
-    toxtat = false;
-    $("toxta").style.display = "";
-    $("hamma").disabled = true; $("yur").disabled = true; $("sinov").disabled = true;
-
+  // ===================================================================
+  async function hammaSinf(sinov) {
+    ishBoshlandi();
     try {
-      if (!API.tayyor) await API.init();
-      log(`✔ API tayyor — ${API.fanlar.length} ta fan`, "ok");
+      const t = await tayyorla();
+      if (!t) { ishTugadi(); return; }
+      const opt = sozlamalar(sinov);
+      let ishlar = qatorlar.filter((q) => q.tanlangan && q.sinf && q.sinf.darslar.length);
+      if (sinov) ishlar = ishlar.slice(0, 1);
+      if (!ishlar.length) { log("✖ Birorta sinf tanlanmagan (yoki tanlanganlarda dars yo'q)", "xato"); ishTugadi(); return; }
 
-      const guruhlar = await sinfGuruhlari();
-      log(`🏫 eMaktabda ${guruhlar.size} ta sinf topildi`, "dim");
-
-      const ishlar = paket.sinflar.filter((s) => s.darslar.length);
-      // ⚠️ JADVAL FAYLIDA FAQAT TANLANGAN SINFLAR BO'LADI.
-      //  Smartjadval «eMaktab» sahifasida sinflar belgilab olinadi va
-      //  ko'prik shu faylni brauzerda eslab qoladi. Bitta sinf tanlangan
-      //  eski fayl qolib ketsa «Hamma sinfga» bitta sinf bilan tugaydi —
-      //  tashqaridan bu nosozlikka o'xshab ko'rinadi. Shuning uchun
-      //  ochiq aytamiz.
+      log(`🚀 ${ishlar.length} ta sinf, chorak «${t.chorakNomi}»${sinov ? " — SINOV, hech narsa yozilmaydi" : ""}`, "ok");
       const bosh = paket.sinflar.filter((s) => !s.darslar.length).map((s) => s.nom);
-      log(`📄 Jadval faylida ${paket.sinflar.length} ta sinf bor, `
-        + `${ishlar.length} tasida dars bor`, "dim");
-      if (bosh.length) {
-        log(`   darsi yo'q: ${bosh.slice(0, 12).join(", ")}`
-          + (bosh.length > 12 ? ` … (jami ${bosh.length})` : ""), "dim");
+      if (bosh.length) log(`   darsi yo'q: ${bosh.slice(0, 12).join(", ")}${bosh.length > 12 ? ` … (jami ${bosh.length})` : ""}`, "dim");
+      if (guruhlar && ishlar.length < guruhlar.size / 2 && !sinov) {
+        log(`⚠ eMaktabda ${guruhlar.size} sinf bor, tanlanganlari esa ${ishlar.length} ta. `
+          + "Fayl to'liqmi? Smartjadval → «eMaktab» da «Hammasi» ni bosib qayta nusxalang.", "ogoh");
       }
-      if (ishlar.length < guruhlar.size / 2) {
-        log(`⚠ eMaktabda ${guruhlar.size} sinf bor, faylda esa darsi bor sinf `
-          + `atigi ${ishlar.length} ta. Smartjadval → «eMaktab» sahifasiga qaytib, `
-          + (paket.sinflar.length <= 2
-            ? "«Hammasi» tugmasini bosing va jadvalni QAYTA nusxalang."
-            : "sinflar ro'yxatidagi dars sonlariga qarang — u yerda ham bo'sh bo'lsa "
-              + "muammo jadvalda, ko'prikda emas."), "ogoh");
-      }
-      let jamiOk = 0, jamiXato = 0, otkazildi = 0, jamiOldindan = 0;
 
+      let jamiOk = 0, jamiXato = 0, otkazildi = 0, jamiOldindan = 0;
       for (let i = 0; i < ishlar.length; i++) {
         if (toxtat) { log("■ To'xtatildi", "ogoh"); break; }
-        const sinf = ishlar[i];
-        $("hammaHolat").textContent = `${i + 1}/${ishlar.length}: ${sinf.nom}`;
+        const q = ishlar[i];
+        $("hammaHolat").textContent = `${i + 1}/${ishlar.length}: ${q.nom}`;
         $("pbar").style.width = Math.round(((i + 1) / ishlar.length) * 100) + "%";
-
-        const g = guruhlar.get(classKey(sinf.nom));
-        if (!g) {
-          // Shu darajadagi eMaktab nomlarini ko'rsatamiz — foydalanuvchi
-          // qaysi biri mos kelishini darhol ko'radi («1-F» yo'q, lekin
-          // «1 G» bor kabi holatlar ko'p uchraydi).
-          const dj = String(sinf.nom).match(/\d{1,2}/);
-          const yaqin = dj
-            ? [...guruhlar.values()]
-              .filter((x) => (String(x.nom).match(/\d{1,2}/) || [])[0] === dj[0])
-              .map((x) => x.nom).join(", ")
-            : "";
-          log(`✖ ${sinf.nom} — eMaktabda bunday sinf yo'q`
-            + (yaqin ? ` (shu darajada: ${yaqin})` : ""), "xato");
-          jamiXato++;
-          continue;
-        }
-
-        let schedId;
-        // Mavjud sxemaning band kataklari. Bo'sh Set — sxema yangi yoki
-        // bo'sh; `null` — aniqlab bo'lmadi.
-        let band = new Set();
-        try {
-          const royxat = await sxemalar(g.id, period);
-          const bor = royxat.find((x) => normKey(x.nom) === normKey(chorakNomi));
-          if (bor) {
-            // ⚠️ QAYTA YURISH: oldin joylangan darslar O'Z JOYIDA qoladi,
-            // faqat bo'sh kataklar to'ldiriladi. Band kataklar aniqlanmasa
-            // sxemaga tegilmaydi — ustiga yozilsa darslar ikkilanadi.
-            // «DARSI BOR sxemaga ham yozish» belgisi shu to'siqni ONGLI
-            // ravishda ochadi.
-            band = await sxemaBandKataklar(g.id, period, bor.id);
-            if (band == null) {
-              if (!opt.mavjudHam) {
-                otkazildi++;
-                log(`↷ ${sinf.nom} — «${chorakNomi}» sxemasining holati aniqlanmadi, tegilmadi`, "dim");
-                continue;
-              }
-              band = new Set();
-            }
-            if (opt.mavjudHam) band = new Set();
-          }
-          schedId = bor ? bor.id : await sxemaYarat(g.id, period, chorakNomi);
-          log(bor
-            ? `＝ ${sinf.nom} — mavjud «${chorakNomi}» sxemasi`
-              + (band.size ? ` (${band.size} katak band — ularga tegilmaydi)` : " bo'sh")
-            : `＋ ${sinf.nom} — «${chorakNomi}» sxemasi yaratildi`, "dim");
-        } catch (err) {
-          jamiXato++;
-          log(`✖ ${sinf.nom} — sxema: ${err.message}`, "xato");
-          continue;
-        }
-
-        // Hamma katak band bo'lsa — qiladigan ish yo'q
-        const qoldi = sinf.darslar.filter((d) => !band.has(`${d.kun}_${d.soat}`));
-        if (!qoldi.length) {
-          otkazildi++;
-          log(`↷ ${sinf.nom} — hamma dars allaqachon joyida (${sinf.darslar.length} ta)`, "dim");
-          continue;
-        }
-
-        // API ni SHU sinfga sozlaymiz. Kesh tozalanishi SHART: `guruhlar`
-        // (subgroup) ro'yxati sinfga xos, eski kesh begona sinfniki bo'ladi.
-        // `band` oldindan to'ldiriladi — ro'yxat so'raladigan «bo'sh katak»
-        // band katakka tushmasin (sahifadagi setka BOSHQA sinfniki).
-        API.scheduleId = schedId;
-        API.groupId = g.id;
-        API.band = new Set(band);
-        API.bosh = null;
-        API.fanKesh = new Map();
-        for (let soat = 1; soat <= 12 && !API.bosh; soat++) {
-          for (let kun = 1; kun <= 6; kun++) {
-            if (!band.has(`${kun}_${soat}`)) { API.bosh = { kun, soat }; break; }
-          }
-        }
-        try {
-          const f0 = await API.formaBoshda(0);
-          if (f0.token) API.token = f0.token;
-          if (!API.bosh) API.bosh = { kun: 1, soat: 1 };
-        } catch (err) {
-          jamiXato++;
-          log(`✖ ${sinf.nom} — forma: ${err.message}`, "xato");
-          continue;
-        }
-
-        let ok = 0, xato = 0;
-        const oldindan = sinf.darslar.length - qoldi.length;
-        for (const d of qoldi) {
-          if (toxtat) break;
-          let r;
-          try { r = await placeLessonApi(d, paket, xarita, opt); }
-          catch (err) { r = { ok: false, sabab: "kutilmagan xato: " + err.message }; }
-          if (r.ok) { ok++; if (r.ogoh) log(`   ⚠ ${sinf.nom} ${d.kun}/${d.soat}: ${r.ogoh}`, "ogoh"); }
-          else { xato++; log(`   ✖ ${sinf.nom} ${d.kun}-kun ${d.soat}-soat ${d.fan} — ${r.sabab}`, "xato"); }
-          await sleep(opt.tanaffus);
-        }
-        jamiOk += ok; jamiXato += xato; jamiOldindan += oldindan;
-        log(`${xato ? "⚠" : "✔"} ${sinf.nom}: ${ok}/${qoldi.length} joylandi`
-          + (oldindan ? `, ${oldindan} oldindan bor edi` : ""), xato ? "ogoh" : "ok");
-
-        // Tizimli nosozlik — davom etishning ma'nosi yo'q. Lekin qayta
-        // yurishda sinfning deyarli hammasi oldindan turgan bo'ladi:
-        // o'shanda «0 joylandi» tizimli xato emas, to'xtamaymiz.
-        if (ok === 0 && xato > 0 && oldindan === 0) {
-          log("✖ Bu sinfda birorta dars joylashmadi — to'xtatildi. "
-            + "Sababini yuqoridagi xatolardan ko'ring.", "xato");
+        const n = await sinfniJoylashtir(q, t.period, t.chorakNomi, opt);
+        jamiOk += n.ok; jamiXato += n.xato; jamiOldindan += n.oldindan;
+        if (n.otkazildi) otkazildi++;
+        if (!sinov && n.ok === 0 && n.xato > 0 && !n.otkazildi && n.oldindan === 0) {
+          log("✖ Bu sinfda birorta dars joylashmadi — to'xtatildi. Sababini yuqoridagi xatolardan ko'ring.", "xato");
           break;
         }
       }
-
-      log(`— YAKUN: ${jamiOk} dars joylandi, ${jamiXato} xato`
+      log(`— YAKUN: ${jamiOk} dars ${sinov ? "mos keldi" : "joylandi"}, ${jamiXato} xato`
         + `${jamiOldindan ? `, ${jamiOldindan} dars oldindan joyida edi` : ""}`
         + `${otkazildi ? `, ${otkazildi} sinf o'tkazib yuborildi` : ""} —`, jamiXato ? "ogoh" : "ok");
-      log("🔄 Har sinfni ochib ko'zdan kechiring va «Nashr etish» ni O'ZINGIZ bosing.", "dim");
+      if (!sinov) log("🔄 Har sinfni ochib ko'zdan kechiring va «Nashr etish» ni O'ZINGIZ bosing.", "dim");
     } catch (err) {
       log("✖ " + err.message, "xato");
     }
-
-    $("toxta").style.display = "none";
-    $("hamma").disabled = false; $("yur").disabled = false; $("sinov").disabled = false;
-    $("hammaHolat").textContent = "";
+    ishTugadi();
   }
-
-  $("hamma").onclick = hammaSinf;
-
-  // Sxema nomi 3-bo'limdagi izohda ham ko'rinsin — tugma u yerda,
-  // nom esa pastda kiritiladi; foydalanuvchi nimani bosayotganini bilsin.
-  const nomKoYangila = () => {
-    $("nomKo").textContent = String($("chorakNom").value || "").trim() || "1 chorak";
-  };
-  $("chorakNom").oninput = nomKoYangila;
-  nomKoYangila();
+  $("hamma").onclick = () => hammaSinf(false);
+  $("sinovApi").onclick = () => hammaSinf(true);
 
   // ===================================================================
-  //  HAMMASIGA SHU NOMLI SXEMA — faqat yaratadi, dars yozmaydi
+  //  HOLATNI TEKSHIRISH — har sinfning sxemasi va band kataklari
+  //  (hech narsa yozmaydi; «qaysi sinf qoldi?» savoliga javob)
+  // ===================================================================
+  async function holatTekshir() {
+    ishBoshlandi();
+    try {
+      await guruhlarYukla(true);
+      qatorlarQur();
+      const period = joriyPeriod();
+      const nom = String($("chorakNom").value || "").trim();
+      if (!period) throw new Error("chorak tanlanmagan");
+      const ish = qatorlar.filter((q) => q.g);
+      log(`🔄 ${ish.length} ta sinfning «${nom}» sxemasi tekshirilmoqda…`, "dim");
+      let bor = 0;
+      for (let i = 0; i < ish.length; i++) {
+        if (toxtat) { log("■ To'xtatildi", "ogoh"); break; }
+        const q = ish[i];
+        $("hammaHolat").textContent = `${i + 1}/${ish.length}: ${q.nom}`;
+        $("pbar").style.width = Math.round(((i + 1) / ish.length) * 100) + "%";
+        try {
+          const royxat = await sxemalar(q.g.id, period);
+          q.sxemalar = royxat;
+          const s = (q.sxemaId && royxat.find((x) => x.id === q.sxemaId))
+            || royxat.find((x) => normKey(x.nom) === normKey(nom));
+          if (!s) { q.sxema = false; q.tag = ""; q.holat = ""; }
+          else {
+            bor++;
+            const band = await sxemaBandKataklar(q.g.id, period, s.id);
+            q.sxema = { id: s.id, nom: s.nom, band };
+            const dars = q.sinf ? q.sinf.darslar.length : 0;
+            if (band && dars && q.sinf.darslar.every((d) => band.has(`${d.kun}_${d.soat}`))) {
+              q.tayyor = true; q.tag = '<span class="tag t-ok">joyida</span>'; q.holat = "";
+            } else { q.tag = ""; q.holat = ""; }
+          }
+        } catch (err) { q.sxema = null; q.holat = err.message.slice(0, 50); }
+        chiz();
+        await sleep(150);
+      }
+      log(`✔ Tekshirildi: ${bor} sinfda «${nom}» sxemasi bor, ${ish.length - bor} tasida yo'q`, "ok");
+    } catch (err) { log("✖ " + err.message, "xato"); }
+    ishTugadi();
+  }
+  $("tekshir").onclick = holatTekshir;
+
+  // ===================================================================
+  //  HAMMASIGA SXEMA YARATISH — faqat yaratadi, dars yozmaydi
   //
   //  eMaktabda «Darslar jadvalining yangi sxemasi» tugmasi bitta sinfga
   //  bitta sxema yaratadi: 43 sinf uchun 43 marta nom yozib chiqish
   //  kerak bo'ladi. Bu tugma o'sha ishni bir bosishda bajaradi.
-  //
-  //  ⚠️ JADVAL FAYLI KERAK EMAS. Sinflar eMaktabning O'Z ro'yxatidan
-  //  olinadi, ya'ni Smartjadval jadvali hali tayyor bo'lmasa ham
-  //  sxemalarni oldindan yaratib qo'yish mumkin.
-  //
-  //  ⚠️ SHU NOMLI SXEMASI BORI TEGILMAYDI — nusxa ko'paymasin.
+  //  ⚠️ JADVAL FAYLI KERAK EMAS. ⚠️ SHU NOMLI SXEMASI BORI TEGILMAYDI.
+  // ===================================================================
   async function hammagaSxema() {
-    const q = new URLSearchParams(location.search);
-    const period = q.get("period") || "";
-    const school = q.get("school") || API.schoolId || "";
-    if (!period || !school) {
-      log("✖ URL da `period` yoki `school` yo'q — istalgan sinfning "
-        + "chorak sxemasi sahifasidan boshlang", "xato");
-      return;
-    }
-    API.schoolId = school;
-
-    const nom = String($("chorakNom").value || "").trim();
-    if (!nom) { log("✖ Sxema nomi bo'sh", "xato"); return; }
-
-    toxtat = false;
-    $("toxta").style.display = "";
-    $("sxemaHamma").disabled = true; $("hamma").disabled = true;
-
+    ishBoshlandi();
     try {
-      const guruhlar = await sinfGuruhlari();
-      log(`🗂 «${nom}» sxemasi ${guruhlar.size} ta sinfga yaratilmoqda…`, "ok");
+      const g = await guruhlarYukla();
+      qatorlarQur();
+      const period = joriyPeriod();
+      const nom = String($("chorakNom").value || "").trim();
+      if (!period) throw new Error("chorak tanlanmagan");
+      if (!nom) throw new Error("sxema nomi bo'sh");
+      log(`🗂 «${nom}» sxemasi ${g.size} ta sinfga yaratilmoqda…`, "ok");
 
-      const royxat = [...guruhlar.values()];
+      const royxat = [...g.values()];
       let yaratildi = 0, bor = 0, xato = 0;
-
       for (let i = 0; i < royxat.length; i++) {
         if (toxtat) { log("■ To'xtatildi", "ogoh"); break; }
-        const g = royxat[i];
-        $("hammaHolat").textContent = `${i + 1}/${royxat.length}: ${g.nom}`;
+        const gr = royxat[i];
+        $("hammaHolat").textContent = `${i + 1}/${royxat.length}: ${gr.nom}`;
         $("pbar").style.width = Math.round(((i + 1) / royxat.length) * 100) + "%";
-        // ⚠️ IKKI URINISH — lekin har safar ro'yxat QAYTA o'qiladi.
-        //  Ketma-ket o'nlab so'rovda eMaktab ba'zan bo'sh/xato sahifa
-        //  qaytaradi. Qayta urinish xavfsiz, chunki sxema allaqachon
-        //  yaratilgan bo'lsa ro'yxatdan topiladi va IKKINCHI marta
-        //  yaratilmaydi — nusxa paydo bo'lmaydi.
-        let holat = "";
+        // ⚠️ IKKI URINISH — har safar ro'yxat QAYTA o'qiladi, nusxa bo'lmasin.
+        let holat = "", id = "";
         for (let urinish = 1; urinish <= 2; urinish++) {
           try {
-            const mavjud = await sxemalar(g.id, period);
-            if (mavjud.some((x) => normKey(x.nom) === normKey(nom))) {
-              holat = urinish === 1 ? "bor" : "yaratildi";
-              break;
-            }
-            await sxemaYarat(g.id, period, nom);
+            const mavjud = await sxemalar(gr.id, period);
+            const m = mavjud.find((x) => normKey(x.nom) === normKey(nom));
+            if (m) { holat = urinish === 1 ? "bor" : "yaratildi"; id = m.id; break; }
+            id = await sxemaYarat(gr.id, period, nom);
             holat = "yaratildi";
             break;
           } catch (err) {
@@ -2089,34 +2725,28 @@
             if (urinish < 2) await sleep(1200);
           }
         }
-        if (holat === "bor") { bor++; log(`↷ ${g.nom} — «${nom}» allaqachon bor`, "dim"); }
-        else if (holat === "yaratildi") { yaratildi++; log(`＋ ${g.nom} — «${nom}» yaratildi`, "ok"); }
-        else { xato++; log(`✖ ${g.nom} — ${holat.slice(5)}`, "xato"); }
-
+        const q = qatorlar.find((x) => x.key === classKey(gr.nom));
+        if (holat === "bor") { bor++; log(`↷ ${gr.nom} — «${nom}» allaqachon bor`, "dim"); }
+        else if (holat === "yaratildi") { yaratildi++; log(`＋ ${gr.nom} — «${nom}» yaratildi`, "ok"); }
+        if (q && id && holat !== "" && !holat.startsWith("xato")) {
+          if (!q.sxemalar) q.sxemalar = [];
+          if (!q.sxemalar.some((x) => x.id === id)) q.sxemalar.push({ id, nom });
+          q.sxemaId = id;
+        }
+        else { xato++; log(`✖ ${gr.nom} — ${holat.slice(5)}`, "xato"); }
+        chiz();
         await sleep(400);   // eMaktabni bo'g'ib qo'ymaylik
       }
-
-      log(`— YAKUN: ${yaratildi} ta sxema yaratildi`
-        + `${bor ? `, ${bor} tasida allaqachon bor edi` : ""}`
-        + `${xato ? `, ${xato} xato` : ""} —`, xato ? "ogoh" : "ok");
-      if (yaratildi) {
-        log("Endi «🏫 Hamma sinfga» bilan darslarni to'ldirsangiz bo'ladi.", "dim");
-      }
+      log(`— YAKUN: ${yaratildi} ta sxema yaratildi${bor ? `, ${bor} tasida allaqachon bor edi` : ""}${xato ? `, ${xato} xato` : ""} —`, xato ? "ogoh" : "ok");
     } catch (err) {
       log("✖ " + err.message, "xato");
     }
-
-    $("toxta").style.display = "none";
-    $("sxemaHamma").disabled = false; $("hamma").disabled = false;
-    $("hammaHolat").textContent = "";
+    ishTugadi();
   }
-
   $("sxemaHamma").onclick = hammagaSxema;
 
   // ——— Qo'lda moslashtirilgan nomlar ———
   // Tur (fan/ustoz/xona) so'ralmaydi: juftlik uchalasiga ham yoziladi.
-  // Nom to'plamlari kesishmaydi, shuning uchun bu xavfsiz va ortiqcha
-  // savol berishdan qutqaradi.
   function xaritaMatni() {
     const juft = new Map();
     ["fan", "ustoz", "xona"].forEach((k) => {
@@ -2124,7 +2754,6 @@
     });
     return [...juft.entries()].map(([a, b]) => `${a} = ${b}`).join("\n");
   }
-
   $("xarita").value = xaritaMatni();
   $("xaritaSaqla").onclick = () => {
     const yangi = { fan: {}, ustoz: {}, xona: {} };
@@ -2162,9 +2791,6 @@
       $("yigHolat").textContent = "✔ tayyor";
       log(`✔ ${data.sinflar.length} sinf, ${data.fanlar.length} fan, `
         + `${data.ustozlar.length} ustoz, ${data.xonalar.length} xona — «${nom}» saqlandi`, "ok");
-      if (!data.sinflar.length) {
-        log("⚠ Sinflar ro'yxati bo'sh chiqdi — «Dars jadvali» bosh sahifasi ochilmagan bo'lishi mumkin.", "ogoh");
-      }
       log("Endi uni Smartjadval → «eMaktab» bo'limidagi «📥 Import» ga bering.", "dim");
     } catch (err) {
       $("yigHolat").textContent = "✖ " + err.message;
@@ -2190,10 +2816,7 @@
     }
     log("Shu matnni dasturchiga bering — keyin joylashtirish aniq ishlaydi.", "dim");
   };
-
-  // Nusxa olish ko'p bosqichli va adashtiradi (bufer almashib ketadi,
-  // matn o'nlab ming belgi). Fayl esa to'g'ridan-to'g'ri «Yuklamalar» ga
-  // tushadi — dasturchiga berish ancha oson.
+  // Fayl «Yuklamalar» ga tushadi — dasturchiga berish nusxalashdan oson.
   $("recSave").onclick = () => {
     const matn = $("json").value;
     if (!matn.trim()) { log("✖ Saqlaydigan narsa yo'q — avval yozuvni to'xtating", "xato"); return; }
@@ -2213,12 +2836,11 @@
     if (!window.__SJ_JADVAL__) return false;
     $("json").value = JSON.stringify(window.__SJ_JADVAL__);
     const ok = parse();
-    panel.classList.add("ochiq");
+    ochish();
     return ok;
   }
 
-  // Oldingi sahifada yuklangan jadvalni tiklash — 40+ sinfni birma-bir
-  // o'tkazayotganda faylni har safar qayta tanlash kerak bo'lmasin.
+  // Oldingi sahifada yuklangan jadvalni tiklash
   function saqlanganJadval() {
     let raw = "";
     try { raw = localStorage.getItem(LS_JADVAL) || ""; } catch { raw = ""; }
@@ -2231,36 +2853,50 @@
 
   // Console'dan qo'lda tekshirish uchun (nosozlik qidirilganda asqotadi)
   window.__SJ_BRIDGE__ = {
-    ochish: () => panel.classList.add("ochiq"),
+    ochish,
     yangiJadval,
     setka: findGrid,
     hisobot: gridReport,
     oyna: findOpenForm,
     api: API,
     paket: () => paket,
+    qatorlar: () => qatorlar,
   };
 
   // Avval «Hammasi birga» dan kelgan jadval, bo'lmasa oxirgi saqlangani
   const yuklandi = yangiJadval() || saqlanganJadval();
 
-  // Oldingi sahifada panel ochiq turgan bo'lsa — ochiq qoldiramiz
-  if (ochiqEdi) panel.classList.add("ochiq");
+  // Oldingi sahifada oyna ochiq turgan bo'lsa (yoki menyudan kelingan) — ochiq
+  if (ochiqEdi) ochish();
 
   // Yozuv oldingi sahifada yoqilgan bo'lsa — DAVOM ettiramiz.
-  // Aynan shu holat kerak: sxema yaratish, nashr etish va boshqa
-  // muhim amallar sahifani almashtiradi.
   if (REC.yoniq) {
     recStart(true);
-    panel.classList.add("ochiq");
+    ochish();
     log(`⏺ Yozuv DAVOM etyapti — ${REC.tarmoq.length} ta so'rov yozildi. `
       + "Amalni tugatgach «⏹ To'xtatish va nusxalash» ni bosing.", "ogoh");
   }
 
-  // Setka holati DARROV ko'rinsin: foydalanuvchi to'g'ri sahifada
-  // turganini JSON kutmasdan bilishi kerak.
+  // Yuqori menyudagi «SJ DARS JADVALI» bandi — bosilsa oyna ochiladi.
+  // Menyu topilmasa (sahifada sarlavha yo'q) zaxira «SJ» tugmasi chiqadi.
+  waitFor(() => menyuBandiQosh(ochish), 6000, 250).then((ok) => { if (!ok) $("fab").classList.add("kor"); });
+
   checkGrid();
 
+  // eMaktab ma'lumotlari fon rejimida: maktab, sinflar, choraklar
+  (async () => {
+    try {
+      await guruhlarYukla();
+      qatorlarQur();
+      await choraklarYukla();
+    } catch (err) {
+      $("maktabChip").textContent = "maktab: aniqlanmadi";
+      $("maktabChip").className = "chip xato";
+      log(`⚠ eMaktab bilan bog'lanmadi: ${err.message}. Siz schools.emaktab.uz da ekaningizga ishonch hosil qiling.`, "ogoh");
+    }
+  })();
+
   log(yuklandi
-    ? "Ko'prik tayyor — jadval eslab qolingan. Sinfni tekshirib «▶ Joylashtirish» ni bosing."
+    ? "Ko'prik tayyor — jadval eslab qolingan. Chorakni tekshirib «🚀 Tanlangan sinflarga joylashtirish» ni bosing."
     : "Ko'prik tayyor. Jadvalni «📂 Fayldan» bilan yuklang.", "dim");
 })();
