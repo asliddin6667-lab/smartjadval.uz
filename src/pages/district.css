@@ -27,7 +27,7 @@
     radial-gradient(900px 500px at -10% 110%, rgba(99, 102, 241, 0.08), transparent 60%),
     var(--da-bg);
   color: var(--da-text);
-  font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: "SJ Emoji", "SJ Symbols", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 body.dark-mode .da-root {

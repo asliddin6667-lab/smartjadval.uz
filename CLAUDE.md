@@ -1729,6 +1729,21 @@ Tahrirlash/o'chirish uchun emoji emas,
 ishlatiladi: emoji'ni operatsion tizim chizadi va u har foydalanuvchida har xil
 chiqadi. Faqat ikonkali tugma: `btn btn-icon btn-icon--edit` yoki `--delete`.
 
+### Emoji va belgilar — saytning o'z shrifti
+
+Emoji'ni operatsion tizim chizadi: Windows, Mac va telefonda har xil chiqadi,
+Windows'da esa bayroq o'rniga «UZ» harflari ko'rinadi. Shuning uchun sayt o'z
+shriftlarini beradi: `public/fonts/sj-emoji.woff2` (rangli, Twemoji) va
+`sj-symbols.woff2` (→ ✓ ✕ kabi oddiy belgilar). Ular `--font` ro'yxatining
+boshida turadi va `unicode-range` tufayli faqat shu belgilarga ishlaydi.
+
+Shrift faqat `src` da ishlatilgan belgilardan iborat. **Saytga YANGI emoji
+qo'shsangiz** `python scripts/build_ui_fonts.py <Twemoji.ttf> <DejaVuSans.ttf>`
+ni qayta ishga tushiring, aks holda u tizim shrifti bilan chiqadi.
+⚠️ `font-family` ni yangi joyda yozsangiz, `"SJ Emoji", "SJ Symbols"` ni
+boshiga qo'shing. Excel fayllar, `window.confirm()` va `title` izohlariga bu
+shrift ta'sir qilmaydi.
+
 ### Deploy
 
 `main` ga push → [deploy.yml](.github/workflows/deploy.yml) → `npm run build` → GitHub

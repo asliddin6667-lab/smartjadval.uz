@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import "./styles/ui-fonts.css";
 import "./styles/global.css";
 import "./styles/responsive.css";
 

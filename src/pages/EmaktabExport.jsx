@@ -277,7 +277,7 @@ export default function EmaktabExport({
         .emk-steps li:not(:last-child)::after{content:"";position:absolute;left:12px;top:29px;bottom:2px;width:2px;
           background:var(--card-border,#e2e8f0);border-radius:2px;}
         .emk-steps code,.emk-kbd{background:var(--emk-soft);border:1px solid var(--card-border,#e2e8f0);
-          border-radius:6px;padding:1px 7px;font-size:12px;font-family:ui-monospace,Consolas,monospace;}
+          border-radius:6px;padding:1px 7px;font-size:12px;font-family:'SJ Emoji','SJ Symbols',ui-monospace,Consolas,monospace;}
         .emk-kbd{font-weight:700;box-shadow:0 1px 0 var(--card-border,#cbd5e1);}
         .emk-path{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px;}
         .emk-path span{background:var(--emk-soft);border:1px solid var(--card-border,#e2e8f0);
@@ -285,7 +285,7 @@ export default function EmaktabExport({
         .emk-path i{font-style:normal;color:var(--text-muted,#94a3b8);font-size:12px;}
         .emk-pill{display:inline-flex;align-items:center;gap:5px;border-radius:8px;padding:2px 9px;font-size:12px;font-weight:800;
           border:1px solid transparent;vertical-align:middle;}
-        .emk-pill-sj{background:#0f172a;color:#fff;font-family:ui-monospace,Consolas,monospace;letter-spacing:.5px;}
+        .emk-pill-sj{background:#0f172a;color:#fff;font-family:'SJ Emoji','SJ Symbols',ui-monospace,Consolas,monospace;letter-spacing:.5px;}
         .emk-pill-yashil{background:rgba(16,185,129,.14);color:#047857;border-color:rgba(16,185,129,.35);}
         .emk-pill-binafsha{background:rgba(99,102,241,.12);color:#4338ca;border-color:rgba(99,102,241,.35);}
         .emk-pill-kul{background:var(--emk-soft);color:var(--text-secondary,#475569);border-color:var(--card-border,#e2e8f0);}
@@ -336,7 +336,7 @@ export default function EmaktabExport({
         .emk-note-ok{background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.35);color:#065f46;}
         .emk-note-info{background:rgba(14,165,233,.1);border-color:rgba(14,165,233,.35);color:#075985;}
         .emk-fayl{display:inline-flex;align-items:center;gap:6px;background:var(--emk-soft);border:1px dashed var(--card-border,#cbd5e1);
-          border-radius:9px;padding:5px 10px;font-size:12.5px;font-family:ui-monospace,Consolas,monospace;}
+          border-radius:9px;padding:5px 10px;font-size:12.5px;font-family:'SJ Emoji','SJ Symbols',ui-monospace,Consolas,monospace;}
 
         /* ——— muammo (accordion) ——— */
         .emk-acc{margin-top:14px;border:1px solid var(--card-border,#e2e8f0);border-radius:12px;overflow:hidden;}

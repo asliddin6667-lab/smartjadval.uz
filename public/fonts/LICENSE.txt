@@ -1,0 +1,11 @@
+sj-emoji.woff2
+  Twemoji Mozilla asosida (https://github.com/mozilla/twemoji-colr).
+  Grafika: Copyright Twitter, Inc. va boshqa mualliflar, CC-BY 4.0
+  https://creativecommons.org/licenses/by/4.0/
+  O'zgartirish: faqat saytda ishlatilgan belgilar ajratib olingan.
+
+sj-symbols.woff2
+  DejaVu Sans 2.37 asosida (https://dejavu-fonts.github.io/License.html).
+  O'zgartirish: faqat saytda ishlatilgan belgilar ajratib olingan.
+
+Qayta yaratish: scripts/build_ui_fonts.py

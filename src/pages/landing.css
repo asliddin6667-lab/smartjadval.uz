@@ -5,7 +5,7 @@
 
 .land-root {
   min-height: 100vh;
-  font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-family: "SJ Emoji", "SJ Symbols", "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
   background: linear-gradient(150deg, #eef0fb 0%, #eae9f9 50%, #e6e4f7 100%);
   color: #1e1b3a;
   overflow-x: hidden;

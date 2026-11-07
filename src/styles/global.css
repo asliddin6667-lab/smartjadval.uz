@@ -37,7 +37,7 @@
     --border-radius-sm: 8px;
     --border-radius-lg: 16px;
 
-    --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font: "SJ Emoji", "SJ Symbols", 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   }
 
   body {

@@ -12,7 +12,7 @@
   justify-content: center;
   overflow: hidden;
   padding: 24px;
-  font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-family: "SJ Emoji", "SJ Symbols", "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
   background: linear-gradient(150deg, #eef0fb 0%, #eae9f9 50%, #e6e4f7 100%);
   z-index: 50;
 }
