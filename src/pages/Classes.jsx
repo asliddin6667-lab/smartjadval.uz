@@ -1,3 +1,4 @@
+import { IconEdit, IconTrash } from "../components/ActionIcons";
 import { useMemo, useState } from "react";
 import ConfirmModal from "../components/ConfirmModal";
 import { genId } from "../utils/helpers";
@@ -323,7 +324,7 @@ export default function ClassesPage({ classes, setClasses, teachers = [], classS
                       Dam kunlarini tozalash
                     </button>
                     <button className="btn btn-danger" onClick={() => setConfirmClearAll(true)} title="Barcha sinflarni o'chirish">
-                      🗑️ Barchasini o'chirish
+                      <IconTrash /> Barchasini o'chirish
                     </button>
                   </>
                 )}
@@ -376,8 +377,8 @@ export default function ClassesPage({ classes, setClasses, teachers = [], classS
                       </td>
                       <td>
                         <div style={{ display: "flex", gap: 4 }}>
-                          <button className="btn btn-icon" onClick={() => openEdit(c)} title="Tahrirlash">✏️</button>
-                          <button className="btn btn-icon" onClick={() => setDeleteId(c.id)} title="O'chirish">🗑️</button>
+                          <button className="btn btn-icon btn-icon--edit" onClick={() => openEdit(c)} title="Tahrirlash"><IconEdit /></button>
+                          <button className="btn btn-icon btn-icon--delete" onClick={() => setDeleteId(c.id)} title="O'chirish"><IconTrash /></button>
                         </div>
                       </td>
                     </tr>

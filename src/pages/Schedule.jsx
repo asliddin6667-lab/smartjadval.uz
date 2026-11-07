@@ -1,3 +1,4 @@
+import { IconTrash } from "../components/ActionIcons";
 import { useMemo, useRef, useState } from "react";
 import { DAYS, typeOfGroup } from "../utils/constants";
 import {
@@ -3405,7 +3406,7 @@ export default function SchedulePage({
               </button>
             )}
             <button className="sch-btn sch-btn-soft-gray" onClick={() => window.print()} type="button">🖨 Chop etish</button>
-            {setSchedule && <button className="sch-btn sch-btn-soft-red" onClick={handleClear} type="button">🗑 Tozalash</button>}
+            {setSchedule && <button className="sch-btn sch-btn-soft-red" onClick={handleClear} type="button"><IconTrash /> Tozalash</button>}
           </div>
         </div>
 

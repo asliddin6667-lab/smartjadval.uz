@@ -1,3 +1,4 @@
+import { IconEdit, IconTrash } from "../components/ActionIcons";
 import { useState } from "react";
 import ConfirmModal from "../components/ConfirmModal";
 import { genId } from "../utils/helpers";
@@ -170,8 +171,8 @@ export default function TeachersPage({ teachers, setTeachers, subjects, toast })
                         <td><span className={`badge ${t.status === "Bo'sh" ? "badge-success" : "badge-warning"}`}>{t.status}</span></td>
                         <td>
                           <div style={{ display: "flex", gap: 4 }}>
-                            <button className="btn btn-icon" onClick={() => openEdit(t)}>✏️</button>
-                            <button className="btn btn-icon" onClick={() => setDeleteId(t.id)}>🗑️</button>
+                            <button className="btn btn-icon btn-icon--edit" onClick={() => openEdit(t)} title="Tahrirlash"><IconEdit /></button>
+                            <button className="btn btn-icon btn-icon--delete" onClick={() => setDeleteId(t.id)} title="O'chirish"><IconTrash /></button>
                           </div>
                         </td>
                       </tr>

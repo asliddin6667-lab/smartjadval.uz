@@ -340,6 +340,50 @@
     color: var(--text-primary);
   }
 
+  .ui-icon {
+    display: inline-block;
+    flex-shrink: 0;
+    vertical-align: -0.16em;
+  }
+
+  .btn-icon--edit,
+  .btn-icon--delete {
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border-radius: 9px;
+    border-color: transparent;
+  }
+
+  .btn-icon--edit {
+    background: rgba(79,110,247,0.1);
+    color: var(--accent);
+  }
+
+  .btn-icon--edit:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+
+  .btn-icon--delete {
+    background: var(--danger-light);
+    color: var(--danger);
+  }
+
+  .btn-icon--delete:hover {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: #fff;
+  }
+
+  .btn-icon--edit:focus-visible,
+  .btn-icon--delete:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
   /* ---- TABLE ---- */
   .data-table {
     width: 100%;

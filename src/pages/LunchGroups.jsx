@@ -1,3 +1,4 @@
+import { IconEdit, IconTrash } from "../components/ActionIcons";
 import { useMemo, useState } from "react";
 import ConfirmModal from "../components/ConfirmModal";
 import { genId } from "../utils/helpers";
@@ -221,8 +222,8 @@ export default function LunchGroupsPage({ classes, timeslots = [], shifts = [], 
                       {classNames(g.classIds) || "Sinf tanlanmagan"}
                     </div>
                     <div style={{ display: "flex", gap: 6, marginTop: 14 }}>
-                      <button className="btn btn-secondary btn-sm" onClick={() => openEdit(g)}>✏️ Tahrir</button>
-                      <button className="btn btn-danger btn-sm" onClick={() => setDeleteId(g.id)}>🗑️</button>
+                      <button className="btn btn-secondary btn-sm" onClick={() => openEdit(g)}><IconEdit /> Tahrir</button>
+                      <button className="btn btn-danger btn-sm" onClick={() => setDeleteId(g.id)}><IconTrash /></button>
                     </div>
                   </div>
                 </div>

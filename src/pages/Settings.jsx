@@ -1,3 +1,4 @@
+import { IconTrash } from "../components/ActionIcons";
 import { useRef, useState } from "react";
 import ConfirmModal from "../components/ConfirmModal";
 import { downloadBackup, parseBackup, KEY_LABELS } from "../services/backupService";
@@ -197,7 +198,7 @@ export default function SettingsPage({ settings, setSettings, classes, subjects,
                   <div className="settings-row-label" style={{ color: "var(--danger)" }}>Barcha ma'lumotlarni o'chirish</div>
                   <div className="settings-row-desc">Bu amalni qaytarib bo'lmaydi!</div>
                 </div>
-                <button className="btn btn-danger" onClick={() => setShowClearConfirm(true)}>🗑️ O'chirish</button>
+                <button className="btn btn-danger" onClick={() => setShowClearConfirm(true)}><IconTrash /> O'chirish</button>
               </div>
             </div>
 

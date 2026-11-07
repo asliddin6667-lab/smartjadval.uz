@@ -1,3 +1,4 @@
+import { IconTrash } from "../components/ActionIcons";
 import { useEffect, useMemo, useState } from "react";
 import {
   PRIMARY_SUBJECT_NAMES, MIDDLE_SUBJECT_NAMES, HIGH_SUBJECT_NAMES,
@@ -1917,7 +1918,7 @@ Fan bilan birga ular ham o'chsinmi?`;
             disabled={!classes.length}
             title="Sinf fanlarini o'chirish (tasdiq so'raladi)"
           >
-            🗑 Hammasini o'chirish
+            <IconTrash /> Hammasini o'chirish
           </button>
         </div>
       </div>
@@ -3467,7 +3468,7 @@ Fan bilan birga ular ham o'chsinmi?`;
         return (
           <div onClick={closeClearDialog} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
             <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--card-bg,#fff)", borderRadius: 16, padding: 22, width: "100%", maxWidth: 560, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 24px 70px rgba(0,0,0,.35)" }}>
-              <h3 style={{ margin: "0 0 4px" }}>🗑 Fanlarni o'chirish</h3>
+              <h3 style={{ margin: "0 0 4px" }}><IconTrash /> Fanlarni o'chirish</h3>
               <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 14 }}>
                 Haqiqatan ham o'chirasizmi? Bu amalni <b>ortga qaytarib bo'lmaydi</b>. Fanlar, soatlar, ustoz/xona biriktirmalari va daraja guruhlari (hovuzlar) o'chib ketadi.
               </div>
@@ -3485,7 +3486,7 @@ Fan bilan birga ular ham o'chsinmi?`;
                   disabled={!selCount}
                   onClick={clearSelectedClass}
                 >
-                  🗑 {selectedClass?.name || "Sinf"} fanlarini o'chirish
+                  <IconTrash /> {selectedClass?.name || "Sinf"} fanlarini o'chirish
                 </button>
               </div>
 
@@ -3504,7 +3505,7 @@ Fan bilan birga ular ham o'chsinmi?`;
                     disabled={!totalSubjectRows}
                     onClick={() => setArmAll(true)}
                   >
-                    🗑 Barcha sinflardan o'chirish
+                    <IconTrash /> Barcha sinflardan o'chirish
                   </button>
                 ) : (
                   <div>

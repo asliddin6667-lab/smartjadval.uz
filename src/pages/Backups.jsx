@@ -1,3 +1,4 @@
+import { IconTrash } from "../components/ActionIcons";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   listVersions, fetchVersion, deleteVersion,
@@ -283,7 +284,7 @@ export default function BackupsPage({ currentUser, toast, onRestore }) {
                     toast?.("Konflikt zaxirasi o'chirildi", "error");
                   }}
                 >
-                  🗑 O'chirish
+                  <IconTrash /> O'chirish
                 </button>
               </div>
             </div>
@@ -333,7 +334,7 @@ export default function BackupsPage({ currentUser, toast, onRestore }) {
                       title: fmtDate(item.created_at),
                     })}
                   >
-                    🗑
+                    <IconTrash />
                   </button>
                 </div>
               </div>
@@ -348,7 +349,7 @@ export default function BackupsPage({ currentUser, toast, onRestore }) {
           <div className="modal" style={{ maxWidth: 440 }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <span className="modal-title">
-                {confirmItem.kind === "delete" ? "🗑 Versiyani o'chirish" : "↩️ Ma'lumotlarni tiklash"}
+                {confirmItem.kind === "delete" ? <><IconTrash /> Versiyani o'chirish</> : "↩️ Ma'lumotlarni tiklash"}
               </span>
               <button className="modal-close" onClick={() => setConfirmItem(null)}>×</button>
             </div>

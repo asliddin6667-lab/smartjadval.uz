@@ -6,6 +6,7 @@
 //  "⚡ Standart soatlar" tugmasini bosganda sinflar shu soatlar bilan
 //  to'ldiriladi.  Ma'lumot Supabase'dagi `standard_hours` jadvalida.
 // =====================================================================
+import { IconTrash } from "../components/ActionIcons";
 import { useEffect, useMemo, useState } from "react";
 import { CURRICULUM_LANGS, GRADES, DEFAULT_CURRICULUM, pairIndexMap } from "../utils/curriculum";
 import { fetchStandardHours, saveStandardHours } from "../services/standardHoursService";
@@ -275,7 +276,7 @@ export default function StandardHoursPage({ toast }) {
                           <td style={{ ...tdStyle, textAlign: "center", whiteSpace: "nowrap" }}>
                             <button className="btn btn-secondary btn-sm" title="Yuqoriga" onClick={() => moveRow(idx, -1)}>↑</button>{" "}
                             <button className="btn btn-secondary btn-sm" title="Pastga" onClick={() => moveRow(idx, 1)}>↓</button>{" "}
-                            <button className="btn btn-danger btn-sm" title="O'chirish" onClick={() => removeRow(idx)}>🗑</button>
+                            <button className="btn btn-danger btn-sm" title="O'chirish" onClick={() => removeRow(idx)}><IconTrash /></button>
                           </td>
                         </tr>
                       );

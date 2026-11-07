@@ -1,3 +1,4 @@
+import { IconTrash } from "../components/ActionIcons";
 import { useState, useEffect, useMemo } from "react";
 import * as XLSX from "xlsx";
 import * as XS from "xlsx-js-style";
@@ -616,7 +617,7 @@ export function ExcelDataPage({ schools, addToast, districtId }) {
                           👁 {preview === type ? "Yopish" : "Ko'rish"}
                         </button>
                         <button type="button" className="da-btn da-btn--warning da-btn--sm" onClick={() => handleDelete(type)}>
-                          🗑
+                          <IconTrash />
                         </button>
                       </>
                     )}

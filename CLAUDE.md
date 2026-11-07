@@ -1722,6 +1722,13 @@ ishga tushmaydi.
   bo'laklarni Python bilan kesib bitta test HTML ga qo'yish va headless
   Chrome'da `--dump-dom` qilish — v6.4 da 38 ta holat shu usulda o'tgan.
 
+### Qalam va chelak ikonkalari
+
+Tahrirlash/o'chirish uchun emoji emas,
+[ActionIcons.jsx](src/components/ActionIcons.jsx) dagi `IconEdit`/`IconTrash`
+ishlatiladi: emoji'ni operatsion tizim chizadi va u har foydalanuvchida har xil
+chiqadi. Faqat ikonkali tugma: `btn btn-icon btn-icon--edit` yoki `--delete`.
+
 ### Deploy
 
 `main` ga push → [deploy.yml](.github/workflows/deploy.yml) → `npm run build` → GitHub
@@ -1818,7 +1825,9 @@ tugma faqat menyu topilmasa zaxira sifatida chiqadi.
   sahifada ishlaydi.
 - **`API.initUmumiy()`** — sxema sahifasisiz ishlaydi: `school` URL'dan
   yoki havolalardan, `xss` joriy sahifadan → ro'yxat sahifasidan →
-  generator sahifasidan. `init()` endi `schedule` yo'q bo'lsa xato
+  `xssOvla()` (v1.15.2: sinf, chorak, tahrirlash sahifalari, dars formasi,
+  oxirida yashirin iframe; foydalanuvchi hech qayerga o'tmaydi).
+  `init()` endi `schedule` yo'q bo'lsa xato
   bermaydi; sxema `sinfniJoylashtir()` ichida sinfma-sinf beriladi
   (`API.scheduleId/groupId/band/bosh` qayta sozlanadi, `fanlar` birinchi
   formadan olinadi).

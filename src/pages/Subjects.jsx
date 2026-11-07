@@ -1,3 +1,4 @@
+import { IconEdit, IconTrash } from "../components/ActionIcons";
 import { useState, useMemo, useEffect } from "react";
 import ConfirmModal from "../components/ConfirmModal";
 import { genId } from "../utils/helpers";
@@ -321,8 +322,8 @@ export default function SubjectsPage({ subjects, setSubjects, classSubjects = {}
                       </td>
                       <td>
                         <div style={{ display: "flex", gap: 4 }}>
-                          <button className="btn btn-icon" onClick={() => openEdit(s)}>✏️</button>
-                          <button className="btn btn-icon" onClick={() => setDeleteId(s.id)}>🗑️</button>
+                          <button className="btn btn-icon btn-icon--edit" onClick={() => openEdit(s)} title="Tahrirlash"><IconEdit /></button>
+                          <button className="btn btn-icon btn-icon--delete" onClick={() => setDeleteId(s.id)} title="O'chirish"><IconTrash /></button>
                         </div>
                       </td>
                     </tr>

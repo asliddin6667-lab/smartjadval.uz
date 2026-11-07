@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Smartjadval → eMaktab ko'prigi
 // @namespace    https://smartjadval.uz/
-// @version      1.15.1
+// @version      1.15.2
 // @description  Smartjadval.uz da tuzilgan dars jadvalini eMaktab (kundalik.com) «Darslar jadvali sxemasi» setkasiga joylashtiradi
 // @author       smartjadval.uz
 // @match        https://schools.emaktab.uz/*
@@ -857,10 +857,21 @@
   // ===================================================================
   const enc = encodeURIComponent;
 
-  // `xss` — sessiyaga bog'liq token, sahifa ichidagi havolalarda turadi
-  const xssIzla = (html) => {
-    const m = String(html == null ? "" : html).match(/[?&]xss=([0-9a-f]{16,})/);
+  // `xss` — sessiyaga bog'liq token. Havolada (`?xss=`, HTML'da `&amp;xss=`),
+  //  kodlangan manzilda (`xss%3D`) yoki skript/atributda (`xss: "…"`,
+  //  `data-xss="…"`) turishi mumkin. Faqat hex qabul qilinadi: noto'g'ri
+  //  qiymat olinsa so'rovlar sababini aytmasdan rad etiladi.
+  const xssIzla = (matn) => {
+    const m = String(matn == null ? "" : matn)
+      .match(/xss(?:%3D|[\w-]*["']?\s*[:=]\s*["']?)([0-9a-f]{16,})/i);
     return m ? m[1] : "";
+  };
+
+  // Sahifa yuborib bo'lgan so'rovlar manzilida ham token bor
+  const xssSorovlardan = (w) => {
+    try {
+      return xssIzla(w.performance.getEntriesByType("resource").map((e) => e.name).join(" "));
+    } catch { return ""; }
   };
 
   const API = {
@@ -886,7 +897,8 @@
       this.schoolId = this.schoolId || q.get("school") || maktabId() || "";
       this.scheduleId = this.scheduleId || q.get("schedule") || "";
       this.groupId = this.groupId || q.get("group") || "";
-      this.xss = this.xss || xssIzla(document.documentElement.innerHTML);
+      this.xss = this.xss || xssIzla(document.documentElement.innerHTML) || xssSorovlardan(window);
+      let royxatHtml = "";
       // Maktab nomi — `/v2/school` havolasi (menyu bandi emas: TA'LIM ham shunga olib borishi mumkin)
       // «Mening maktabim», «Maktab sahifasi» kabi umumiy yorliqlar emas —
       // yo'lakchadagi haqiqiy nom («TURON ODOB-ILM») kerak.
@@ -915,23 +927,100 @@
           { credentials: "same-origin" });
         if (r.ok) {
           const html = await r.text();
+          royxatHtml = html;
           if (!this.xss) this.xss = xssIzla(html);
           if (!this.schoolId) { const m = html.match(/[?&]school=(\d+)/); if (m) this.schoolId = m[1]; }
           if (!this.maktabNomi) {
             this.maktabNomi = maktabHavola(new DOMParser().parseFromString(html, "text/html"));
           }
-          if (!this.xss) {
-            const g = html.match(/[?&]group=(\d+)/);
-            if (g && this.schoolId) {
-              const r2 = await fetch(sxemaUrl(g[1], ""), { credentials: "same-origin" });
-              if (r2.ok) this.xss = xssIzla(await r2.text());
-            }
-          }
         }
       }
       if (!this.schoolId) throw new Error("maktab id (`school`) topilmadi — schools.emaktab.uz da ekaningizni tekshiring");
-      if (!this.xss) throw new Error("`xss` tokeni topilmadi — bironta chorak sxemasi sahifasini oching");
+      if (!this.xss) await this.xssOvla(royxatHtml);
+      if (!this.xss) {
+        throw new Error("eMaktab sessiya tokeni topilmadi. Sahifani yangilab qayta bosing; "
+          + "takrorlansa eMaktab'dan chiqib qayta kiring.");
+      }
       this.umumiy = true;
+    },
+
+    // ⚠️ FOYDALANUVCHI HECH QAYSI SAHIFAGA O'TMASLIGI KERAK: token bir bosishda
+    //  o'zi topiladi. Sinflar bo'ylab yuriladi: sinf sahifalari → chorak
+    //  yorliqlari → mavjud sxemaning tahrirlash sahifasi → dars formasi →
+    //  oxirida shu sahifa yashirin iframe'da ochiladi (token skript bilan
+    //  qo'yilgan bo'lsa). Hammasi faqat GET, hech narsa o'zgarmaydi.
+    async xssOvla(royxatHtml) {
+      const tashxis = [];
+      const oqi = async (url) => {
+        try {
+          const r = await fetch(url, { credentials: "same-origin" });
+          tashxis.push(`${url.split("?")[0]}: ${r.status}`);
+          if (!r.ok) return "";
+          const html = await r.text();
+          if (!this.xss) this.xss = xssIzla(html);
+          return html;
+        } catch (err) { tashxis.push(`${url.split("?")[0]}: ${err.message}`); return ""; }
+      };
+      const hammasi = (re, matn) => [...new Set([...String(matn).matchAll(re)].map((m) => m[1]))];
+      const school = enc(this.schoolId);
+      let tahrirUrl = "";
+
+      const guruhlar = hammasi(/[?&;]group=(\d+)/g, royxatHtml).slice(0, 5);
+      for (const g of guruhlar) {
+        const sahifa = [await oqi(sxemaUrl(g, "")), this.xss ? "" : await oqi(`/v2/schedules/view?school=${school}&group=${enc(g)}`)];
+        if (this.xss) return;
+        for (const p of hammasi(/[?&;]period=(\d+)/g, sahifa.join(" ")).slice(0, 4)) {
+          sahifa.push(await oqi(sxemaUrl(g, p)));
+          if (this.xss) return;
+        }
+        const matn = sahifa.join(" ");
+        const sxema = hammasi(/[?&;]schedule=(\d+)/g, matn)[0];
+        if (!sxema) continue;
+        const period = (matn.match(/[?&;]period=(\d+)/) || [])[1] || "";
+        tahrirUrl = sxemaUrl(g, period, `&view=edit&schedule=${enc(sxema)}`);
+        await oqi(tahrirUrl);
+        if (this.xss) return;
+        await oqi(`/v2/AjaxPages/scheduleitemnew?schedule=${enc(sxema)}&day=1&lesson=1&subject=0`);
+        if (this.xss) return;
+        break;
+      }
+      await oqi(`/v2/school?school=${school}`);
+      if (this.xss) return;
+
+      const birinchi = guruhlar.length ? sxemaUrl(guruhlar[0], "") : "";
+      if (tahrirUrl || birinchi) this.xss = await this.xssIframe(tahrirUrl || birinchi);
+      if (!this.xss) console.warn("[Smartjadval] xss topilmadi:", tashxis.join(" | "));
+    },
+
+    // Token sahifa skripti bilan qo'yilganda `fetch` uni ko'rmaydi.
+    // `@noframes` tufayli ko'prik skripti iframe ichida qayta ishga tushmaydi.
+    xssIframe(url) {
+      return new Promise((resolve) => {
+        const f = document.createElement("iframe");
+        f.style.cssText = "position:fixed;left:-9999px;top:0;width:1200px;height:800px;border:0";
+        f.setAttribute("aria-hidden", "true");
+        let vaqt = null, sanoq = null;
+        const tugat = (v) => {
+          clearTimeout(vaqt); clearInterval(sanoq);
+          f.remove();
+          resolve(v);
+        };
+        const tekshir = () => {
+          try {
+            return xssIzla(f.contentDocument.documentElement.innerHTML) || xssSorovlardan(f.contentWindow);
+          } catch { return ""; }
+        };
+        f.onload = () => {
+          let n = 0;
+          sanoq = setInterval(() => {
+            const v = tekshir();
+            if (v || ++n >= 10) tugat(v);
+          }, 400);
+        };
+        vaqt = setTimeout(() => tugat(""), 15000);
+        f.src = url;
+        document.body.appendChild(f);
+      });
     },
 
     async init() {
@@ -955,9 +1044,22 @@
     async birorSxema() {
       await this.initUmumiy();
       const g = await sinfGuruhlari();
+      let chorakSinov = 0;
       for (const gr of g.values()) {
         let royxat = [];
         try { royxat = await sxemalar(gr.id, ""); } catch { royxat = []; }
+        // Chorak ko'rsatilmagan sahifada sxema havolalari bo'lmasligi mumkin —
+        // sxema borligiga qaramay «yo'q» demaslik uchun choraklar ham ko'riladi.
+        // Faqat 5 ta sinfda: sxemasi yo'q maktabda yuzlab so'rov ketmasin.
+        if (!royxat.length && chorakSinov < 5) {
+          chorakSinov++;
+          try {
+            for (const c of (await choraklarOqi(gr.id)).royxat) {
+              royxat = await sxemalar(gr.id, c.id);
+              if (royxat.length) break;
+            }
+          } catch { royxat = []; }
+        }
         if (!royxat.length) continue;
         this.scheduleId = royxat[0].id;
         this.groupId = gr.id;

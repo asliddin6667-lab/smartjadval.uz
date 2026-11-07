@@ -1,3 +1,4 @@
+import { IconEdit, IconTrash } from "../components/ActionIcons";
 import { useState } from "react";
 import ConfirmModal from "../components/ConfirmModal";
 import { genId } from "../utils/helpers";
@@ -63,8 +64,8 @@ export default function RoomsPage({ rooms, setRooms, toast }) {
                   <span className="badge badge-default">👥 {r.capacity}</span>
                 </div>
                 <div style={{ display: "flex", gap: 6 }}>
-                  <button className="btn btn-secondary btn-sm" onClick={() => openEdit(r)}>✏️ Tahrir</button>
-                  <button className="btn btn-danger btn-sm" onClick={() => setDeleteId(r.id)}>🗑️</button>
+                  <button className="btn btn-secondary btn-sm" onClick={() => openEdit(r)}><IconEdit /> Tahrir</button>
+                  <button className="btn btn-danger btn-sm" onClick={() => setDeleteId(r.id)}><IconTrash /></button>
                 </div>
               </div>
             </div>

@@ -1,3 +1,4 @@
+import { IconEdit } from "../components/ActionIcons";
 import { useState, useEffect } from "react";
 import {
   fetchAllUsers, adminCreateUser, adminSetStatus, adminSetRole,
@@ -666,7 +667,7 @@ export default function UsersPage({ currentUser, toast }) {
           <div className="card" style={{ marginBottom: 18, border: "2px solid #6366f1" }}>
             <div className="card-body">
               <div style={{ fontWeight: 800, marginBottom: 12 }}>
-                ✏️ Tahrirlash: {editUser.email}
+                <IconEdit /> Tahrirlash: {editUser.email}
                 {isSelfEdit && <span style={{ color: "#6366f1" }}> (bu — sizning hisobingiz)</span>}
               </div>
               <div className="form-row">
@@ -1049,7 +1050,7 @@ export default function UsersPage({ currentUser, toast }) {
                     <td><span className={`badge ${u.status === "active" ? "badge-success" : "badge-danger"}`}>{u.status === "active" ? "Faol" : "Bloklangan"}</span></td>
                     <td>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        <button className="btn btn-info btn-sm" title="Ism va maktabni o'zgartirish" onClick={() => startEdit(u)} disabled={busy}>✏️ Tahrirlash</button>
+                        <button className="btn btn-info btn-sm" title="Ism va maktabni o'zgartirish" onClick={() => startEdit(u)} disabled={busy}><IconEdit /> Tahrirlash</button>
                         <button className="btn btn-warning btn-sm" title="Yangi parol o'rnatish" onClick={() => startPwReset(u)} disabled={busy}>🔑 Parol</button>
                         <button
                           className="btn btn-secondary btn-sm"

@@ -1,3 +1,4 @@
+import { IconEdit, IconTrash } from "../components/ActionIcons";
 import { useMemo, useState } from "react";
 import ConfirmModal from "../components/ConfirmModal";
 import SaveScheduleModal from "../components/SaveScheduleModal";
@@ -244,7 +245,7 @@ export default function SavedSchedulesPage({
                       📥 Excel
                     </button>
                     <button className="sv-btn" onClick={() => openRename(item)} type="button">
-                      ✏️ Nom
+                      <IconEdit /> Nom
                     </button>
                     <button className="sv-btn" onClick={() => overwrite(item)} type="button" title="Joriy jadvalni shu nusxa ustiga yozish">
                       🔄 Yangilash
@@ -253,7 +254,7 @@ export default function SavedSchedulesPage({
                       📋 Nusxa
                     </button>
                     <button className="sv-btn sv-btn-red" onClick={() => setDeleteId(item.id)} type="button">
-                      🗑
+                      <IconTrash />
                     </button>
                   </div>
                 </div>
@@ -268,7 +269,7 @@ export default function SavedSchedulesPage({
         <div className="modal-overlay" onClick={() => setRenameItem(null)}>
           <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <span className="modal-title">✏️ Jadval nomi</span>
+              <span className="modal-title"><IconEdit /> Jadval nomi</span>
               <button className="modal-close" onClick={() => setRenameItem(null)}>×</button>
             </div>
             <div className="modal-body">

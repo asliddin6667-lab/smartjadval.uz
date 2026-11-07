@@ -1,3 +1,4 @@
+import { IconEdit, IconTrash } from "../components/ActionIcons";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import ConfirmModal from "../components/ConfirmModal";
 import { genId } from "../utils/helpers";
@@ -456,7 +457,7 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
                       </div>
                       <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
                         <button className="btn btn-secondary btn-sm" onClick={(e) => { e.stopPropagation(); openShiftEdit(sh); }}>⚙️ Sozlash</button>
-                        <button className="btn btn-danger btn-sm" onClick={(e) => { e.stopPropagation(); setDeleteShiftId(sh.id); }}>🗑️</button>
+                        <button className="btn btn-danger btn-sm" onClick={(e) => { e.stopPropagation(); setDeleteShiftId(sh.id); }}><IconTrash /></button>
                       </div>
                     </div>
                   );
@@ -556,8 +557,8 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
                             <td>{renderClassChips(t)}</td>
                             <td>
                               <div style={{ display: "flex", gap: 4 }}>
-                                <button className="btn btn-icon" onClick={() => openEdit(t)}>✏️</button>
-                                <button className="btn btn-icon" onClick={() => setDeleteId(t.id)}>🗑️</button>
+                                <button className="btn btn-icon btn-icon--edit" onClick={() => openEdit(t)} title="Tahrirlash"><IconEdit /></button>
+                                <button className="btn btn-icon btn-icon--delete" onClick={() => setDeleteId(t.id)} title="O'chirish"><IconTrash /></button>
                               </div>
                             </td>
                           </tr>
@@ -843,7 +844,7 @@ export default function TimeslotsPage({ timeslots, setTimeslots, classes = [], s
                         <span style={{ color: "var(--text-secondary)" }}>—</span>
                         <input className="form-control" type="time" value={s.endTime} style={{ maxWidth: 130 }}
                           onChange={e => updateShiftSlot(i, { endTime: e.target.value })} />
-                        <button type="button" className="btn btn-icon" onClick={() => removeShiftSlot(i)} title="O'chirish" style={{ marginLeft: "auto" }}>🗑️</button>
+                        <button type="button" className="btn btn-icon btn-icon--delete" onClick={() => removeShiftSlot(i)} title="O'chirish" style={{ marginLeft: "auto" }}><IconTrash /></button>
                       </div>
                     ))
                   )}
