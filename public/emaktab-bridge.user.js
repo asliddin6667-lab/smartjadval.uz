@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Smartjadval → eMaktab ko'prigi
 // @namespace    https://smartjadval.uz/
-// @version      1.15.2
+// @version      1.16.0
 // @description  Smartjadval.uz da tuzilgan dars jadvalini eMaktab (kundalik.com) «Darslar jadvali sxemasi» setkasiga joylashtiradi
 // @author       smartjadval.uz
 // @match        https://schools.emaktab.uz/*
@@ -87,7 +87,7 @@
   // Qabul qilinadigan jadval formati versiyalari (emaktabExport.js dagi
   // `EMAKTAB_FORMAT_VERSION`). 2 — `emaktab` id xaritasi bilan, 1 — usiz
   // (u holda nomlar bo'yicha moslashtirish ishlaydi).
-  const V = [1, 2];
+  const V = [1, 2, 3];   // 3 — paketda `emaktab.guruhlar` (sinf ichidagi o'quv guruhlari id'lari)
   const LS_MAP = "sj_emaktab_map_v1";       // qo'lda moslashtirilgan nomlar
   const LS_JADVAL = "sj_emaktab_jadval_v1"; // oxirgi jadval (sinflar bo'ylab yuriladi)
   const LS_OCHIQ = "sj_emaktab_panel_ochiq"; // panel ochiq turganmi
@@ -1251,6 +1251,69 @@
       }
     } catch { /* sahifa ochilmasa sinflar bo'sh qoladi — import buni aytadi */ }
 
+    // ——— O'quv guruhlari (subgroup): HAR SINF uchun alohida sahifa ———
+    //
+    //  NEGA: «Texnologiya» kabi fanlar sinfni bo'lib o'tiladi va eMaktab
+    //  «Yangi dars» formasida «Kim ishtirok etmoqda» ro'yxatiga SHU
+    //  sinfning o'quv guruhlarini («bollar», «qizlar»…) chiqaradi. Guruh
+    //  nomi Smartjadval'da boshqacha yozilgan bo'lsa («1-qizlar») dars
+    //  butun sinfga tushar, ikkinchi guruh esa «butun sinf uchun
+    //  allaqachon dars mavjud» deb rad etilardi (jonli maktab, 09.11.2026).
+    //  Guruhlar Smartjadval'ga tushsa «2 guruhga bo'lish» da aynan
+    //  eMaktab'dagi nomlar tanlanadi va id bilan yuboriladi.
+    //
+    //  Sahifa: /v2/admin/class/class?class=<id>&school=<id>&view=subgroups
+    //  Jadval: guruh nomi (havola) · o'quvchilar soni · o'zgartirilgan sana.
+    //  Havoladagi raqamli parametr (subgroup=/group=/id=) guruh id'si deb
+    //  olinadi; topilmasa id bo'sh qoladi — moslashtirish nom bo'yicha ketadi.
+    if (sinflar.length) {
+      say("o'quv guruhlari o'qilmoqda…");
+      // Admin ro'yxatidagi `class=` id'lari jadvaldagi `group=` bilan bir
+      // xil bo'lmasa — nom bo'yicha moslab olamiz.
+      const adminId = new Map();
+      try {
+        const r = await fetch(`/v2/admin/class/default?school=${enc(API.schoolId)}`, { credentials: "same-origin" });
+        if (r.ok) {
+          const doc = new DOMParser().parseFromString(await r.text(), "text/html");
+          doc.querySelectorAll('a[href*="class="]').forEach((a) => {
+            const m = String(a.getAttribute("href") || "").match(/[?&]class=(\d+)/);
+            const k = classKey(txt(a));
+            if (m && k && !adminId.has(k)) adminId.set(k, m[1]);
+          });
+        }
+      } catch { /* admin ro'yxati ochilmasa jadvaldagi id ishlatiladi */ }
+
+      for (let i = 0; i < sinflar.length; i++) {
+        const s = sinflar[i];
+        const cid = adminId.get(classKey(s.nom)) || s.id;
+        say(`guruhlar ${i + 1}/${sinflar.length}: ${s.nom}`);
+        try {
+          const r = await fetch(`/v2/admin/class/class?class=${enc(cid)}&school=${enc(API.schoolId)}&view=subgroups`,
+            { credentials: "same-origin" });
+          if (!r.ok) continue;
+          const doc = new DOMParser().parseFromString(await r.text(), "text/html");
+          const guruhlar = [];
+          doc.querySelectorAll("table tr").forEach((tr) => {
+            const a = tr.querySelector("td a[href]");
+            if (!a) return;
+            const nom = txt(a);
+            // «Guruhni yaratish» kabi amal havolalari guruh emas
+            if (!nom || /yaratish|создать|create|o[‘’'ʻʼ]?chirish|удалить/i.test(nom)) return;
+            const href = String(a.getAttribute("href") || "");
+            // class= va school= dan BOSHQA raqamli parametr — guruh id'si
+            let id = "";
+            for (const m of href.matchAll(/[?&]([A-Za-z_]+)=(\d{6,})/g)) {
+              if (!/^(class|school)$/i.test(m[1])) { id = m[2]; break; }
+            }
+            const tds = [...tr.querySelectorAll("td")];
+            const son = tds.map((td) => txt(td)).find((t, j) => j > 0 && /^\d{1,3}$/.test(t));
+            guruhlar.push({ id, nom, oquvchilar: son ? Number(son) : 0 });
+          });
+          s.guruhlar = guruhlar;
+        } catch { /* bitta sinf o'qilmasa qolganlari davom etadi */ }
+      }
+    }
+
     // ——— Fanlar: forma ro'yxati (butun maktab bo'yicha) ———
     const fanlar = API.fanlar.map((f) => ({ id: f.v, nom: f.label }));
 
@@ -1280,6 +1343,46 @@
       ustozlar: [...ustozMap.values()],
       xonalar: [...xonaMap.values()],
     };
+  }
+
+  // ——— O'QUV GURUHI (subgroup) NOMI ———
+  //
+  //  eMaktab formasida guruh «O'quv guruhi: bollar» / «Учебная группа:
+  //  мальчики» ko'rinishida, setkada esa «Kichik guruh bollar» bo'lib
+  //  chiqadi. Smartjadval'da esa faqat «bollar». Solishtirishdan oldin
+  //  shu old qo'shimchalar tashlanadi.
+  //  ⚠️ src/utils/emaktabNames.js dagi `subgroupKey` bilan BIR XIL.
+  const GURUH_PREFIKS = /^\s*(o[\u2018\u2019'ʻʼ`´]?quv\s+guruhi|kichik\s+guruh|guruh|учебная\s+группа|подгруппа|группа|subgroup|group)\s*[:\-–—]?\s*/i;
+  function subgroupKey(raw) {
+    return normKey(String(raw == null ? "" : raw).replace(GURUH_PREFIKS, ""));
+  }
+  const BUTUN_SINF = /^(butun\s+sinf|весь\s+класс|whole\s+class)$/i;
+
+  // Dars guruhini eMaktab `#subgroup` ro'yxatidan topish.
+  //  1) paketdagi id (Smartjadval eMaktab'dan import qilgan guruh id'si)
+  //  2) old qo'shimchasiz aniq nom
+  //  3) bestMatch (sinonim/qismiy) — faqat bitta nomzod qolsa
+  //  Qaytadi { qiymat, ishonch } — topilmasa qiymat null.
+  function guruhTop(guruhNom, royxat, guruhIdlar) {
+    const nomzodlar = (royxat || []).filter((g) => !BUTUN_SINF.test(String(g.label || "").trim()));
+    if (!guruhNom || !nomzodlar.length) return { qiymat: null, ishonch: "" };
+    const id = guruhIdlar && guruhIdlar[guruhNom];
+    if (id) {
+      const f = nomzodlar.find((g) => String(g.v) === String(id));
+      if (f) return { qiymat: f, ishonch: "id" };
+    }
+    const k = subgroupKey(guruhNom);
+    if (k) {
+      const aniq = nomzodlar.filter((g) => subgroupKey(g.label) === k);
+      if (aniq.length === 1) return { qiymat: aniq[0], ishonch: "aniq" };
+      if (aniq.length > 1) return { qiymat: aniq[0], ishonch: "aniq" };
+    }
+    const m = bestMatch(guruhNom, nomzodlar.map((g) => ({ v: g.v, label: String(g.label || "").replace(GURUH_PREFIKS, "") })), "fan");
+    if (m.qiymat) {
+      const f = nomzodlar.find((g) => g.v === m.qiymat.v);
+      if (f) return { qiymat: f, ishonch: m.ishonch };
+    }
+    return { qiymat: null, ishonch: "" };
   }
 
   // Nomni ro'yxatdan topish: avval qo'lda moslashtirilgan juftlik, keyin bestMatch
@@ -1362,9 +1465,21 @@
     let guruhId = butun.v;
     let ogoh = "";
     if (dars.guruh) {
-      const g = info.guruhlar.length > 1 ? bestMatch(dars.guruh, info.guruhlar, "fan") : { qiymat: null };
+      const guruhIdlar = idlar && idlar.guruhlar && API.sinfNom ? idlar.guruhlar[API.sinfNom] : null;
+      const g = guruhTop(dars.guruh, info.guruhlar, guruhIdlar);
       if (g.qiymat) guruhId = g.qiymat.v;
-      else ogoh = `«${dars.guruh}» eMaktab'da sozlanmagan — butun sinfga qo'yildi`;
+      else {
+        // Guruh topilmasa dars BUTUN SINFGA tushadi — ikkinchi guruh esa
+        // «butun sinf uchun allaqachon dars mavjud» bilan rad etiladi.
+        // Shuning uchun eMaktab'da QAYSI guruhlar borligi aytiladi:
+        // foydalanuvchi Smartjadval'dagi nomni shunga moslaydi.
+        const bor = info.guruhlar
+          .filter((x) => !BUTUN_SINF.test(String(x.label || "").trim()))
+          .map((x) => String(x.label || "").replace(GURUH_PREFIKS, "").trim())
+          .filter(Boolean);
+        ogoh = `guruh «${dars.guruh}» eMaktab'da yo'q — butun sinfga qo'yildi`
+          + (bor.length ? ` (eMaktab'da: ${bor.join(", ")})` : " (bu sinfda o'quv guruhlari sozlanmagan — eMaktab → Sinf → «O'quv guruhlari»)");
+      }
     }
 
     let ustozId = "", ustozLabel = "";
@@ -2605,6 +2720,7 @@
     // ro'yxat so'raladigan «bo'sh katak» band katakka tushmasin.
     API.scheduleId = schedId;
     API.groupId = g.id;
+    API.sinfNom = sinf.nom;
     API.band = new Set(band);
     API.bosh = null;
     API.fanKesh = new Map();
@@ -2622,6 +2738,24 @@
       API.tayyor = true;
       $("apiChip").textContent = `API: ulandi · ${API.fanlar.length} fan`;
       $("apiChip").className = "chip ok";
+
+      // Guruhli darslar bormi? Nomlar eMaktab guruhlariga mos kelishini
+      // BIR MARTA, darslardan oldin aytamiz — har darsda takrorlamaymiz.
+      const guruhNomlar = [...new Set(qoldi.map((d) => d.guruh).filter(Boolean))];
+      if (guruhNomlar.length) {
+        const idlar = paket && paket.emaktab && paket.emaktab.guruhlar ? paket.emaktab.guruhlar[sinf.nom] : null;
+        const bor = (f0.guruhlar || []).filter((x) => !BUTUN_SINF.test(String(x.label || "").trim()));
+        const qism = guruhNomlar.map((n) => {
+          const m = guruhTop(n, f0.guruhlar || [], idlar);
+          return m.qiymat ? `${n} → ${String(m.qiymat.label).replace(GURUH_PREFIKS, "").trim()} ✔` : `${n} ✖`;
+        });
+        const xatoBor = qism.some((t) => t.endsWith("✖"));
+        log(`   👥 ${sinf.nom} guruhlari: ${qism.join(", ")}`
+          + (xatoBor ? (bor.length
+            ? ` — eMaktab'da: ${bor.map((x) => String(x.label).replace(GURUH_PREFIKS, "").trim()).join(", ")}`
+            : " — eMaktab'da bu sinfga o'quv guruhlari sozlanmagan") : ""),
+          xatoBor ? "ogoh" : "dim");
+      }
     } catch (err) {
       log(`✖ ${sinf.nom} — forma: ${err.message}`, "xato");
       qatorBelgila(q, "t-xato", "forma xatosi", err.message.slice(0, 60));
@@ -2891,7 +3025,8 @@
       a.href = url; a.download = nom; a.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       $("yigHolat").textContent = "✔ tayyor";
-      log(`✔ ${data.sinflar.length} sinf, ${data.fanlar.length} fan, `
+      const guruhli = data.sinflar.filter((s) => s.guruhlar && s.guruhlar.length).length;
+      log(`✔ ${data.sinflar.length} sinf (${guruhli} tasida o'quv guruhlari bor), ${data.fanlar.length} fan, `
         + `${data.ustozlar.length} ustoz, ${data.xonalar.length} xona — «${nom}» saqlandi`, "ok");
       log("Endi uni Smartjadval → «eMaktab» bo'limidagi «📥 Import» ga bering.", "dim");
     } catch (err) {

@@ -17,12 +17,15 @@
 // =====================================================================
 import { DAYS } from "./constants.js";
 import { isTeachingSlot, classIdsOf } from "./scheduleCore.js";
-import { parseClassName, bestMatch, abbrevMatch } from "./emaktabNames.js";
+import { parseClassName, bestMatch, abbrevMatch, matchSubgroup } from "./emaktabNames.js";
 
 // 2 — paketga `emaktab` id xaritasi qo'shildi (ko'prik nomlarni taxmin
 // qilmay, to'g'ridan-to'g'ri id bilan ishlaydi). Ko'prik 1-versiyani ham
 // qabul qiladi: u holda eski, nom bo'yicha moslashtirish ishlaydi.
-export const EMAKTAB_FORMAT_VERSION = 2;
+// 3 — `emaktab.guruhlar`: sinf → { guruh nomi → eMaktab o'quv guruhi id }.
+// Ko'prik 1.16+ buni «Kim ishtirok etmoqda» maydoniga qo'yadi; eski
+// ko'prik maydonni ko'rmaydi va nom bo'yicha moslaydi — zarari yo'q.
+export const EMAKTAB_FORMAT_VERSION = 3;
 
 // eMaktab setkasidagi ustunlar: Dush Sesh Chor Pay Jum Shan Yak.
 // DAYS ("Dushanba"…"Shanba") shu tartibda, ya'ni kun raqami = indeks + 1.
@@ -173,6 +176,22 @@ export function buildEmaktabPayload({
   };
   const sinfNomlari = new Set(sinflar.map((s) => s.nom));
 
+  // ——— O'quv guruhlari id'lari: sinf nomi → { guruh nomi → id } ———
+  // Faqat guruhli darsi bor sinflar uchun, faqat id'si bor guruhlar.
+  const guruhIdlari = {};
+  targetClasses.forEach((cls) => {
+    const s = sinflar.find((x) => x.nom === cls.name);
+    if (!s || !Array.isArray(cls.emaktabSubgroups) || !cls.emaktabSubgroups.length) return;
+    const nomlar = [...new Set(s.darslar.map((d) => d.guruh).filter(Boolean))];
+    if (!nomlar.length) return;
+    const xarita = {};
+    nomlar.forEach((n) => {
+      const g = matchSubgroup(n, cls.emaktabSubgroups);
+      if (g && g.id) xarita[n] = String(g.id);
+    });
+    if (Object.keys(xarita).length) guruhIdlari[cls.name] = xarita;
+  });
+
   // Fan id'si yo'q, lekin ro'yxatda AYNI fanning eMaktab'dan kelgan
   // nusxasi turibdi («Informatika va axborot texnologiyalari» ↔ eMaktab
   // «Informatika va AT»). Import bu ikkisini alohida fan deb saqlagan
@@ -213,8 +232,43 @@ export function buildEmaktabPayload({
       ustozlar: idMap(teachers, ustozNomlari),
       xonalar: idMap(rooms, xonaNomlari),
       sinflar: idMap(classes, sinfNomlari),
+      guruhlar: guruhIdlari,
     },
   };
+}
+
+// =====================================================================
+//  GURUH NOMLARI TEKSHIRUVI
+//
+//  Guruhli dars («2 guruhga bo'lish») eMaktab'da faqat sinfning O'QUV
+//  GURUHIGA yoziladi. Smartjadval'dagi guruh nomi eMaktab'dagiga mos
+//  kelmasa dars butun sinfga tushadi, ikkinchi guruh esa «butun sinf
+//  uchun allaqachon dars mavjud» deb rad etiladi. Buni yuklashdan OLDIN
+//  ko'rsatamiz. Faqat eMaktab guruhlari ma'lum bo'lgan sinflar
+//  tekshiriladi (import qilinmagan bo'lsa nima deyishni bilmaymiz).
+//
+//  Qaytadi: [{ sinf, guruh, bor: ["bollar", "qizlar"] | null }]
+//    bor === null  → sinfda eMaktab o'quv guruhlari umuman yo'q
+// =====================================================================
+export function groupNameIssues(payload, classes = []) {
+  const out = [];
+  const byName = new Map(classes.map((c) => [c.name, c]));
+  (payload?.sinflar || []).forEach((s) => {
+    const nomlar = [...new Set(s.darslar.map((d) => d.guruh).filter(Boolean))];
+    if (!nomlar.length) return;
+    const cls = byName.get(s.nom);
+    if (!cls || !cls.emaktabId) return;          // eMaktab bilan bog'lanmagan — bilib bo'lmaydi
+    const guruhlar = Array.isArray(cls.emaktabSubgroups) ? cls.emaktabSubgroups : null;
+    if (!guruhlar) return;                       // eski import — guruhlar olinmagan
+    if (!guruhlar.length) {
+      nomlar.forEach((n) => out.push({ sinf: s.nom, guruh: n, bor: null }));
+      return;
+    }
+    nomlar.forEach((n) => {
+      if (!matchSubgroup(n, guruhlar)) out.push({ sinf: s.nom, guruh: n, bor: guruhlar.map((g) => g.name) });
+    });
+  });
+  return out;
 }
 
 // Paketning nechta nomi eMaktab id'si bilan ta'minlangan? UI shuni

@@ -260,6 +260,31 @@ function sozlar(raw) {
     .filter(Boolean);
 }
 
+// ——— O'QUV GURUHI (eMaktab subgroup) NOMI ———
+// eMaktab formasida «O'quv guruhi: bollar», setkada «Kichik guruh bollar»,
+// Smartjadval'da esa faqat «bollar». Solishtirishdan oldin shu old
+// qo'shimchalar tashlanadi.
+// ⚠️ public/emaktab-bridge.user.js dagi `subgroupKey` bilan BIR XIL.
+const GURUH_PREFIKS = /^\s*(o[\u2018\u2019'ʻʼ`´]?quv\s+guruhi|kichik\s+guruh|guruh|учебная\s+группа|подгруппа|группа|subgroup|group)\s*[:\-–—]?\s*/i;
+export function subgroupKey(raw) {
+  return normKey(String(raw ?? "").replace(GURUH_PREFIKS, ""));
+}
+
+// Smartjadval'dagi guruh nomiga sinfning eMaktab o'quv guruhlaridan
+// mosini topish: avval aniq kalit, keyin bestMatch (sinonim/qismiy).
+// `subgroups` — [{ id, name, students }] (classes[].emaktabSubgroups).
+export function matchSubgroup(name, subgroups) {
+  const list = Array.isArray(subgroups) ? subgroups.filter((g) => g && g.name) : [];
+  if (!name || !list.length) return null;
+  const k = subgroupKey(name);
+  if (k) {
+    const f = list.find((g) => subgroupKey(g.name) === k);
+    if (f) return f;
+  }
+  const m = bestMatch(name, list.map((g) => ({ g, label: g.name })), "fan");
+  return m.qiymat ? m.qiymat.g : null;
+}
+
 // `qisqa` — `toliq` ning kesilgan/qisqartirilgan shaklimi?
 // Har bir qisqa so'z o'z o'rnidagi to'liq so'zning BOSHI bo'lishi shart;
 // bir harfli so'z faqat aynan teng bo'lsa o'tadi. Kamida so'zlarning

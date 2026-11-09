@@ -82,8 +82,13 @@ tanlasangiz hamma qadam o'sha yerda ko'rsatib turiladi.
 | Firefox | Firefox Add-ons → «Tampermonkey» → *Add to Firefox* |
 
 ⚠️ Chrome, Edge va Yandex'da qo'shimcha bitta qadam bor: `chrome://extensions`
-sahifasida o'ng yuqoridagi **«Dasturchi rejimi» (Developer mode)** ni yoqing.
-Yoqilmasa Tampermonkey skriptlarni umuman ishga tushirmaydi va SJ tugmasi chiqmaydi.
+→ Tampermonkey kartasida **«Подробнее» (Details)** → **«Разрешить пользовательские
+скрипты» (Allow User Scripts)** ni yoqing (Chrome 138 va undan yangi). Eski Chrome'da
+bu tugma yo'q — o'rniga sahifaning o'ng yuqorisidagi **«Dasturchi rejimi»
+(Developer mode)** ni yoqing. Yoqilmasa Tampermonkey skriptlarni umuman ishga
+tushirmaydi: skript «yoqiq» ko'rinsa ham SJ tugmasi chiqmaydi, Tampermonkey
+menyusining tepasida esa ko'k «Разрешить пользовательские скрипты» ogohlantirishi
+turadi.
 
 **2. Ko'prik skriptini o'rnating.** Smartjadval → eMaktab → «Tayyorgarlik»
 kartasidagi **«🧩 Skriptni o'rnatish»** tugmasini bosing. Tampermonkey
@@ -101,9 +106,41 @@ olish»** → eMaktab'da **SJ** → **«📂 Fayldan»** → sinfni tanlab **«�
 sinfga»** yoki **«🚀 Hamma sinfga joylashtirish»**. Fayl brauzerda eslab
 qolinadi — 40 sinf uchun ham bir marta tanlash yetadi.
 
-**SJ chiqmasa:** Tampermonkey va skript ikkalasi yoqiqmi → Dasturchi rejimi
-yoqiqmi → siz «Dars jadvali» bo'limidamisiz (tugma jurnal/hisobotlarda ataylab
-chiqmaydi) → sahifani yangilang.
+**SJ chiqmasa:** Tampermonkey va skript ikkalasi yoqiqmi → «Allow User Scripts»
+(yoki eski Chrome'da Dasturchi rejimi) yoqiqmi → siz «Dars jadvali» bo'limidamisiz
+(tugma jurnal/hisobotlarda ataylab chiqmaydi) → sahifani yangilang. Skript ikki
+marta o'rnatilgan bo'lsa (menyuda ikkita «Smartjadval → eMaktab ko'prigi»)
+o'chiq nusxasini Boshqaruv panelidan o'chiring.
+
+---
+
+## Guruhli darslar (bollar / qizlar)
+
+Texnologiya, Jismoniy tarbiya kabi fanlar sinfni ikkiga bo'lib o'tiladi.
+eMaktab bunday darsni faqat sinfning **o'quv guruhiga** yozadi: «Yangi dars»
+oynasidagi «Kim ishtirok etmoqda» ro'yxatida «Butun sinf» va shu sinf uchun
+yaratilgan guruhlar («O'quv guruhi: bollar», «O'quv guruhi: qizlar») turadi.
+
+Smartjadval'dagi guruh nomi eMaktab'dagiga mos kelmasa («1-guruh» ↔ «bollar»)
+ko'prik darsni **butun sinfga** qo'yadi, ikkinchi guruh esa «Butun sinf uchun
+allaqachon dars mavjud» xatosi bilan tushmaydi.
+
+Tartib:
+
+1. **eMaktab'da guruhlar bo'lsin.** Sinflar → sinf → «O'quv guruhlari» →
+   «Guruhni yaratish». Guruh yo'q sinfga guruhli dars yozib bo'lmaydi.
+2. **Import.** Ko'prik 1.16+ da **«📥 Yig'ish va saqlash»** har sinfning o'quv
+   guruhlarini ham oladi. Faylni Smartjadval → eMaktab → 1-qadamga bering.
+   «Sinflar» bo'limida har sinf ostida «🏫 eMaktab guruhlari: bollar (15) ·
+   qizlar (7)» chiqadi.
+3. **Nomlarni moslang.** «Sinf fanlari» → fan → «✂️ 2 guruhga bo'lish» da
+   eMaktab guruhlari ko'rinadi, nom maydoni ularni taklif qiladi, **«eMaktab
+   nomlarini olish»** tugmasi ikkala nomni bir bosishda almashtiradi. Mos
+   kelmagan nom ostida «⚠ eMaktab'da bunday guruh yo'q» yozuvi turadi.
+4. **Eksport.** eMaktab bo'limidagi 3-qadam mos kelmagan guruh nomlarini
+   sinf-sinf ro'yxatlab beradi — yuklashdan oldin tuzating. Paketda guruh
+   id'lari ketadi (`emaktab.guruhlar`), ko'prik esa har sinf oldidan
+   «👥 guruhlari: bollar → bollar ✔, qizlar → qizlar ✔» deb tasdiqlaydi.
 
 ---
 

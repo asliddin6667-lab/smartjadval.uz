@@ -2431,6 +2431,29 @@ body.dark-mode ::-webkit-scrollbar-thumb:hover { background: #3a4568; }
   padding: 7px 9px;
 }
 
+/* eMaktab o'quv guruhlari: «2 guruhga bo'lish» dagi eslatma va nom holati */
+.cs-emk-gpanel {
+  margin: 0 0 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  border: 1px dashed var(--card-border);
+}
+.cs-emk-gbtn {
+  margin-left: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+.cs-emk-gmos {
+  display: block;
+  margin-top: 3px;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.cs-emk-gmos-ok { color: #047857; }
+.cs-emk-gmos-yoq { color: #b45309; }
+
 /* ═══ FAN ALMASHINUVI ═══
    Guruhlar har xil fan o'qiydi va KEYINGI SOATDA o'rin almashadi.
    2-soatning ustozi/xonasi alohida tanlanishi mumkin. */

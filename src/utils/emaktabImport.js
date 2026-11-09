@@ -65,7 +65,7 @@ export function mergeEmaktabData({
   validate(data);
   const now = Date.now();
   const hisobot = {
-    sinf: { yangi: 0, boglandi: 0 },
+    sinf: { yangi: 0, boglandi: 0, guruhli: 0 },
     fan: { yangi: 0, boglandi: 0 },
     ustoz: { yangi: 0, boglandi: 0 },
     xona: { yangi: 0, boglandi: 0 },
@@ -209,13 +209,29 @@ export function mergeEmaktabData({
   });
 
   // ——— 3. SINFLAR ———
+  //
+  //  Sinf bilan birga uning eMaktab'dagi O'QUV GURUHLARI («bollar»,
+  //  «qizlar»…) ham keladi — `emaktabSubgroups`. «Sinf fanlari» →
+  //  «2 guruhga bo'lish» aynan shu nomlarni taklif qiladi, eksport esa
+  //  guruh id'sini paketga qo'shadi. Ko'prik eski bo'lib `guruhlar`
+  //  bermasa — mavjud ro'yxatga TEGILMAYDI.
   const nextClasses = [...classes];
   (data.sinflar || []).forEach((c) => {
     if (!c || !c.id || !c.nom) return;
+    const guruhlar = Array.isArray(c.guruhlar)
+      ? c.guruhlar
+          .filter((g) => g && g.nom)
+          .map((g) => ({ id: String(g.id || ""), name: String(g.nom), students: Number(g.oquvchilar) || 0 }))
+      : null;
+    if (guruhlar && guruhlar.length) hisobot.sinf.guruhli++;
     const bor = findExisting(nextClasses, c.id, c.nom, "sinf");
     if (bor) {
       const idx = nextClasses.indexOf(bor);
-      nextClasses[idx] = { ...bor, emaktabId: String(c.id) };
+      nextClasses[idx] = {
+        ...bor,
+        emaktabId: String(c.id),
+        ...(guruhlar ? { emaktabSubgroups: guruhlar } : {}),
+      };
       if (!bor.emaktabId) hisobot.sinf.boglandi++;
     } else {
       nextClasses.push({
@@ -223,6 +239,7 @@ export function mergeEmaktabData({
         name: c.nom,
         studentCount: 0,
         emaktabId: String(c.id),
+        ...(guruhlar ? { emaktabSubgroups: guruhlar } : {}),
         createdAt: now,
       });
       hisobot.sinf.yangi++;
@@ -253,6 +270,11 @@ export function mergeEmaktabData({
 
   if (!(data.sinflar || []).length) {
     hisobot.ogohlar.push("Faylda sinflar yo'q — ko'prik ularni ololmagan (sinflar allaqachon Smartjadval'da bo'lsa muammo emas)");
+  } else if (!(data.sinflar || []).some((c) => Array.isArray(c.guruhlar))) {
+    hisobot.ogohlar.push(
+      "Faylda o'quv guruhlari yo'q — ko'prik skripti eski (1.16 dan past). Uni yangilab «📥 Yig'ish» ni qayta bajaring, "
+      + "shunda «2 guruhga bo'lish» da eMaktab guruhlari ko'rinadi"
+    );
   }
   if (cheklanmagan) {
     hisobot.cheklanmagan = cheklanmagan;
@@ -287,6 +309,7 @@ export function mergeEmaktabData({
 // ——— Qisqa xulosa matni (toast uchun) ———
 export function importSummary(hisobot) {
   const q = (h) => `${h.yangi} yangi, ${h.boglandi} bog'landi`;
+  const guruhli = hisobot.sinf.guruhli ? ` (${hisobot.sinf.guruhli} sinfda o'quv guruhlari)` : "";
   return `Fanlar: ${q(hisobot.fan)} · Ustozlar: ${q(hisobot.ustoz)} · `
-    + `Sinflar: ${q(hisobot.sinf)} · Xonalar: ${q(hisobot.xona)}`;
+    + `Sinflar: ${q(hisobot.sinf)}${guruhli} · Xonalar: ${q(hisobot.xona)}`;
 }

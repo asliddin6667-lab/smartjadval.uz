@@ -355,6 +355,14 @@ export default function ClassesPage({ classes, setClasses, teachers = [], classS
                       <td style={{ color: "var(--text-muted)", fontSize: 12 }}>{i + 1}</td>
                       <td>
                         <div style={{ fontWeight: 600, fontSize: 14 }}>{c.name}</div>
+                        {/* eMaktab'dan import qilingan o'quv guruhlari — «Sinf fanlari →
+                            2 guruhga bo'lish» da aynan shu nomlar tanlanishi kerak */}
+                        {Array.isArray(c.emaktabSubgroups) && c.emaktabSubgroups.length > 0 && (
+                          <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}
+                            title="eMaktab'dagi o'quv guruhlari. Guruhli dars eMaktab'ga tushishi uchun «Sinf fanlari → 2 guruhga bo'lish» da guruh nomi shulardan biri bo'lsin.">
+                            🏫 eMaktab guruhlari: {c.emaktabSubgroups.map((g) => g.name + (g.students ? ` (${g.students})` : "")).join(" · ")}
+                          </div>
+                        )}
                       </td>
                       <td>
                         <span className={`badge ${(c.eduLang || "uz") === "ru" ? "badge-warning" : "badge-default"}`}>

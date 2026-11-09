@@ -21,7 +21,7 @@
 //  Ko'prik skripti: public/emaktab-bridge.user.js
 // =====================================================================
 import { useMemo, useState, useEffect, useRef } from "react";
-import { buildEmaktabPayload, payloadStats, payloadFileName, idCoverage } from "../utils/emaktabExport";
+import { buildEmaktabPayload, payloadStats, payloadFileName, idCoverage, groupNameIssues } from "../utils/emaktabExport";
 import { mergeEmaktabData, importSummary } from "../utils/emaktabImport";
 import { DAYS } from "../utils/constants";
 
@@ -112,6 +112,9 @@ export default function EmaktabExport({
 
   const stat = useMemo(() => payloadStats(paket), [paket]);
   const qamrov = useMemo(() => idCoverage(paket), [paket]);
+  // Guruhli darslarning nomi eMaktab o'quv guruhlariga mos kelmasa —
+  // yuklashdan OLDIN ko'rsatiladi (aks holda dars butun sinfga tushadi).
+  const guruhMuammo = useMemo(() => groupNameIssues(paket, classes), [paket, classes]);
   const json = useMemo(() => JSON.stringify(paket), [paket]);
 
   // ——— eMaktab ma'lumotini import qilish ———
@@ -458,7 +461,7 @@ export default function EmaktabExport({
               </div>
               <p>
                 ⚠️ Chrome, Edge, Yandex'da qo'shimcha: <span className="emk-path">
-                  <span>chrome://extensions</span><i>→</i><span>Dasturchi rejimi (Developer mode)</span>
+                  <span>chrome://extensions</span><i>→</i><span>Tampermonkey → «Подробнее» (Details)</span><i>→</i><span>«Разрешить пользовательские скрипты» (Allow User Scripts)</span>
                 </span> tugmasini <b>yoqing</b>. Aks holda Tampermonkey skriptlarni ishga tushirmaydi.
               </p>
             </div>
@@ -513,9 +516,10 @@ export default function EmaktabExport({
           <span className="emk-tag emk-tag-ixtiyoriy">ixtiyoriy</span>
         </div>
         <p className="emk-sub">
-          Fanlar, ustozlar, sinflar va xonalarni eMaktab'ning o'zidan olib kelish.
+          Fanlar, ustozlar, sinflar (o'quv guruhlari bilan) va xonalarni eMaktab'ning o'zidan olib kelish.
           Shundan keyin har bir yozuvda eMaktab id'si turadi va yuklashda
-          nomlar <b>umuman taxmin qilinmaydi</b>. Bir marta qilinsa yetadi.
+          nomlar <b>umuman taxmin qilinmaydi</b>. Sinfning eMaktab'dagi guruhlari («bollar», «qizlar»…)
+          «Sinf fanlari → 2 guruhga bo'lish» da taklif qilinadi. Bir marta qilinsa yetadi.
         </p>
         <ol className="emk-steps">
           <li>eMaktab'da istalgan sinfning chorak sxemasini oching va ko'prik panelini oching
@@ -542,6 +546,11 @@ export default function EmaktabExport({
               <span><b>{importHisobot.ustoz.yangi}</b> yangi ustoz</span>
               <span><b>{importHisobot.sinf.yangi}</b> yangi sinf</span>
               <span><b>{importHisobot.xona.yangi}</b> yangi xona</span>
+              {importHisobot.sinf.guruhli > 0 && (
+                <span title="Bu sinflarning o'quv guruhlari («bollar», «qizlar»…) «Sinf fanlari → 2 guruhga bo'lish» da taklif qilinadi">
+                  <b>{importHisobot.sinf.guruhli}</b> sinfda o'quv guruhlari
+                </span>
+              )}
             </div>
             {importHisobot.ogohlar.length > 0 && (
               <div className="emk-note">
@@ -668,6 +677,25 @@ export default function EmaktabExport({
         {stat.ustozsiz > 0 && (
           <div className="emk-note">
             {stat.ustozsiz} ta darsda ustoz ko'rsatilmagan — eMaktab ustozsiz dars qabul qilmasligi mumkin.
+          </div>
+        )}
+        {guruhMuammo.length > 0 && (
+          <div className="emk-note">
+            <b>👥 {guruhMuammo.length} ta guruh nomi eMaktab'ga mos emas</b> — bu darslar eMaktab'da
+            <u> butun sinfga</u> tushadi, ikkinchi guruh esa «butun sinf uchun allaqachon dars mavjud» deb rad etiladi.
+            «Sinf fanlari → 2 guruhga bo'lish» da nomni eMaktab'dagi guruhga moslang
+            (u yerda «eMaktab nomlarini olish» tugmasi bor):
+            <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+              {guruhMuammo.slice(0, 15).map((m, i) => (
+                <li key={i}>
+                  <b>{m.sinf}</b>: «{m.guruh}» —{" "}
+                  {m.bor
+                    ? <>eMaktab'da bor: {m.bor.join(", ")}</>
+                    : <>eMaktab'da bu sinfga o'quv guruhlari sozlanmagan (eMaktab → Sinflar → {m.sinf} → «O'quv guruhlari»)</>}
+                </li>
+              ))}
+            </ul>
+            {guruhMuammo.length > 15 && <div style={{ marginTop: 4 }}>…yana {guruhMuammo.length - 15} ta</div>}
           </div>
         )}
       </div>
@@ -813,7 +841,8 @@ export default function EmaktabExport({
                 {tm && (
                   <>
                     <li><b>SJ tugmasi chiqmayapti.</b> Tampermonkey belgisini bosing — kengaytma va «Smartjadval → eMaktab ko'prigi» ikkalasi ham yoqiq (yashil) bo'lsin.</li>
-                    <li><b>Chrome / Edge / Yandex'da skript umuman ishlamayapti.</b> <code>chrome://extensions</code> sahifasida «Dasturchi rejimi» yoqilmagan. Yoqib, sahifani yangilang.</li>
+                    <li><b>Chrome / Edge / Yandex'da skript umuman ishlamayapti</b> (Tampermonkey menyusining tepasida ko'k «Разрешить пользовательские скрипты» ogohlantirishi turibdi). <code>chrome://extensions</code> → Tampermonkey → «Подробнее» → «Разрешить пользовательские скрипты» (Allow User Scripts) ni yoqing. Eski Chrome'da bu tugma yo'q — o'rniga sahifaning yuqori o'ng burchagidagi «Dasturchi rejimi» ni yoqing. Keyin eMaktab sahifasini yangilang.</li>
+                    <li><b>Guruhli dars butun sinfga tushdi / «butun sinf uchun allaqachon dars mavjud».</b> Smartjadval'dagi guruh nomi eMaktab'dagi o'quv guruhi nomiga mos emas. 1-qadamdagi importni ko'prik 1.16+ bilan qayta bajaring, keyin «Sinf fanlari → 2 guruhga bo'lish» da «eMaktab nomlarini olish» ni bosing.</li>
                     <li><b>SJ faqat ba'zi sahifalarda bor.</b> Bu to'g'ri: tugma faqat «Dars jadvali» bo'limida (<code>/v2/schedules…</code>) chiqadi, jurnal va hisobotlarda xalaqit bermaydi.</li>
                     <li><b>Eski versiya turibdi.</b> Tampermonkey → Boshqaruv paneli → skript qatorida «Yangilanishlarni tekshirish». Yoki yuqoridagi «🧩 Skriptni o'rnatish» ni qayta bosing — ustidan yangilanadi.</li>
                   </>

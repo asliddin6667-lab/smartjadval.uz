@@ -20,6 +20,7 @@ import { swapActive, swapSides, swapTeacherHours } from "../utils/swapGroups";
 import { homeroomIdOf } from "../utils/homeroom";
 import { homeroomTakesSubject } from "../utils/homeroomSubjects";
 import { isFixedMondaySubject } from "../utils/scheduleCore";
+import { matchSubgroup } from "../utils/emaktabNames";
 import "../styles/cs-mobile.css";
 
 function teacherSubjectIds(teacher) {
@@ -354,6 +355,53 @@ export default function ClassSubjectsPage({ classes, subjects, setSubjects, teac
   }, [classes, selectedClassId]);
 
   const selectedClass = classes.find(c => c.id === selectedClassId);
+  // eMaktab'dan import qilingan O'QUV GURUHLARI («bollar», «qizlar»…).
+  // «2 guruhga bo'lish» da guruh nomi shulardan tanlansa ko'prik darsni
+  // aynan o'sha guruhga yozadi; nom mos kelmasa dars butun sinfga
+  // tushadi va ikkinchi guruh rad etiladi (jonli maktab, 09.11.2026).
+  const emkGuruhlar = Array.isArray(selectedClass?.emaktabSubgroups) ? selectedClass.emaktabSubgroups : null;
+  const EMK_GURUH_LIST = "sj-emk-guruhlar";
+  // Guruh nomi eMaktab guruhlaridan biriga mos keladimi? (null — tekshirib bo'lmaydi)
+  const emkGuruhMos = (nom) => (emkGuruhlar && emkGuruhlar.length ? !!matchSubgroup(nom, emkGuruhlar) : null);
+  // Nom maydoni ostidagi qisqa holat yozuvi
+  const emkGuruhIzoh = (nom) => {
+    const mos = emkGuruhMos(nom);
+    if (mos === null) return null;
+    return mos
+      ? <span className="cs-emk-gmos cs-emk-gmos-ok">✔ eMaktab guruhi</span>
+      : <span className="cs-emk-gmos cs-emk-gmos-yoq" title="Yuklashda bu dars butun sinfga tushadi. Nomni eMaktab'dagi guruh nomiga moslang.">⚠ eMaktab'da bunday guruh yo'q</span>;
+  };
+  // Bo'lim sarlavhasi ostidagi eslatma: eMaktab'da qaysi guruhlar bor
+  // va ularni bir bosishda nomlarga ko'chirish tugmasi.
+  const emkGuruhPanel = (a, subjectId) => {
+    if (!emkGuruhlar) return null;
+    if (!emkGuruhlar.length) {
+      return (
+        <div className="cs-split-note cs-emk-gpanel">
+          ⚠ eMaktab'da <b>{selectedClass?.name}</b> sinfiga o'quv guruhlari sozlanmagan — guruhli dars eMaktab'ga
+          butun sinf bo'lib tushadi. eMaktab → Sinflar → {selectedClass?.name} → «O'quv guruhlari» → «Guruhni yaratish».
+        </div>
+      );
+    }
+    const n1 = a.groupName1 || "1-guruh", n2 = a.groupName2 || "2-guruh";
+    const hammasiMos = emkGuruhMos(n1) && emkGuruhMos(n2);
+    return (
+      <div className="cs-split-note cs-emk-gpanel">
+        🏫 eMaktab'da bu sinf guruhlari:{" "}
+        {emkGuruhlar.map((g, i) => (
+          <span key={g.id || g.name}>{i > 0 ? ", " : ""}<b>{g.name}</b>{g.students ? ` (${g.students})` : ""}</span>
+        ))}
+        {!hammasiMos && emkGuruhlar.length >= 2 && (
+          <button type="button" className="btn btn-sm btn-secondary cs-emk-gbtn"
+            title="1-guruh va 2-guruh nomlarini eMaktab'dagi guruh nomlari bilan almashtiradi"
+            onClick={() => updateAssignment(subjectId, { groupName1: emkGuruhlar[0].name, groupName2: emkGuruhlar[1].name })}>
+            eMaktab nomlarini olish
+          </button>
+        )}
+        {hammasiMos && <span className="cs-emk-gmos cs-emk-gmos-ok" style={{ marginLeft: 8 }}>✔ nomlar mos</span>}
+      </div>
+    );
+  };
   const assignments = classSubjects[selectedClassId] || [];
 
   // ——— Alifbo tartibidagi umumiy ro'yxatlar ———
@@ -1901,6 +1949,12 @@ Fan bilan birga ular ham o'chsinmi?`;
 
   return (
     <div>
+      {/* eMaktab o'quv guruhlari nomlari — guruh nomi maydonlarida taklif sifatida chiqadi */}
+      {emkGuruhlar?.length > 0 && (
+        <datalist id={EMK_GURUH_LIST}>
+          {emkGuruhlar.map((g) => <option key={g.id || g.name} value={g.name} />)}
+        </datalist>
+      )}
       <div className="page-header">
         <div>
           <div className="page-title">Sinf fanlari</div>
@@ -2263,13 +2317,15 @@ Fan bilan birga ular ham o'chsinmi?`;
                             {a.splitEnabled && !a.levelGroupEnabled && (
                               <div className="cs-detail" style={{ background: "var(--content-bg)" }}>
                                 <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>✂️ 2 guruhga bo'lish</div>
+                                {emkGuruhPanel(a, s.id)}
                                 <div className="cs-split-groups">
                                   {/* ——— 1-guruh ——— */}
                                   <div className="cs-split-card cs-split-card-1">
                                     <div className="cs-split-head"><span className="cs-split-num">1</span> 1-guruh</div>
                                     <div className="cs-split-field">
                                       <span className="cs-split-label">Guruh nomi</span>
-                                      <input className="form-control" placeholder="1-guruh" value={a.groupName1 || "1-guruh"} onChange={e => updateAssignment(s.id, { groupName1: e.target.value })} />
+                                      <input className="form-control" list={emkGuruhlar?.length ? EMK_GURUH_LIST : undefined} placeholder="1-guruh" value={a.groupName1 || "1-guruh"} onChange={e => updateAssignment(s.id, { groupName1: e.target.value })} />
+                                      {emkGuruhIzoh(a.groupName1 || "1-guruh")}
                                     </div>
                                     {/* Almashinuvda ustoz/xona SOATMA-SOAT tanlanadi —
                                         pastdagi «almashinuv jadvali»da */}
@@ -2298,7 +2354,8 @@ Fan bilan birga ular ham o'chsinmi?`;
                                     <div className="cs-split-head"><span className="cs-split-num">2</span> 2-guruh</div>
                                     <div className="cs-split-field">
                                       <span className="cs-split-label">Guruh nomi</span>
-                                      <input className="form-control" placeholder="2-guruh" value={a.groupName2 || "2-guruh"} onChange={e => updateAssignment(s.id, { groupName2: e.target.value })} />
+                                      <input className="form-control" list={emkGuruhlar?.length ? EMK_GURUH_LIST : undefined} placeholder="2-guruh" value={a.groupName2 || "2-guruh"} onChange={e => updateAssignment(s.id, { groupName2: e.target.value })} />
+                                      {emkGuruhIzoh(a.groupName2 || "2-guruh")}
                                     </div>
                                     {!a.swapEnabled ? (
                                       <>
@@ -2552,10 +2609,12 @@ Fan bilan birga ular ham o'chsinmi?`;
                                       <span className="cs-split-label">Guruh nomi</span>
                                       <input
                                         className="form-control"
+                                        list={emkGuruhlar?.length ? EMK_GURUH_LIST : undefined}
                                         placeholder={`${num}-guruh`}
                                         value={g.name}
                                         onChange={e => setGroup(g, { name: e.target.value })}
                                       />
+                                      {emkGuruhIzoh(g.name)}
                                     </div>
                                     <div className="cs-split-field">
                                       <span className="cs-split-label">📚 Fan</span>
@@ -2650,6 +2709,7 @@ Fan bilan birga ular ham o'chsinmi?`;
                                   </div>
                                 </div>
 
+                                {emkGuruhPanel(a, s.id)}
                                 <div className="cs-split-groups" style={{ marginTop: 12 }}>
                                   {/* ——— 1-guruh: qatorning o'z fani, parallel sinflarda DOIM umumiy ——— */}
                                   <div className="cs-split-card cs-split-card-1">
@@ -2660,7 +2720,8 @@ Fan bilan birga ular ham o'chsinmi?`;
                                     </div>
                                     <div className="cs-split-field">
                                       <span className="cs-split-label">Guruh nomi</span>
-                                      <input className="form-control" placeholder="1-guruh" value={a.groupName1 || "1-guruh"} onChange={e => updateAssignment(s.id, { groupName1: e.target.value })} />
+                                      <input className="form-control" list={emkGuruhlar?.length ? EMK_GURUH_LIST : undefined} placeholder="1-guruh" value={a.groupName1 || "1-guruh"} onChange={e => updateAssignment(s.id, { groupName1: e.target.value })} />
+                                      {emkGuruhIzoh(a.groupName1 || "1-guruh")}
                                     </div>
                                     <div className="cs-split-field">
                                       <span className="cs-split-label">👨‍🏫 Ustoz</span>
