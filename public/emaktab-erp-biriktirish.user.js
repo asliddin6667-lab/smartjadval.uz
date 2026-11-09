@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         eMaktab ↔ ERP.MAKTAB.UZ o'quvchilarni biriktirish
 // @namespace    https://smartjadval.uz/
-// @version      0.4.5
-// @description  eMaktab «Maktab shaxslarini ERP.MAKTAB.UZ bilan biriktirish» sahifasida o'quvchilarni avtomatik bog'laydi: sinf raqami bir xil ERP sinflaridan ism-familiya + tug'ilgan sana bo'yicha topadi, tasdiqlaydi; ikkala tomonda bog'lanmaganlarni Excel qiladi
+// @version      0.4.7
+// @description  eMaktab «Maktab shaxslarini ERP.MAKTAB.UZ bilan biriktirish» sahifasida o'quvchilarni avtomatik bog'laydi: sinf raqami bir xil ERP sinflaridan ism-familiya (lotin yoki KIRILL) + tug'ilgan sana bo'yicha topadi, tasdiqlaydi; ikkala tomonda bog'lanmaganlarni Excel qiladi
 // @author       smartjadval.uz
 // @match        https://emaktab.uz/manual-erp-persons-mapping*
 // @match        https://*.emaktab.uz/manual-erp-persons-mapping*
@@ -36,7 +36,7 @@
 //    • Har qator: CHAPDA eMaktab o'quvchisi (F.I.O, Sinf, tug'ilgan sana,
 //      jins, JSHSHIR, Foydalanuvchi, Login); O'NGDA «Biriltirish uchun mos
 //      talabani tanlang» ro'yxati (TANLANGAN ERP sinfidagi talabalar, F.I.O
-//      KATTA HARFDA). Talaba tanlangach o'ngda uning Sinf / tug'ilgan sana /
+//      KATTA HARFDA, lotin yoki KIRILL). Talaba tanlangach o'ngda uning Sinf / tug'ilgan sana /
 //      jins / JSHSHIR chiqadi va «Birikmani tasdiqlash» / «Asliga qaytarish»
 //      tugmalari paydo bo'ladi.
 //
@@ -70,7 +70,7 @@
   const HOST_ID = "sj-erp-birik-host";
   if (document.getElementById(HOST_ID)) return;
   const W = (typeof unsafeWindow !== "undefined" && unsafeWindow) || window;
-  const VERSIYA = (typeof GM_info !== "undefined" && GM_info && GM_info.script && GM_info.script.version) || "0.4.5";
+  const VERSIYA = (typeof GM_info !== "undefined" && GM_info && GM_info.script && GM_info.script.version) || "0.4.7";
 
   const LS = {
     ochiq: "sj_erpb_panel_ochiq",
@@ -174,10 +174,23 @@
     ў:"o",қ:"q",ғ:"g",ҳ:"h",ҷ:"j",
   };
   const APOS = /['‘’ʻʼ´`]/g;
+  // ⚠️ 0.4.6 (05.11.2026 skrinshot): ERP ro'yxati endi KIRILLDA chiqadi
+  //  («ТИЛАБОЛДИЕВА КИМЁХОН ЖУМАНАЗАР ҚИЗИ»), eMaktab esa lotinda
+  //  («Tilaboldiyeva Kimyoxon Jumanazar qizi»). O'zbek kirillida UNLIDAN
+  //  KEYINGI «е» lotinda «ye» («Алиев» → Aliyev, «Тилаболдиева» →
+  //  Tilaboldiyeva, «Зиёев» → Ziyoyev) — shu qoida qo'shildi, aks holda
+  //  bunday ismlar «to'liq» emas, «o'xshash 97%» chiqardi. So'z boshidagi
+  //  «Е» ataylab «e» qoldirildi: «Елдор/Eldor», «Ергашев/Ergashev» keng
+  //  tarqalgan, «Yelena» kam.
+  const KIR_UNLI = "аеёиоуўэюя";
   function normKey(raw) {
     const s = String(raw == null ? "" : raw).toLowerCase().replace(APOS, "");
-    let out = "";
-    for (const ch of s) out += Object.prototype.hasOwnProperty.call(CYR, ch) ? CYR[ch] : ch;
+    let out = "", oldingi = "";
+    for (const ch of s) {
+      if (ch === "е" && oldingi && KIR_UNLI.includes(oldingi)) out += "ye";
+      else out += Object.prototype.hasOwnProperty.call(CYR, ch) ? CYR[ch] : ch;
+      oldingi = ch;
+    }
     return out.replace(/[^a-z0-9]/g, "");
   }
   // Ism kalitlari: toliq (hamma so'z), qisqa (familiya+ism), tartibsiz (so'zlar
@@ -503,6 +516,7 @@
     //  bo'lishi mumkin; hodisa yuqoriga ko'tariladi, pastga emas)
     let ichki = el;
     for (;;) { const b = [...ichki.children].find((ch) => txt(ch) === txt(el)); if (!b) break; ichki = b; }
+    sichqon(ichki, ["pointerover", "mouseover", "pointermove", "mousemove"]);
     sichqon(ichki);
     const ok = await waitFor(() => normKey(vidjetQiymati(w)) === kalit || (!ochiqVariantlar().length && normKey(vidjetQiymati(w)).includes(kalit.slice(0, 6))), 3000, 80);
     if (ochiqVariantlar().length) await menyuYop(w); else OCHIQ = null;
@@ -637,7 +651,7 @@
     const sinf = (t.match(/Sinf:\s*(.+?)\s+(?=\d{2}\.\d{2}\.\d{4}|JSHSHIR)/i) || [])[1] || "";
     const jins = /ayol/i.test(t) ? "ayol" : (/erkak/i.test(t) ? "erkak" : "");
     // ERP F.I.O — vidjet qiymati; bog'langan kartada katta harfli sarlavha
-    const erpFio = sel ? vidjetQiymati(sel) : ((t.match(/([A-ZА-Я`'‘’ʻ\s]{8,}?)\s+(?:o[‘'`ʻ]?quvchi|Sinf:)/) || [])[1] || "").trim();
+    const erpFio = sel ? vidjetQiymati(sel) : ((t.match(/([A-ZА-ЯЁЎҚҒҲ`'‘’ʻ\s]{8,}?)\s+(?:o[‘'`ʻ]?quvchi|Sinf:)/) || [])[1] || "").trim();
     const bogli = /erp-linked|erp-mapped/i.test((ong.getAttribute && ong.getAttribute("data-test-id")) || "");
     let holat = "biriktirilgan";
     if (tasdiq) holat = "tanlangan";
@@ -749,6 +763,8 @@
   }
 
   let TASHXIS_SONI = 0;
+  // Shu yurishda JONLI o'qilgan ERP sinflari (kesh emas)
+  let TAZA = new Set();
   // Qatorda nomzodni tanlab, o'ng kartada uning ma'lumoti va «tasdiqlash»
   //  tugmasi chiqishini kutish. Qaytadi: { r2, tanlandi, izoh }.
   async function tanlabKut(kalit, erpNom) {
@@ -799,7 +815,9 @@
   //  tanlab ko'riladi: sana (va jins) mos kelgani tasdiqlanadi, qolganlari
   //  «Asliga qaytarish» bilan qaytariladi.
   //  Qaytadi: "tasdiq" | "sinov" | "sana" | "yoq" | "kop" | "xato:…"
-  async function bolaniBirik(r, erpNomlar, E, opt) {
+  //  barchaNomlar — shu RAQAMDAGI hamma ko'rilgan ERP sinfining talabalari
+  //  (yagonalik tekshiruvi uchun; bo'lmasa shu sinf ro'yxati).
+  async function bolaniBirik(r, erpNomlar, E, opt, barchaNomlar) {
     const c = r.chap;
     const nz = nomzodlar(c.fio, erpNomlar, opt.chegara);
     if (!nz.ro.length) return { kod: "yoq" };
@@ -821,7 +839,7 @@
       const r2 = t.r2;
       const erpSana = r2.ong.sana;
       const sanaMos = !!(c.sana && erpSana && sanaNorm(c.sana) === sanaNorm(erpSana));
-      const jinsMos = !(c.jins && r2.ong.jins && c.jins !== r2.ong.jins);
+      const jinsFarq = !!(c.jins && r2.ong.jins && c.jins !== r2.ong.jins);
       const moslik = nz.daraja === "to'liq" ? "to'liq" : `o'xshash ${Math.round(nomzod.ball * 100)}%`;
       const yoz = { emkFio: c.fio, emkSinf: c.sinf, emkSana: c.sana, emkJins: c.jins, emkLogin: c.login, emkPinfl: c.pinfl,
         erpFio: erpNom, erpSinf: r2.ong.sinf || E.nom, erpSana, erpPinfl: r2.ong.pinfl, erpJins: r2.ong.jins, moslik, vaqt: bugun() };
@@ -836,16 +854,35 @@
       //  sanada kun ham, oy ham farq). «Ism aniq» = to'liq moslik YOKI
       //  o'xshashlik ≥ 95%; ikkala tomonda otasining ismi yozilgan; shunday
       //  nomzod BITTA. Sana: bitta qism farq YOKI yil bir xil (kun/oy farq).
-      const aniqlar = nz.daraja === "to'liq" ? nz.ro : nz.ro.filter((x) => x.ball >= 0.95);
-      const ismAniq = aniqlar.length === 1 && (nz.daraja === "to'liq" || nomzod.ball >= 0.95)
-        && ismKalit(c.fio).sozlar.length >= 3 && ismKalit(erpNom).sozlar.length >= 3;
+      // ⚠️ 0.4.7 (05.11.2026 jurnali):
+      //  • «Zayniddinov Javlonbek» (sharifsiz) ↔ «ZAYNIDDINOV JAVLONBEK TOLIBJON
+      //    O`G`LI» 27.01 ↔ 28.01, «Olimov Muhammadaziz» 02.09 ↔ 02.08,
+      //    «Sohibjonov Odiljon» 10.08 ↔ 12.08 — eMaktabda otasining ismi
+      //    yozilmagan, shuning uchun 0.4.5 qoidasi (sharif majburiy) ishlamadi.
+      //    Endi sharif bo'lmasa HARFMA-HARF (qattiq) o'xshashlik ≥ 95% yetadi.
+      //  • Yagonalik shu SINF emas, shu RAQAMDAGI HAMMA ko'rilgan ERP sinfi
+      //    bo'yicha tekshiriladi (boshqa sinfda ham shu ismli bola bo'lmasin).
+      //  • «Ergashev Muhammadqodir Ikromjon o`g`li» ↔ «ERGASHEV … O`G`LI» to'liq,
+      //    sana bir xil, lekin ERPda «ayol»; «Baxtiyorjonova Marjona» eMaktabda
+      //    «erkak» — jins birida xato kiritilgan. Ism harfma-harf ≥ 85% + sana
+      //    aynan mos + yagona bo'lsa jins farqi o'tkaziladi (belgi bilan),
+      //    Excelda «jins farqi» deb yoziladi. 92% (Bahtilaxon ↔ Baxtiyorjon,
+      //    egizaklar) qattiq kalitda ~68%, o'tmaydi.
+      const qattiqBall = nz.daraja === "to'liq" ? 1 : (nomzod.qattiq || 0);
+      const yagona = !(barchaNomlar || erpNomlar).some((n) => n !== erpNom && oxshashlik(c.fio, n).ball >= 0.95);
+      const sharifBor = ismKalit(c.fio).sozlar.length >= 3 && ismKalit(erpNom).sozlar.length >= 3;
+      const ismAniq = yagona && (nz.daraja === "to'liq" || nomzod.ball >= 0.95) && (sharifBor || qattiqBall >= 0.95);
       const sanaYaqin = !sanaMos && opt.sanaBirFarq && ismAniq && sanaYaqinmi(c.sana, erpSana);
-      const qabul = jinsMos && (sanaMos || sanaYaqin || (nz.daraja === "to'liq" && !opt.sanaShart));
+      const jinsOtib = jinsFarq && !!opt.jinsOtib && sanaMos && yagona && qattiqBall >= 0.85;
+      const qabul = (!jinsFarq || jinsOtib) && (sanaMos || sanaYaqin || (nz.daraja === "to'liq" && !opt.sanaShart));
       if (qabul) {
-        const sabab = sanaMos ? "" : (sanaYaqin
-          ? `sana farqi: eMaktab ${sanaNorm(c.sana)} ↔ ERP ${sanaNorm(erpSana)} — ism (sharif bilan) mos (${moslik}), sanada ${bitQismFarq(c.sana, erpSana) ? "bitta qism" : "kun va oy"} farq qiladi`
-          : "sana shart emas rejimi — faqat to'liq ism bo'yicha");
-        const sanaTuzatKerak = sanaYaqin && opt.sanaTuzat;
+        const sabab = [
+          sanaMos ? "" : (sanaYaqin
+            ? `sana farqi: eMaktab ${sanaNorm(c.sana)} ↔ ERP ${sanaNorm(erpSana)} — ism ${sharifBor ? "(sharif bilan) " : ""}mos (${moslik}), shu raqamli ERP sinflarida yagona, sanada ${bitQismFarq(c.sana, erpSana) ? "bitta qism" : "kun va oy"} farq qiladi`
+            : `sana farqi: eMaktab ${sanaNorm(c.sana) || "?"} ↔ ERP ${sanaNorm(erpSana) || "?"} — «sana shart emas» rejimi, to'liq ism bo'yicha`),
+          jinsOtib ? `jins farqi: eMaktab ${c.jins} ↔ ERP ${r2.ong.jins} — ism (${moslik}) va tug'ilgan sana aynan mos, jins birida xato kiritilgan (tekshiring)` : "",
+        ].filter(Boolean).join(" · ");
+        const sanaTuzatKerak = !sanaMos && !!opt.sanaTuzat && !!(c.sana && erpSana);
         if (opt.sinov) {
           await asligaQaytar(r2);
           return { kod: "sinov", yoz: { ...yoz, sabab: sabab + (sanaTuzatKerak ? ` · SINOV: eMaktab sanasi ${sanaNorm(c.sana)} → ${sanaNorm(erpSana)} qilinadi` : "") } };
@@ -866,7 +903,7 @@
         if (!ketdi) return { kod: "xato: «tasdiqlash» bosildi, lekin qator o'zgarmadi" + (xabar ? " — " + cut(xabar, 200) : ""), yoz };
         return { kod: "tasdiq", yoz: { ...yoz, sabab: sabab + tuzatIzoh, xabar } };
       }
-      sinalgan.push(`${erpNom} [${moslik}] — ERP sana ${erpSana || "?"}${jinsMos ? "" : ", jinsi " + (r2.ong.jins || "?")}`);
+      sinalgan.push(`${erpNom} [${moslik}] — ERP sana ${erpSana || "?"}${jinsFarq ? ", jinsi " + (r2.ong.jins || "?") : ""}${!yagona ? ", shu raqamda yana o'xshash ism bor" : ""}`);
       oxirgi = yoz;
       await asligaQaytar(r2);
     }
@@ -886,9 +923,18 @@
   //      ≥ chegara o'xshash ism bor;
   //   4) ERP sinfi faqat unda nomzodi bor qatorlar uchun tanlanadi; o'sha
   //      sahifada kerakli qatorlar topilib tasdiqlanadi.
+  //  ⚠️ 0.4.7 (05.11.2026 jurnali: 118 sinf 4 daqiqada «o'tdi», 365 topilmadi,
+  //  «ro'yxatdan «YAXYOXONOV …» tanlanmadi», Tilaboldiyeva ERP 11-D da bor
+  //  edi, lekin ko'rilmadi). Sabab: ERP ro'yxatlari ESKI KESHDAN (2183 talaba,
+  //  oldingi yurishlar, lotin yozuvida) olingan, jonli sahifa esa o'zgargan
+  //  (kirillga o'tgan, bog'langanlar chiqib ketgan, yangi bolalar qo'shilgan).
+  //  Endi kesh faqat DASTLABKI reja uchun; ERP sinfi sahifada tanlangach
+  //  ro'yxat shu yurishda bir marta JONLI qayta o'qiladi va reja yangilanadi.
+  //  Nomzodi bo'lmagan ERP sinfi ham, topilmagan bola qolgan bo'lsa, jonli
+  //  o'qiladi. Kesh «ERP bog'lanmagan» hisoboti va keyingi yurish uchun qoladi.
   async function yur(opt) {
     HOLAT.toxtat = false; HOLAT.ishlayapti = true;
-    N.boglanmagan = []; N.shubhali = []; N.sinfJurnali = []; N.erpBiriktirilgan = []; TASHXIS_SONI = 0;
+    N.boglanmagan = []; N.shubhali = []; N.sinfJurnali = []; N.erpBiriktirilgan = []; TASHXIS_SONI = 0; TAZA = new Set();
     if (!opt.keshSaqla) N.erpTalabalar = {};
     N.biriktirildi = N.biriktirildi.filter((b) => !b.sinov);
     const filiallar = filialXarita(opt.filialMatni);
@@ -900,6 +946,9 @@
     if (opt.sinov) emkRo = emkRo.slice(0, opt.sinovSinf || 2);
     log(`▶ ${emkRo.length} eMaktab sinfi ${opt.sinov ? "SINOV (faqat dastlabki " + emkRo.length + " sinf, hech narsa tasdiqlanmaydi)" : "haqiqiy yurish"}`, "ok");
     const erpQisqa = (E) => E.nom.split("(")[0].trim() + (E.filial ? "[" + E.filial.toUpperCase() + "]" : "");
+    // Jurnal uchun: «sana farqi: … — …» / «jins farqi: … — …» dan qisqa qismi + to'g'rilash izohi
+    const farqIzoh = (sabab) => String(sabab || "").split(" · ").filter(Boolean)
+      .map((q) => /^(sana|jins) farqi/.test(q) ? " · ⚠ " + q.split(" — ")[0] : " · " + q).join("");
     const t0 = Date.now();
     let jamiTasdiq = 0;
 
@@ -932,43 +981,54 @@
       if (!qatorlarC.size) { log(`＝ ${C.nom}: bog'lanmagan o'quvchi yo'q`, "dim"); N.sinfJurnali.push({ emk: C.nom, erp: "", izoh: "bog'lanmagan yo'q" }); continue; }
       log(`🏫 ${C.nom}: bog'lanmagan ${kutilgan >= 0 ? kutilgan : "?"} (o'qildi ${qatorlarC.size})`, "dim");
 
-      // 2) ERP ro'yxatlari — shu raqam uchun bir marta (keshda bo'lsa o'qilmaydi)
-      for (const E of tartib) {
-        if (N.erpTalabalar[E.nom] && N.erpTalabalar[E.nom].length) continue;
-        toxta();
-        holatYoz(`ERP «${erpQisqa(E)}» ro'yxati o'qilmoqda…`);
-        if (!(await variantTanla(erpSinfVidjet(), E.nom))) { log(`✖ ERP «${E.nom}» ro'yxatdan tanlanmadi`, "xato"); continue; }
-        await barqaror(150, 8000);
-        const birRo = await waitFor(() => qatorlarniOqi().find((r) => r.ong.sel), 4000, 150);
-        const nomlar = birRo ? (await variantlarniOqi(birRo.ong.sel)) || [] : [];
-        N.erpTalabalar[E.nom] = nomlar.filter((nm) => !/kiriting/i.test(nm));
-        log(`   ERP «${erpQisqa(E)}»: ${N.erpTalabalar[E.nom].length} talaba${N.erpTalabalar[E.nom].length ? "" : " (ro'yxat o'qilmadi)"}`, N.erpTalabalar[E.nom].length ? "dim" : "ogoh");
-      }
-      natijaSaqla();
-
-      // 3) Har qator uchun nomzodlar — qaysi ERP sinfida (xotirada, tez)
-      const reja = new Map();        // E.nom → [kalit]
-      qatorlarC.forEach((chap, kalit) => {
-        tartib.forEach((E) => {
-          const ro = N.erpTalabalar[E.nom] || [];
-          if (ro.length && nomzodlar(chap.fio, ro, opt.chegara).ro.length) { if (!reja.has(E.nom)) reja.set(E.nom, []); reja.get(E.nom).push(kalit); }
-        });
-      });
-      const nomzodli = new Set([...reja.values()].flat());
-      log(`   nomzodi bor: ${nomzodli.size}/${qatorlarC.size} qator, ERP sinflari: ${[...reja.keys()].map((n) => n.split("(")[0].trim()).join(", ") || "yo'q"}`, "dim");
-
-      // 4) Kerakli ERP sinflari bo'yicha bajarish
+      // 2) ERP ro'yxatlari — keshdan DASTLABKI reja (jonli tekshiruv 4-qadamda)
+      const ro = (E) => N.erpTalabalar[E.nom] || [];
+      const barchaNomlar = () => tartib.flatMap(ro);
       const topildi = new Set();
       const qoldi = new Map(qatorlarC);
+      // Shu ERP sinfida nomzodi bor, hali bajarilmagan qatorlar
+      const nomzodliKalitlar = (E) => ro(E).length ? [...qatorlarC.keys()].filter((k) => !topildi.has(k) && nomzodlar(qatorlarC.get(k).fio, ro(E), opt.chegara).ro.length) : [];
+      {
+        const rejali = tartib.filter((E) => nomzodliKalitlar(E).length);
+        const nomzodli = new Set(rejali.flatMap((E) => nomzodliKalitlar(E)));
+        const keshsiz = tartib.filter((E) => !ro(E).length).length;
+        log(`   keshdan nomzodi bor: ${nomzodli.size}/${qatorlarC.size} qator (ERP: ${rejali.map(erpQisqa).join(", ") || "yo'q"})${keshsiz ? `, ${keshsiz} ERP sinfi keshda yo'q` : ""} — jonli ro'yxat bilan qayta tekshiriladi`, "dim");
+      }
+
+      // 3) Jonli ro'yxat: ERP sinfi tanlangan sahifada birinchi qatorning
+      //    ro'yxatidan o'qiladi, kesh yangilanadi. Qaytadi: o'zgardimi
+      async function jonliOqi(E) {
+        const birRo = await waitFor(() => qatorlarniOqi().find((r) => r.ong.sel), 4000, 150);
+        const nomlar = birRo ? ((await variantlarniOqi(birRo.ong.sel)) || []).filter((nm) => !/kiriting/i.test(nm)) : [];
+        const eski = ro(E);
+        TAZA.add(E.nom);
+        if (!nomlar.length) { log(`   ERP «${erpQisqa(E)}»: jonli ro'yxat o'qilmadi (bo'sh)${eski.length ? ` — kesh (${eski.length}) saqlanib qoldi` : ""}`, "ogoh"); return false; }
+        const ozgardi = eski.length !== nomlar.length || eski.some((n, i) => n !== nomlar[i]);
+        N.erpTalabalar[E.nom] = nomlar; natijaSaqla();
+        log(`   ERP «${erpQisqa(E)}»: ${nomlar.length} talaba (jonli)${ozgardi && eski.length ? ` — kesh eskirgan edi (${eski.length})` : ""}`, "dim");
+        return ozgardi;
+      }
+
+      // 4) Har ERP sinfi: tanlanadi, ro'yxati jonli o'qiladi (shu yurishda bir
+      //    marta), nomzodi bor qatorlar shu sahifada topilib tasdiqlanadi.
+      //    Jonli o'qilgan va nomzodi yo'q sinf, yoki topilmagan bola qolmagan
+      //    bo'lsa — o'tkazib yuboriladi.
       for (const E of tartib) {
-        const kalitlar = (reja.get(E.nom) || []).filter((k) => !topildi.has(k));
-        if (!kalitlar.length) continue;
+        let kalitlar = nomzodliKalitlar(E);
+        if (!kalitlar.length && (TAZA.has(E.nom) || !qoldi.size)) continue;
         toxta();
-        holatYoz(`${C.nom} ← ERP ${erpQisqa(E)}: ${kalitlar.length} nomzod…`);
+        holatYoz(`${C.nom} ← ERP ${erpQisqa(E)}: ${kalitlar.length ? kalitlar.length + " nomzod…" : "ro'yxat jonli o'qilmoqda…"}`);
         if (!(await variantTanla(erpSinfVidjet(), E.nom))) { log(`✖ ${C.nom}: ERP «${E.nom}» ro'yxatdan tanlanmadi`, "xato"); continue; }
         await barqaror(150, 8000);
         await birinchiSahifa();
-        const ro = N.erpTalabalar[E.nom] || [];
+        if (!TAZA.has(E.nom)) {
+          toxta();
+          await jonliOqi(E);
+          const yangi = nomzodliKalitlar(E);
+          if (yangi.length !== kalitlar.length) log(`   ${C.nom} ← ERP ${erpQisqa(E)}: nomzodlar ${kalitlar.length} → ${yangi.length}`, "dim");
+          kalitlar = yangi;
+        }
+        if (!kalitlar.length) continue;
         const kerak = new Set(kalitlar);
         for (let tur = 0; tur < 300 && kerak.size; tur++) {
           toxta();
@@ -980,15 +1040,15 @@
             toxta();
             const r = qatorTop(kalit); if (!r) continue;
             let res;
-            try { res = await bolaniBirik(r, ro, E, opt); }
+            try { res = await bolaniBirik(r, ro(E), E, opt, barchaNomlar()); }
             catch (err) { if (err.message === TOXTATILDI) throw err; res = { kod: "xato: " + err.message }; }
             kerak.delete(kalit);
             const belgi = `${r.chap.fio} (${r.chap.sana || "sana yo'q"})`;
             if (res.kod === "yoq") continue;
             if (res.kod === "kop") { N.shubhali.push({ emkFio: r.chap.fio, emkSinf: r.chap.sinf, emkSana: r.chap.sana, emkLogin: r.chap.login, erpSinf: E.nom, sabab: res.izoh }); topildi.add(kalit); qoldi.delete(kalit); log(`⚠ ${belgi} — ${res.izoh}`, "ogoh"); continue; }
             if (res.kod === "sana") { N.shubhali.push({ ...res.yoz }); topildi.add(kalit); qoldi.delete(kalit); log(`⚠ ${belgi} ↔ ${res.yoz.erpFio} — ${res.yoz.sabab}`, "ogoh"); continue; }
-            if (res.kod === "sinov") { N.biriktirildi.push({ ...res.yoz, sinov: true }); topildi.add(kalit); qoldi.delete(kalit); log(`✔ (sinov) ${belgi} ↔ ${res.yoz.erpFio} [${res.yoz.erpSinf}] ${res.yoz.erpSana}${res.yoz.moslik === "to'liq" ? "" : " (" + res.yoz.moslik + ")"}${/^sana farqi/.test(res.yoz.sabab || "") ? " · ⚠ " + res.yoz.sabab.split(" — ")[0] + res.yoz.sabab.split(" · ").slice(1).map((x) => " · " + x).join("") : ""}`, "ok"); continue; }
-            if (res.kod === "tasdiq") { N.biriktirildi.push(res.yoz); N.bajarilgan[kalit] = 1; topildi.add(kalit); qoldi.delete(kalit); tasdiqlandi++; jamiTasdiq++; log(`＋ ${belgi} ↔ ${res.yoz.erpFio} [${res.yoz.erpSinf}] ✔${res.yoz.moslik === "to'liq" ? "" : " (" + res.yoz.moslik + ")"}${/^sana farqi/.test(res.yoz.sabab || "") ? " · ⚠ " + res.yoz.sabab.split(" — ")[0] + res.yoz.sabab.split(" · ").slice(1).map((x) => " · " + x).join("") : ""}${res.yoz.xabar ? " · " + cut(res.yoz.xabar, 120) : ""}`, "ok"); natijaSaqla(); continue; }
+            if (res.kod === "sinov") { N.biriktirildi.push({ ...res.yoz, sinov: true }); topildi.add(kalit); qoldi.delete(kalit); log(`✔ (sinov) ${belgi} ↔ ${res.yoz.erpFio} [${res.yoz.erpSinf}] ${res.yoz.erpSana}${res.yoz.moslik === "to'liq" ? "" : " (" + res.yoz.moslik + ")"}${farqIzoh(res.yoz.sabab)}`, "ok"); continue; }
+            if (res.kod === "tasdiq") { N.biriktirildi.push(res.yoz); N.bajarilgan[kalit] = 1; topildi.add(kalit); qoldi.delete(kalit); tasdiqlandi++; jamiTasdiq++; N.erpTalabalar[E.nom] = ro(E).filter((n) => n !== res.yoz.erpFio); log(`＋ ${belgi} ↔ ${res.yoz.erpFio} [${res.yoz.erpSinf}] ✔${res.yoz.moslik === "to'liq" ? "" : " (" + res.yoz.moslik + ")"}${farqIzoh(res.yoz.sabab)}${res.yoz.xabar ? " · " + cut(res.yoz.xabar, 120) : ""}`, "ok"); natijaSaqla(); continue; }
             log(`✖ ${belgi} — ${res.kod}`, "xato");
             if (res.izoh && res.izoh.length) log("   " + res.izoh.join("\n   "), "dim");
             N.shubhali.push({ emkFio: r.chap.fio, emkSinf: r.chap.sinf, emkSana: r.chap.sana, emkLogin: r.chap.login, erpSinf: E.nom, erpFio: res.yoz ? res.yoz.erpFio : "", sabab: res.kod });
@@ -1256,12 +1316,15 @@
           <label><input type="checkbox" id="sanaShart" checked> tug'ilgan sana mos bo'lishi SHART</label>
         </div>
         <div class="qator">
-          <label><input type="checkbox" id="sanaBirFarq" checked> ism (sharif bilan) mos yoki ≥95% o'xshash bo'lsa, sanada bitta farq (kun/oy/yil) yoki yil bir xil bo'lsa ham biriktirilsin</label>
+          <label><input type="checkbox" id="sanaBirFarq" checked> ism mos yoki ≥95% o'xshash va shu raqamli ERP sinflarida yagona bo'lsa, sanada bitta farq (kun/oy/yil) yoki yil bir xil bo'lsa ham biriktirilsin</label>
         </div>
         <div class="qator">
-          <label><input type="checkbox" id="sanaTuzat" checked> shunda eMaktabdagi tug'ilgan sana ERP dagidek TO'G'RILANSIN</label>
+          <label><input type="checkbox" id="sanaTuzat" checked> sana farq qilib biriktirilsa eMaktabdagi tug'ilgan sana ERP dagidek TO'G'RILANSIN</label>
+        </div>
+        <div class="qator">
+          <label><input type="checkbox" id="jinsOtib" checked> ism harfma-harf ≥85% va tug'ilgan sana aynan mos, yagona bo'lsa — jinsi farq qilsa ham biriktirilsin (jins birida xato kiritilgan)</label>
           <label><input type="checkbox" id="birikOqi"> oxirida «Biriktirilgan» yorlig'ini o'qish (sekin, faqat ERP hisoboti uchun)</label>
-          <label><input type="checkbox" id="keshSaqla" checked> ERP ro'yxatlari keshini saqlash (qayta yurish tez)</label>
+          <label><input type="checkbox" id="keshSaqla" checked> ERP ro'yxatlari keshini saqlash (dastlabki reja uchun; har yurishda baribir jonli qayta o'qiladi)</label>
         </div>
         <div class="qator">
           <label>faqat sinflar: <input type="text" id="darajalar" placeholder="masalan 1,2,3"></label>
@@ -1331,6 +1394,7 @@
     if (s.sanaShart != null) $("sanaShart").checked = !!s.sanaShart;
     if (s.sanaBirFarq != null) $("sanaBirFarq").checked = !!s.sanaBirFarq;
     if (s.sanaTuzat != null) $("sanaTuzat").checked = !!s.sanaTuzat;
+    if (s.jinsOtib != null) $("jinsOtib").checked = !!s.jinsOtib;
     if (s.birikOqi != null) $("birikOqi").checked = !!s.birikOqi;
     if (s.darajalar != null) $("darajalar").value = s.darajalar;
     if (s.chegara != null) $("chegara").value = s.chegara;
@@ -1338,14 +1402,14 @@
   } catch { /* */ }
   const sozlamaSaqla = () => {
     lsYoz(LS.filial, $("filial").value);
-    lsYoz(LS.sozlama, JSON.stringify({ boshqaFilial: $("boshqaFilial").checked, sanaShart: $("sanaShart").checked, sanaBirFarq: $("sanaBirFarq").checked, sanaTuzat: $("sanaTuzat").checked, birikOqi: $("birikOqi").checked, darajalar: $("darajalar").value, chegara: $("chegara").value, keshSaqla: $("keshSaqla").checked }));
+    lsYoz(LS.sozlama, JSON.stringify({ boshqaFilial: $("boshqaFilial").checked, sanaShart: $("sanaShart").checked, sanaBirFarq: $("sanaBirFarq").checked, sanaTuzat: $("sanaTuzat").checked, jinsOtib: $("jinsOtib").checked, birikOqi: $("birikOqi").checked, darajalar: $("darajalar").value, chegara: $("chegara").value, keshSaqla: $("keshSaqla").checked }));
   };
-  ["filial", "boshqaFilial", "sanaShart", "sanaBirFarq", "sanaTuzat", "birikOqi", "darajalar", "chegara", "keshSaqla"].forEach((id) => { $(id).onchange = sozlamaSaqla; });
+  ["filial", "boshqaFilial", "sanaShart", "sanaBirFarq", "sanaTuzat", "jinsOtib", "birikOqi", "darajalar", "chegara", "keshSaqla"].forEach((id) => { $(id).onchange = sozlamaSaqla; });
 
   $("yur").onclick = async () => {
     if (HOLAT.ishlayapti) return;
     sozlamaSaqla();
-    const opt = { sinov: $("sinov").checked, sanaShart: $("sanaShart").checked, sanaBirFarq: $("sanaBirFarq").checked, sanaTuzat: $("sanaTuzat").checked, boshqaFilial: $("boshqaFilial").checked,
+    const opt = { sinov: $("sinov").checked, sanaShart: $("sanaShart").checked, sanaBirFarq: $("sanaBirFarq").checked, sanaTuzat: $("sanaTuzat").checked, jinsOtib: $("jinsOtib").checked, boshqaFilial: $("boshqaFilial").checked,
       biriktirilganOqi: $("birikOqi").checked, keshSaqla: $("keshSaqla").checked, darajalar: $("darajalar").value, filialMatni: $("filial").value, sinovSinf: 2,
       chegara: Math.min(1, Math.max(0.5, (Number(String($("chegara").value).replace(",", ".")) || 80) / 100)) };
     if (!opt.sinov && !window.confirm("HAQIQIY yurish: topilgan va tug'ilgan sanasi mos o'quvchilar uchun «Birikmani tasdiqlash» bosiladi.\nDavom etilsinmi?")) { log("■ Bekor qilindi", "ogoh"); return; }
