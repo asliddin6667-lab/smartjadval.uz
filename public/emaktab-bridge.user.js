@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Smartjadval → eMaktab ko'prigi
 // @namespace    https://smartjadval.uz/
-// @version      1.16.0
+// @version      1.16.1
 // @description  Smartjadval.uz da tuzilgan dars jadvalini eMaktab (kundalik.com) «Darslar jadvali sxemasi» setkasiga joylashtiradi
 // @author       smartjadval.uz
 // @match        https://schools.emaktab.uz/*
@@ -1656,14 +1656,47 @@
       .filter((el) => /^d[0-6]_\d+$/.test(el.id));
     if (!kataklar.length) return null;
     const band = new Set();
+    // ⚠️ GURUHLI KATAK — «Kichik guruh bollar» + «Kichik guruh qizlar».
+    //  Ilgari katakda bitta narsa tursa butun katak «band» edi: birinchi
+    //  guruh tushib ikkinchisi xato bo'lsa, qayta yurishda ikkinchi guruh
+    //  umuman qo'yilmasdi (katak band). Endi katakdagi guruh nomlari ham
+    //  o'qiladi: `band.guruhlar` = Map("kun_soat" → Set(subgroupKey)).
+    //  Katakda guruhsiz (butun sinf) dars tursa Map'da yozuv bo'lmaydi.
+    band.guruhlar = new Map();
     kataklar.forEach((el) => {
       // Bo'sh katakda faqat «+» qo'shish tugmasi turadi
       if (!txt(el).replace(/[+\s]/g, "")) return;
       const m = el.id.match(/^d([0-6])_(\d+)$/);
       // Sahifada kun 0 = Yakshanba; bizda 7. `kun % 7` bilan mos keladi.
-      band.add(`${Number(m[1]) === 0 ? 7 : Number(m[1])}_${m[2]}`);
+      const key = `${Number(m[1]) === 0 ? 7 : Number(m[1])}_${m[2]}`;
+      band.add(key);
+      // Barg elementlar («Kichik guruh bollar» alohida qatorda turadi)
+      const guruhlar = new Set();
+      el.querySelectorAll("*").forEach((x) => {
+        if (x.children.length) return;
+        const t = txt(x);
+        if (!t || !GURUH_PREFIKS.test(t)) return;
+        const k = subgroupKey(t);
+        if (k) guruhlar.add(k);
+      });
+      if (guruhlar.size) band.guruhlar.set(key, guruhlar);
     });
     return band;
+  }
+
+  // Dars sxemada ALLAQACHON turibdimi?
+  //  - katak bo'sh → yo'q
+  //  - katakda butun sinf darsi → ha (ustiga yozilmaydi)
+  //  - katakda guruh darslari: shu guruh bor → ha; yo'q → yo'q (qo'shiladi);
+  //    guruhsiz dars esa guruhli katakka sig'maydi → ha (o'tkaziladi)
+  function darsJoyida(band, d) {
+    if (!band) return false;
+    const key = `${d.kun}_${d.soat}`;
+    if (!band.has(key)) return false;
+    const g = band.guruhlar ? band.guruhlar.get(key) : null;
+    if (!g || !g.size) return true;
+    if (!d.guruh) return true;
+    return g.has(subgroupKey(d.guruh));
   }
 
   // Formadagi «Nomi» maydoni: nomlangan, ko'rinadigan MATN maydoni.
@@ -2706,7 +2739,7 @@
       return nat;
     }
 
-    const qoldi = sinf.darslar.filter((d) => !band.has(`${d.kun}_${d.soat}`));
+    const qoldi = sinf.darslar.filter((d) => !darsJoyida(band, d));
     nat.oldindan = sinf.darslar.length - qoldi.length;
     if (!qoldi.length) {
       log(`↷ ${sinf.nom} — hamma dars allaqachon joyida (${sinf.darslar.length} ta)`, "dim");
@@ -2906,7 +2939,7 @@
             const band = await sxemaBandKataklar(q.g.id, period, s.id);
             q.sxema = { id: s.id, nom: s.nom, band };
             const dars = q.sinf ? q.sinf.darslar.length : 0;
-            if (band && dars && q.sinf.darslar.every((d) => band.has(`${d.kun}_${d.soat}`))) {
+            if (band && dars && q.sinf.darslar.every((d) => darsJoyida(band, d))) {
               q.tayyor = true; q.tag = '<span class="tag t-ok">joyida</span>'; q.holat = "";
             } else { q.tag = ""; q.holat = ""; }
           }
