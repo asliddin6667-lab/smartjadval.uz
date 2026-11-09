@@ -361,6 +361,19 @@ export default function ClassSubjectsPage({ classes, subjects, setSubjects, teac
   // tushadi va ikkinchi guruh rad etiladi (jonli maktab, 09.11.2026).
   const emkGuruhlar = Array.isArray(selectedClass?.emaktabSubgroups) ? selectedClass.emaktabSubgroups : null;
   const EMK_GURUH_LIST = "sj-emk-guruhlar";
+  // «1-guruh» / «2-guruh» / bo'sh — foydalanuvchi qo'ymagan, sukut nom.
+  // Bunday nom o'rniga eMaktab guruhi nomi O'ZI qo'yiladi (pastdagi effekt
+  // va «2 guruhga bo'lish» tugmasi). Qo'lda yozilgan nomga tegilmaydi.
+  const sukutGuruhNomi = (n) => !String(n || "").trim() || /^\d{1,2}\s*-\s*guruh$/i.test(String(n).trim());
+  // Sukut nomlarni eMaktab nomlari bilan almashtiradigan patch; o'zgarish
+  // kerak bo'lmasa null.
+  const emkNomPatch = (a) => {
+    if (!emkGuruhlar || emkGuruhlar.length < 2) return null;
+    const p = {};
+    if (sukutGuruhNomi(a.groupName1)) p.groupName1 = emkGuruhlar[0].name;
+    if (sukutGuruhNomi(a.groupName2)) p.groupName2 = emkGuruhlar[1].name;
+    return Object.keys(p).length ? p : null;
+  };
   // Guruh nomi eMaktab guruhlaridan biriga mos keladimi? (null — tekshirib bo'lmaydi)
   const emkGuruhMos = (nom) => (emkGuruhlar && emkGuruhlar.length ? !!matchSubgroup(nom, emkGuruhlar) : null);
   // Nom maydoni ostidagi qisqa holat yozuvi
@@ -403,6 +416,26 @@ export default function ClassSubjectsPage({ classes, subjects, setSubjects, teac
     );
   };
   const assignments = classSubjects[selectedClassId] || [];
+
+  // eMaktab guruhlari ma'lum bo'lgan sinfda «2 guruhga bo'lish» yoki
+  // «bir vaqtda bir nechta fan» yoqilgan fanlarning SUKUT guruh nomlari
+  // («1-guruh», «2-guruh») eMaktab nomlari bilan o'zi almashadi — aks
+  // holda foydalanuvchi har fanda tugma bosib chiqishi kerak edi
+  // (jonli maktab, 09.11.2026: panel chiqdi, lekin nom o'zi tushmadi).
+  useEffect(() => {
+    if (!selectedClassId || !emkGuruhlar || emkGuruhlar.length < 2) return;
+    const list = classSubjects[selectedClassId] || [];
+    let ozgardi = false;
+    const next = list.map((a) => {
+      if (!a || a.levelGroupEnabled || !(a.splitEnabled || a.pairEnabled)) return a;
+      const p = emkNomPatch(a);
+      if (!p) return a;
+      ozgardi = true;
+      return { ...a, ...p };
+    });
+    if (ozgardi) setClassSubjects({ ...classSubjects, [selectedClassId]: next });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedClassId, emkGuruhlar, classSubjects]);
 
   // ——— Alifbo tartibidagi umumiy ro'yxatlar ———
   const sortedClasses = sortByName(classes);
@@ -2202,7 +2235,7 @@ Fan bilan birga ular ham o'chsinmi?`;
                                 <span>🔁 Parallel dars{a.pairEnabled ? " (boshqa sinflar bilan)" : ""}</span>
                               </label>
                               <label className="cs-toggle" title="Sinfni 2 guruhga bo'lish">
-                                <input type="checkbox" disabled={a.levelGroupEnabled || a.weekAltEnabled || a.pairEnabled} checked={Boolean(a.splitEnabled)} onChange={e => updateAssignment(s.id, { splitEnabled: e.target.checked, weekAltEnabled: false, pairEnabled: false })} />
+                                <input type="checkbox" disabled={a.levelGroupEnabled || a.weekAltEnabled || a.pairEnabled} checked={Boolean(a.splitEnabled)} onChange={e => updateAssignment(s.id, { splitEnabled: e.target.checked, weekAltEnabled: false, pairEnabled: false, ...(e.target.checked ? (emkNomPatch(a) || {}) : {}) })} />
                                 <span>✂️ 2 guruhga bo'lish</span>
                               </label>
                               <label className="cs-toggle" title="Bir nechta sinfni daraja bo'yicha guruhlash">
