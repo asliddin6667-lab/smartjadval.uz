@@ -728,6 +728,48 @@ Davom etamizmi?`;
     return out;
   }
 
+  // Fan bo'yicha USTOZ BIRIKTIRILMAGAN soatlar (fan ro'yxatida qavsda ko'rinadi).
+  // Birga o'qiydigan joylar (parallel dars, hovuz) bir marta sanaladi.
+  function assignFreeHours(subjectId) {
+    let free = 0;
+    const seenPar = new Set();
+    const seenPool = new Set();
+    sortedClasses.forEach((c) => {
+      const a = (classSubjects[c.id] || []).find((x) => x?.subjectId === subjectId);
+      if (!a) return;
+      const wh = Number(a.weeklyHours || 0);
+      const mode = assignModeOf(a);
+      if (mode === "pool") {
+        const key = String(a.levelGroupKey).trim();
+        if (seenPool.has(key)) return;
+        seenPool.add(key);
+        const cfg = getSharedLevelConfig(subjectId, a);
+        const groups = makeLevelGroups(cfg.levelGroupCount || a.levelGroupCount || 3, cfg.levelGroups || a.levelGroups);
+        const h = Number(cfg.weeklyHours || wh);
+        groups.forEach((g) => { if (!g.teacherId) free += h; });
+        return;
+      }
+      if (mode === "split") {
+        if (!a.teacherId) free += wh;
+        if (!a.teacherId2) free += wh;
+        return;
+      }
+      if (mode === "parallel") {
+        const key = String(a.groupKey).trim();
+        if (seenPar.has(key)) return;
+        seenPar.add(key);
+        const anyT = sortedClasses.some((c2) => {
+          const b = (classSubjects[c2.id] || []).find((x) => x?.subjectId === subjectId);
+          return b && String(b.groupKey || "").trim() === key && b.teacherId;
+        });
+        if (!anyT) free += wh;
+        return;
+      }
+      if (!a.teacherId) free += wh;
+    });
+    return free;
+  }
+
   // Ustoz allaqachon kiradigan joylar — oldindan belgilangan bo'ladi
   function assignPreselect(teacherId, subjectId) {
     const cat = assignCatalog(subjectId, teacherId);
@@ -3233,6 +3275,11 @@ Fan bilan birga ular ham o'chsinmi?`;
         const { own: aOwnTeachers, other: aOtherTeachers } = assignTeachersFor(assignForm.subjectId);
         const aSubjectName = subjectById(assignForm.subjectId)?.name || "";
         const tOpt = (t) => <option key={t.id} value={t.id}>{t.name} · {teacherHourMap[t.id] || 0} soat</option>;
+        // Fan oldida qavsda — ustoz biriktirilmagan soatlar (hammasi biriktirilgan bo'lsa ✓)
+        const sOpt = (s) => {
+          const fh = assignFreeHours(s.id);
+          return <option key={s.id} value={s.id}>{langIcon(subjectLangOf(s))} {fh > 0 ? `(${fh} soat)` : "(✓)"} {s.name}</option>;
+        };
         const aTeacher = teachers.find((t) => t.id === assignForm.teacherId);
         const { own: aOwnSubjects, other: aOtherSubjects } = assignSubjectsFor(assignForm.teacherId);
         const aSubjects = [...aOwnSubjects, ...aOtherSubjects];
@@ -3292,19 +3339,19 @@ Fan bilan birga ular ham o'chsinmi?`;
                     </select>
                   </div>
                   <div className="ta-picker">
-                    <label className="ta-label"><span className="ta-step">2</span> Fan</label>
+                    <label className="ta-label"><span className="ta-step">2</span> Fan <span className="ta-muted" style={{ textTransform: "none", fontWeight: 400 }}>· qavsda — ustozsiz soat</span></label>
                     <select className="form-control" value={assignForm.subjectId} onChange={(e) => setAssignSubject(e.target.value)} disabled={!aSubjects.length}>
                       <option value="">{aSubjects.length === 0 ? "— sinflarda yoqilgan fan yo'q —" : "— fan —"}</option>
                       {aOwnSubjects.length > 0 && (
                         <optgroup label={`${aTeacher?.name || "Ustoz"} fanlari (${aOwnSubjects.length})`}>
-                          {aOwnSubjects.map((s) => <option key={s.id} value={s.id}>{langIcon(subjectLangOf(s))} {s.name}</option>)}
+                          {aOwnSubjects.map(sOpt)}
                         </optgroup>
                       )}
                       {aOtherSubjects.length > 0 && (aTeacher ? (
                         <optgroup label="Boshqa fanlar (ustozga qo'shiladi)">
-                          {aOtherSubjects.map((s) => <option key={s.id} value={s.id}>{langIcon(subjectLangOf(s))} {s.name}</option>)}
+                          {aOtherSubjects.map(sOpt)}
                         </optgroup>
-                      ) : aOtherSubjects.map((s) => <option key={s.id} value={s.id}>{langIcon(subjectLangOf(s))} {s.name}</option>))}
+                      ) : aOtherSubjects.map(sOpt))}
                     </select>
                   </div>
                 </div>
