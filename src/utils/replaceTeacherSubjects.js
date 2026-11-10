@@ -79,7 +79,7 @@ export function findTeacherRefs(assignment, oldTeacherId) {
 }
 
 // Bitta joyga (place) yangi qiymat yozish — yangi obyekt qaytaradi
-function setPlace(assignment, place, teacherId) {
+export function setPlace(assignment, place, teacherId) {
   const m = /^(levelGroups|pairExtra)\[(\d+)\]$/.exec(place);
   if (!m) return { ...assignment, [place]: teacherId };
   const arr = Array.isArray(assignment[m[1]]) ? assignment[m[1]] : [];

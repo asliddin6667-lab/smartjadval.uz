@@ -22,6 +22,8 @@ import { homeroomIdOf } from "../utils/homeroom";
 import { homeroomTakesSubject } from "../utils/homeroomSubjects";
 import { isFixedMondaySubject } from "../utils/scheduleCore";
 import { matchSubgroup } from "../utils/emaktabNames";
+import { teacherAssignments } from "../utils/teacherAssignments";
+import { findTeacherRefs, setPlace } from "../utils/replaceTeacherSubjects";
 import "../styles/cs-mobile.css";
 
 function teacherSubjectIds(teacher) {
@@ -913,6 +915,58 @@ Davom etamizmi?`;
     if (removed) parts.push(`${removed} joydan olindi`);
     if (gained) parts.push("fan ustoz ro'yxatiga qo'shildi");
     toast?.(`${teacher.name} — ${subject.name}: ${parts.join(", ")} ✓`, "success");
+  }
+
+  // «Ustozga dars biriktirish» oynasidagi ✕: ustozni shu sinf+fandan olib
+  // tashlaydi (yozuv va fan qoladi, faqat ustoz o'rni bo'shaydi).
+  // Birga o'qiydigan sinflar (🔁 parallel dars, hovuz, parallel sinflar)
+  // ustozni BAHAM ko'radi — ularning hammasidan birga olinadi, aks holda
+  // guruh sinflari orasida ustoz har xil bo'lib qolardi.
+  function removeTeacherLesson(teacherId, classId, subjectId) {
+    const teacher = teachers.find((t) => t.id === teacherId);
+    const refsOf = (a) => findTeacherRefs(a, teacherId).filter((r) => r.subjectId === subjectId);
+    const base = (classSubjects[classId] || []).filter((a) => a && refsOf(a).length);
+    if (!base.length) return;
+    const links = base.map((a) => ({
+      subj: a.subjectId,
+      g: String(a.groupKey || "").trim(),
+      lg: a.levelGroupEnabled ? String(a.levelGroupKey || "").trim() : "",
+      pg: a.pairEnabled ? String(a.pairGroupKey || "").trim() : "",
+    }));
+    const linked = (cid, a) => {
+      if (cid === classId && base.includes(a)) return true;
+      return links.some((k) => a.subjectId === k.subj && (
+        (k.g && String(a.groupKey || "").trim() === k.g) ||
+        (k.lg && a.levelGroupEnabled && String(a.levelGroupKey || "").trim() === k.lg) ||
+        (k.pg && a.pairEnabled && String(a.pairGroupKey || "").trim() === k.pg)
+      ));
+    };
+    const touched = [];
+    const next = {};
+    Object.entries(classSubjects).forEach(([cid, list]) => {
+      let ch = false;
+      const out = (list || []).map((a) => {
+        if (!a || !linked(cid, a)) return a;
+        const refs = refsOf(a);
+        if (!refs.length) return a;
+        ch = true;
+        return refs.reduce((acc, r) => setPlace(acc, r.place, ""), a);
+      });
+      if (ch) touched.push(cid);
+      next[cid] = ch ? out : list;
+    });
+    if (!touched.length) return;
+    const names = touched.map((id) => classes.find((c) => c.id === id)?.name || "?");
+    const sName = subjectById(subjectId)?.name || "fan";
+    if (touched.length > 1 && !window.confirm(
+      `«${sName}» bu sinflarda birga o'qitiladi: ${names.join(", ")}.\n` +
+      `${teacher?.name || "Ustoz"} hammasidan olib tashlansinmi?`
+    )) return;
+    setClassSubjects(next);
+    setAssignForm((p) => (p.teacherId === teacherId
+      ? { ...p, ...assignPreselect(teacherId, p.subjectId) }
+      : p));
+    toast?.(`${teacher?.name || "Ustoz"} — ${names.join(", ")} · ${sName}: ustoz olib tashlandi. Jadvalni qayta tuzing yoki yangi ustoz biriktiring.`, "success");
   }
 
   // Fanga biriktirilgan ustozlar — alifbo bo'yicha
@@ -3370,6 +3424,58 @@ Fan bilan birga ular ham o'chsinmi?`;
                       : `«${aSubject.name}» fani hech bir ustozda yoqilmagan — istalgan ustozni tanlang, fan unga qo'shiladi.`}
                   </div>
                 )}
+                {aTeacher && (() => {
+                  // Ustozning hozirgi darslari — sinf bo'yicha guruhlangan.
+                  // Jami — teacherHourMap (birga o'qiladigan dars bir marta sanaladi).
+                  const tRows = teacherAssignments({ teacherId: aTeacher.id, classes: sortedClasses, classSubjects, subjects });
+                  const byClass = [];
+                  const idx = new Map();
+                  tRows.forEach((r) => {
+                    if (!idx.has(r.classId)) { idx.set(r.classId, byClass.length); byClass.push({ classId: r.classId, className: r.className, rows: [] }); }
+                    byClass[idx.get(r.classId)].rows.push(r);
+                  });
+                  const over = maxH > 0 ? curLoad - maxH : 0;
+                  return (
+                    <div className="ta-load">
+                      <div className="ta-load-head">
+                        <span>📋 {aTeacher.name} — biriktirilgan darslar</span>
+                        <span className="ta-load-total">
+                          {byClass.length} sinf · jami <b>{curLoad}</b> soat{maxH > 0 && <> / {maxH}</>}
+                        </span>
+                      </div>
+                      {over > 0 && (
+                        <div className="ta-note ta-note-warn" style={{ marginTop: 0, marginBottom: 8 }}>
+                          ⚠️ {over} soat ortiqcha (me'yor {maxH} soat). Keraksiz darsni ✕ bilan ustozdan olib tashlang.
+                        </div>
+                      )}
+                      {byClass.length === 0 ? (
+                        <div className="ta-empty">Hali hech qaysi sinfda dars biriktirilmagan.</div>
+                      ) : (
+                        <div className="ta-load-list">
+                          {byClass.map((c) => (
+                            <div key={c.classId} className="ta-load-row">
+                              <div className="ta-load-class">{c.className}</div>
+                              <div className="ta-load-items">
+                                {c.rows.map((r, i) => {
+                                  const extra = r.roles.filter((x) => x !== "asosiy");
+                                  return (
+                                    <span key={`${r.subjectId}_${i}`} className={`ta-load-item ${r.subjectId === assignForm.subjectId ? "cur" : ""}`}>
+                                      {r.subjectName} · <b>{r.need}</b> soat
+                                      {extra.length > 0 && <span className="ta-load-role">{extra.join(", ")}</span>}
+                                      <button type="button" className="ta-load-x" title="Ustozdan olib tashlash"
+                                        onClick={() => removeTeacherLesson(aTeacher.id, r.classId, r.subjectId)}>✕</button>
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                              <div className="ta-load-sum">{c.rows.reduce((s, r) => s + r.need, 0)} soat</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
                 {aSubjects.length === 0 && (
                   <div className="ta-note ta-note-warn">Hali hech bir sinfda fan yoqilmagan. Avval sinfga fan qo'shing.</div>
                 )}

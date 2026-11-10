@@ -381,3 +381,20 @@ body.dark-mode .ta-card.on, body.dark-mode .ta-pool.on { background: rgba(34, 19
 body.dark-mode .ta-chip.ok { background: rgba(34, 197, 94, .18); color: #86efac; border-color: rgba(34, 197, 94, .35); }
 body.dark-mode .ta-note-warn { background: rgba(245, 158, 11, .12); border-color: rgba(245, 158, 11, .35); color: #fcd34d; }
 body.dark-mode .ta-note-info { background: rgba(79, 110, 247, .12); border-color: rgba(79, 110, 247, .35); color: #a5b4fc; }
+
+/* «Ustozga dars biriktirish» — ustozning biriktirilgan darslari */
+.ta-load { margin-top: 14px; border: 1px solid var(--card-border, #e8ecf4); border-radius: 12px; padding: 10px 12px; background: var(--content-bg, #f7f8fc); }
+.ta-load-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 700; font-size: 13px; margin-bottom: 8px; }
+.ta-load-total { font-weight: 500; color: var(--text-secondary); }
+.ta-load-total b { color: var(--text-primary, inherit); font-size: 15px; }
+.ta-load-list { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.ta-load-row { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 8px; background: var(--card-bg, #fff); }
+.ta-load-class { min-width: 48px; font-weight: 800; font-size: 13px; }
+.ta-load-items { flex: 1; display: flex; flex-wrap: wrap; gap: 4px; }
+.ta-load-item { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 2px 4px 2px 8px; border-radius: 999px; border: 1px solid var(--card-border, #e8ecf4); }
+.ta-load-item.cur { border-color: #4f6ef7; background: rgba(79, 110, 247, .1); }
+.ta-load-role { font-size: 10px; color: var(--text-muted, #9aa3b5); }
+.ta-load-x { border: none; background: transparent; cursor: pointer; color: #ef4444; font-size: 12px; line-height: 1; padding: 2px 4px; border-radius: 999px; }
+.ta-load-x:hover { background: rgba(239, 68, 68, .12); }
+.ta-load-sum { font-size: 12px; font-weight: 700; color: var(--text-secondary); white-space: nowrap; }
+body.dark-mode .ta-load-row { background: rgba(255, 255, 255, .04); }
