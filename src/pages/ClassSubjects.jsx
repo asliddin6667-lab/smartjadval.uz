@@ -635,7 +635,8 @@ Davom etamizmi?`;
   //   • 🎯 hovuz    — hovuz tanlanib, ustoz bitta darajaga (levelGroups[i]) o'tiradi
   // Boshqa ustoz egallagan joy ro'yxatda ko'rinmaydi / o'chirilgan bo'ladi.
 
-  const ASSIGN_EMPTY_FORM = { teacherId: "", subjectId: "", classIds: [], splitGroups: {}, pools: {} };
+  // subjectAuto — fan ustoz tanlanganda avtomatik qo'yilgan (ustoz almashsa ergashadi)
+  const ASSIGN_EMPTY_FORM = { teacherId: "", subjectId: "", subjectAuto: false, classIds: [], splitGroups: {}, pools: {} };
 
   // Fan kamida bitta sinfda yoqilganmi?
   function subjectEnabledAnywhere(subjectId) {
@@ -645,15 +646,22 @@ Davom etamizmi?`;
   // boshqalari — ustoz o'z ro'yxatida yo'q fandan ham kirishi mumkin
   // (biriktirilganda fan ustozga ham yoziladi — enableTeacherSubjects).
   function assignSubjectsFor(teacherId) {
-    const t = teachers.find((x) => x.id === teacherId);
-    if (!t) return { own: [], other: [] };
-    const ids = new Set(teacherSubjectIds(t));
     const enabled = sortedAllSubjects.filter((s) => subjectEnabledAnywhere(s.id));
+    const t = teachers.find((x) => x.id === teacherId);
+    // Ustoz hali tanlanmagan — hamma yoqilgan fan bitta ro'yxatda
+    if (!t) return { own: [], other: enabled };
+    const ids = new Set(teacherSubjectIds(t));
     return { own: enabled.filter((s) => ids.has(s.id)), other: enabled.filter((s) => !ids.has(s.id)) };
   }
-  function assignSubjectList(teacherId) {
-    const { own, other } = assignSubjectsFor(teacherId);
-    return [...own, ...other];
+  // Fan tanlangan bo'lsa: avval shu fan yoqilgan ustozlar, keyin qolganlari
+  // (boshqa ustoz tanlansa fan unga avtomatik qo'shiladi).
+  function assignTeachersFor(subjectId) {
+    const all = sortByName(teachers);
+    if (!subjectId) return { own: [], other: all };
+    return {
+      own: all.filter((t) => teacherSubjectIds(t).includes(subjectId)),
+      other: all.filter((t) => !teacherSubjectIds(t).includes(subjectId)),
+    };
   }
 
   // Qator rejimi
@@ -738,22 +746,27 @@ Davom etamizmi?`;
     });
     return { classIds, splitGroups, pools };
   }
+  // Oyna bo'sh ochiladi: ustoz yoki fan — qaysi biri birinchi tanlansa,
+  // ikkinchi ro'yxat shunga qarab saralanadi.
   function openAssignModal() {
-    const firstT = sortByName(teachers)[0];
-    const tid = firstT?.id || "";
-    const sid = assignSubjectList(tid)[0]?.id || "";
-    setAssignForm({ ...ASSIGN_EMPTY_FORM, teacherId: tid, subjectId: sid, ...assignPreselect(tid, sid) });
+    setAssignForm({ ...ASSIGN_EMPTY_FORM });
     setAssignOpen(true);
   }
   function setAssignTeacher(teacherId) {
-    // Oldingi fan faqat yangi ustozning O'Z fani bo'lsa qoladi, aks holda
-    // uning birinchi fani (yo'q bo'lsa — sinflarda yoqilgan birinchi fan)
-    const { own, other } = assignSubjectsFor(teacherId);
-    const sid = own.some((s) => s.id === assignForm.subjectId) ? assignForm.subjectId : (own[0]?.id || other[0]?.id || "");
-    setAssignForm({ ...ASSIGN_EMPTY_FORM, teacherId, subjectId: sid, ...assignPreselect(teacherId, sid) });
+    // Fanni foydalanuvchi o'zi tanlagan bo'lsa — saqlanadi (ustozga qo'shiladi).
+    // Fan bo'sh yoki avtomatik qo'yilgan bo'lsa — yangi ustozning birinchi O'Z fani.
+    setAssignForm((p) => {
+      let sid = p.subjectId;
+      let auto = p.subjectAuto;
+      if (!sid || auto) {
+        sid = teacherId ? (assignSubjectsFor(teacherId).own[0]?.id || "") : "";
+        auto = Boolean(sid);
+      }
+      return { ...ASSIGN_EMPTY_FORM, teacherId, subjectId: sid, subjectAuto: auto, ...assignPreselect(teacherId, sid) };
+    });
   }
   function setAssignSubject(subjectId) {
-    setAssignForm((p) => ({ ...ASSIGN_EMPTY_FORM, teacherId: p.teacherId, subjectId, ...assignPreselect(p.teacherId, subjectId) }));
+    setAssignForm((p) => ({ ...ASSIGN_EMPTY_FORM, teacherId: p.teacherId, subjectId, subjectAuto: false, ...assignPreselect(p.teacherId, subjectId) }));
   }
   function toggleAssignIds(ids) {
     setAssignForm((p) => {
@@ -3217,7 +3230,9 @@ Fan bilan birga ular ham o'chsinmi?`;
       </div>
 
       {assignOpen && (() => {
-        const aTeachers = sortByName(teachers);
+        const { own: aOwnTeachers, other: aOtherTeachers } = assignTeachersFor(assignForm.subjectId);
+        const aSubjectName = subjectById(assignForm.subjectId)?.name || "";
+        const tOpt = (t) => <option key={t.id} value={t.id}>{t.name} · {teacherHourMap[t.id] || 0} soat</option>;
         const aTeacher = teachers.find((t) => t.id === assignForm.teacherId);
         const { own: aOwnSubjects, other: aOtherSubjects } = assignSubjectsFor(assignForm.teacherId);
         const aSubjects = [...aOwnSubjects, ...aOtherSubjects];
@@ -3260,28 +3275,48 @@ Fan bilan birga ular ham o'chsinmi?`;
                     <label className="ta-label"><span className="ta-step">1</span> Ustoz</label>
                     <select className="form-control" value={assignForm.teacherId} onChange={(e) => setAssignTeacher(e.target.value)}>
                       <option value="">— ustoz —</option>
-                      {aTeachers.map((t) => <option key={t.id} value={t.id}>{t.name} · {teacherHourMap[t.id] || 0} soat</option>)}
+                      {assignForm.subjectId ? (
+                        <>
+                          {aOwnTeachers.length > 0 && (
+                            <optgroup label={`«${aSubjectName}» fani yoqilgan ustozlar (${aOwnTeachers.length})`}>
+                              {aOwnTeachers.map(tOpt)}
+                            </optgroup>
+                          )}
+                          {aOtherTeachers.length > 0 && (
+                            <optgroup label="Boshqa ustozlar (fan ustozga qo'shiladi)">
+                              {aOtherTeachers.map(tOpt)}
+                            </optgroup>
+                          )}
+                        </>
+                      ) : aOtherTeachers.map(tOpt)}
                     </select>
                   </div>
                   <div className="ta-picker">
                     <label className="ta-label"><span className="ta-step">2</span> Fan</label>
                     <select className="form-control" value={assignForm.subjectId} onChange={(e) => setAssignSubject(e.target.value)} disabled={!aSubjects.length}>
-                      {aSubjects.length === 0 && <option value="">— sinflarda yoqilgan fan yo'q —</option>}
+                      <option value="">{aSubjects.length === 0 ? "— sinflarda yoqilgan fan yo'q —" : "— fan —"}</option>
                       {aOwnSubjects.length > 0 && (
-                        <optgroup label="Ustozning fanlari">
+                        <optgroup label={`${aTeacher?.name || "Ustoz"} fanlari (${aOwnSubjects.length})`}>
                           {aOwnSubjects.map((s) => <option key={s.id} value={s.id}>{langIcon(subjectLangOf(s))} {s.name}</option>)}
                         </optgroup>
                       )}
-                      {aOtherSubjects.length > 0 && (
+                      {aOtherSubjects.length > 0 && (aTeacher ? (
                         <optgroup label="Boshqa fanlar (ustozga qo'shiladi)">
                           {aOtherSubjects.map((s) => <option key={s.id} value={s.id}>{langIcon(subjectLangOf(s))} {s.name}</option>)}
                         </optgroup>
-                      )}
+                      ) : aOtherSubjects.map((s) => <option key={s.id} value={s.id}>{langIcon(subjectLangOf(s))} {s.name}</option>))}
                     </select>
                   </div>
                 </div>
 
-                {aTeacher && aSubjects.length === 0 && (
+                {!aTeacher && aSubject && (
+                  <div className="ta-note ta-note-info">
+                    {aOwnTeachers.length
+                      ? `Ustozlar ro'yxatida birinchi «${aSubject.name}» fani yoqilgan ${aOwnTeachers.length} ta ustoz turibdi — ustozni tanlang.`
+                      : `«${aSubject.name}» fani hech bir ustozda yoqilmagan — istalgan ustozni tanlang, fan unga qo'shiladi.`}
+                  </div>
+                )}
+                {aSubjects.length === 0 && (
                   <div className="ta-note ta-note-warn">Hali hech bir sinfda fan yoqilmagan. Avval sinfga fan qo'shing.</div>
                 )}
                 {subjectIsNew && (
