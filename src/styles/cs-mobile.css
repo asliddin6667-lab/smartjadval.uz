@@ -387,14 +387,10 @@ body.dark-mode .ta-note-info { background: rgba(79, 110, 247, .12); border-color
 .ta-load-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 700; font-size: 13px; margin-bottom: 8px; }
 .ta-load-total { font-weight: 500; color: var(--text-secondary); }
 .ta-load-total b { color: var(--text-primary, inherit); font-size: 15px; }
-.ta-load-list { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
-.ta-load-row { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 8px; background: var(--card-bg, #fff); }
-.ta-load-class { min-width: 48px; font-weight: 800; font-size: 13px; }
-.ta-load-items { flex: 1; display: flex; flex-wrap: wrap; gap: 4px; }
-.ta-load-item { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 2px 4px 2px 8px; border-radius: 999px; border: 1px solid var(--card-border, #e8ecf4); }
-.ta-load-item.cur { border-color: #4f6ef7; background: rgba(79, 110, 247, .1); }
-.ta-load-role { font-size: 10px; color: var(--text-muted, #9aa3b5); }
-.ta-load-x { border: none; background: transparent; cursor: pointer; color: #ef4444; font-size: 12px; line-height: 1; padding: 2px 4px; border-radius: 999px; }
-.ta-load-x:hover { background: rgba(239, 68, 68, .12); }
-.ta-load-sum { font-size: 12px; font-weight: 700; color: var(--text-secondary); white-space: nowrap; }
-body.dark-mode .ta-load-row { background: rgba(255, 255, 255, .04); }
+.ta-load .ta-section { margin-top: 0; background: var(--card-bg, #fff); }
+.ta-load-grid { max-height: 300px; overflow-y: auto; }
+.ta-card.ta-card-off { background: var(--card-bg, #fff); border-color: var(--card-border, #e8ecf4); opacity: .75; }
+.ta-card.ta-card-off .ta-card-name { text-decoration: line-through; color: var(--text-secondary); }
+.ta-card.ta-card-cur { box-shadow: 0 0 0 2px rgba(79, 110, 247, .35); }
+.ta-chip.off { background: #fef2f2; color: #b91c1c; border-color: #fecaca; }
+body.dark-mode .ta-chip.off { background: rgba(239, 68, 68, .12); color: #fca5a5; border-color: rgba(239, 68, 68, .35); }

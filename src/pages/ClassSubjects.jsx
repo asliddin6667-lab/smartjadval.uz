@@ -639,7 +639,7 @@ Davom etamizmi?`;
   // Boshqa ustoz egallagan joy ro'yxatda ko'rinmaydi / o'chirilgan bo'ladi.
 
   // subjectAuto — fan ustoz tanlanganda avtomatik qo'yilgan (ustoz almashsa ergashadi)
-  const ASSIGN_EMPTY_FORM = { teacherId: "", subjectId: "", subjectAuto: false, classIds: [], splitGroups: {}, pools: {} };
+  const ASSIGN_EMPTY_FORM = { teacherId: "", subjectId: "", subjectAuto: false, classIds: [], splitGroups: {}, pools: {}, removeKeys: [] };
 
   // Fan kamida bitta sinfda yoqilganmi?
   function subjectEnabledAnywhere(subjectId) {
@@ -811,7 +811,7 @@ Davom etamizmi?`;
     });
   }
   function setAssignSubject(subjectId) {
-    setAssignForm((p) => ({ ...ASSIGN_EMPTY_FORM, teacherId: p.teacherId, subjectId, subjectAuto: false, ...assignPreselect(p.teacherId, subjectId) }));
+    setAssignForm((p) => ({ ...ASSIGN_EMPTY_FORM, teacherId: p.teacherId, subjectId, subjectAuto: false, removeKeys: p.removeKeys || [], ...assignPreselect(p.teacherId, subjectId) }));
   }
   function toggleAssignIds(ids) {
     setAssignForm((p) => {
@@ -900,12 +900,22 @@ Davom etamizmi?`;
     const teacher = teachers.find((t) => t.id === teacherId);
     const subject = subjectById(subjectId);
     if (!teacher) { toast?.("Ustoz tanlang", "warning"); return; }
-    if (!subject) { toast?.("Fan tanlang", "warning"); return; }
-    const { next, added, removed } = buildAssignNext(assignForm);
-    if (!added && !removed) { toast?.("O'zgarish yo'q", "info"); setAssignOpen(false); return; }
+    const removeKeys = assignForm.removeKeys || [];
+    if (!subject && !removeKeys.length) { toast?.("Fan tanlang", "warning"); return; }
+    const built = subject ? buildAssignNext(assignForm) : { next: classSubjects, added: 0, removed: 0 };
+    let { next } = built;
+    const { added, removed } = built;
+    // Ustozning darslari kartalarida OQ qilinganlar — ustozdan olinadi
+    let taken = 0;
+    removeKeys.forEach((key) => {
+      const [cid, sid] = key.split("__");
+      const r = stripTeacher(next, teacherId, cid, sid);
+      if (r.touched.length) { next = r.next; taken += 1; }
+    });
+    if (!added && !removed && !taken) { toast?.("O'zgarish yo'q", "info"); setAssignOpen(false); return; }
     // Ustoz o'z ro'yxatida yo'q fandan kirsa — fan ustozga ham yoziladi,
     // aks holda qatordagi «ustoz» tanlovi uni ko'rsatmay bo'sh turardi.
-    const gained = added && !teacherSubjectIds(teacher).includes(subjectId)
+    const gained = subject && added && !teacherSubjectIds(teacher).includes(subjectId)
       ? enableTeacherSubjects(new Map([[teacherId, new Set([subjectId])]]))
       : 0;
     setClassSubjects(next);
@@ -913,20 +923,20 @@ Davom etamizmi?`;
     const parts = [];
     if (added) parts.push(`${added} joyga biriktirildi`);
     if (removed) parts.push(`${removed} joydan olindi`);
+    if (taken) parts.push(`${taken} ta dars ustozdan olindi`);
     if (gained) parts.push("fan ustoz ro'yxatiga qo'shildi");
-    toast?.(`${teacher.name} — ${subject.name}: ${parts.join(", ")} ✓`, "success");
+    toast?.(`${teacher.name}${subject && (added || removed) ? ` — ${subject.name}` : ""}: ${parts.join(", ")} ✓`, "success");
   }
 
-  // «Ustozga dars biriktirish» oynasidagi ✕: ustozni shu sinf+fandan olib
-  // tashlaydi (yozuv va fan qoladi, faqat ustoz o'rni bo'shaydi).
-  // Birga o'qiydigan sinflar (🔁 parallel dars, hovuz, parallel sinflar)
-  // ustozni BAHAM ko'radi — ularning hammasidan birga olinadi, aks holda
-  // guruh sinflari orasida ustoz har xil bo'lib qolardi.
-  function removeTeacherLesson(teacherId, classId, subjectId) {
-    const teacher = teachers.find((t) => t.id === teacherId);
+  // Ustozni sinf+fandan olib tashlash (sof funksiya — `cs` o'zgarmaydi).
+  // Yozuv va fan qoladi, faqat ustoz o'rni bo'shaydi. Birga o'qiydigan
+  // sinflar (🔁 parallel dars, hovuz, parallel sinflar) ustozni BAHAM
+  // ko'radi — ularning hammasidan birga olinadi, aks holda guruh sinflari
+  // orasida ustoz har xil bo'lib qolardi. `touched` — tegilgan sinflar.
+  function stripTeacher(cs, teacherId, classId, subjectId) {
     const refsOf = (a) => findTeacherRefs(a, teacherId).filter((r) => r.subjectId === subjectId);
-    const base = (classSubjects[classId] || []).filter((a) => a && refsOf(a).length);
-    if (!base.length) return;
+    const base = (cs[classId] || []).filter((a) => a && refsOf(a).length);
+    if (!base.length) return { next: cs, touched: [] };
     const links = base.map((a) => ({
       subj: a.subjectId,
       g: String(a.groupKey || "").trim(),
@@ -943,7 +953,7 @@ Davom etamizmi?`;
     };
     const touched = [];
     const next = {};
-    Object.entries(classSubjects).forEach(([cid, list]) => {
+    Object.entries(cs).forEach(([cid, list]) => {
       let ch = false;
       const out = (list || []).map((a) => {
         if (!a || !linked(cid, a)) return a;
@@ -955,18 +965,20 @@ Davom etamizmi?`;
       if (ch) touched.push(cid);
       next[cid] = ch ? out : list;
     });
-    if (!touched.length) return;
-    const names = touched.map((id) => classes.find((c) => c.id === id)?.name || "?");
-    const sName = subjectById(subjectId)?.name || "fan";
-    if (touched.length > 1 && !window.confirm(
-      `«${sName}» bu sinflarda birga o'qitiladi: ${names.join(", ")}.\n` +
-      `${teacher?.name || "Ustoz"} hammasidan olib tashlansinmi?`
-    )) return;
-    setClassSubjects(next);
-    setAssignForm((p) => (p.teacherId === teacherId
-      ? { ...p, ...assignPreselect(teacherId, p.subjectId) }
-      : p));
-    toast?.(`${teacher?.name || "Ustoz"} — ${names.join(", ")} · ${sName}: ustoz olib tashlandi. Jadvalni qayta tuzing yoki yangi ustoz biriktiring.`, "success");
+    return { next, touched };
+  }
+
+  // Ustozning darsi kartasini bosish: yashil (qoladi) ↔ oq (olinadi).
+  // Birga o'qiydigan sinflar birga almashadi.
+  function toggleRemoveLesson(teacherId, classId, subjectId) {
+    const keys = stripTeacher(classSubjects, teacherId, classId, subjectId).touched.map((cid) => `${cid}__${subjectId}`);
+    if (!keys.length) return;
+    setAssignForm((p) => {
+      const cur = p.removeKeys || [];
+      const on = cur.includes(`${classId}__${subjectId}`);
+      const rest = cur.filter((k) => !keys.includes(k));
+      return { ...p, removeKeys: on ? rest : [...rest, ...keys] };
+    });
   }
 
   // Fanga biriktirilgan ustozlar — alifbo bo'yicha
@@ -3351,7 +3363,13 @@ Fan bilan birga ular ham o'chsinmi?`;
         const tName = (id) => teachers.find((t) => t.id === id)?.name || "";
         const preview = aTeacher && aSubject ? buildAssignNext(assignForm) : null;
         const curLoad = teacherHourMap[assignForm.teacherId] || 0;
-        const newLoad = preview ? (computeTeacherHours(preview.next)[assignForm.teacherId] || 0) : curLoad;
+        const removeKeys = assignForm.removeKeys || [];
+        let afterCS = preview ? preview.next : classSubjects;
+        removeKeys.forEach((key) => {
+          const [cid, sid] = key.split("__");
+          afterCS = stripTeacher(afterCS, assignForm.teacherId, cid, sid).next;
+        });
+        const newLoad = preview || removeKeys.length ? (computeTeacherHours(afterCS)[assignForm.teacherId] || 0) : curLoad;
         const maxH = Number(aTeacher?.maxWeeklyHours || 0);
         const picked =
           assignForm.classIds.length +
@@ -3428,49 +3446,50 @@ Fan bilan birga ular ham o'chsinmi?`;
                   // Ustozning hozirgi darslari — sinf bo'yicha guruhlangan.
                   // Jami — teacherHourMap (birga o'qiladigan dars bir marta sanaladi).
                   const tRows = teacherAssignments({ teacherId: aTeacher.id, classes: sortedClasses, classSubjects, subjects });
-                  const byClass = [];
-                  const idx = new Map();
-                  tRows.forEach((r) => {
-                    if (!idx.has(r.classId)) { idx.set(r.classId, byClass.length); byClass.push({ classId: r.classId, className: r.className, rows: [] }); }
-                    byClass[idx.get(r.classId)].rows.push(r);
-                  });
-                  const over = maxH > 0 ? curLoad - maxH : 0;
+                  const classCount = new Set(tRows.map((r) => r.classId)).size;
+                  const over = maxH > 0 ? newLoad - maxH : 0;
                   return (
                     <div className="ta-load">
                       <div className="ta-load-head">
                         <span>📋 {aTeacher.name} — biriktirilgan darslar</span>
                         <span className="ta-load-total">
-                          {byClass.length} sinf · jami <b>{curLoad}</b> soat{maxH > 0 && <> / {maxH}</>}
+                          {classCount} sinf · jami <b>{curLoad}</b> soat
+                          {newLoad !== curLoad && <> → <b>{newLoad}</b></>}
+                          {maxH > 0 && <> / {maxH}</>}
                         </span>
                       </div>
                       {over > 0 && (
                         <div className="ta-note ta-note-warn" style={{ marginTop: 0, marginBottom: 8 }}>
-                          ⚠️ {over} soat ortiqcha (me'yor {maxH} soat). Keraksiz darsni ✕ bilan ustozdan olib tashlang.
+                          ⚠️ {over} soat ortiqcha (me'yor {maxH} soat). Keraksiz dars kartasini bosib oq qiling — ustozdan olinadi.
                         </div>
                       )}
-                      {byClass.length === 0 ? (
+                      {tRows.length === 0 ? (
                         <div className="ta-empty">Hali hech qaysi sinfda dars biriktirilmagan.</div>
                       ) : (
-                        <div className="ta-load-list">
-                          {byClass.map((c) => (
-                            <div key={c.classId} className="ta-load-row">
-                              <div className="ta-load-class">{c.className}</div>
-                              <div className="ta-load-items">
-                                {c.rows.map((r, i) => {
-                                  const extra = r.roles.filter((x) => x !== "asosiy");
-                                  return (
-                                    <span key={`${r.subjectId}_${i}`} className={`ta-load-item ${r.subjectId === assignForm.subjectId ? "cur" : ""}`}>
-                                      {r.subjectName} · <b>{r.need}</b> soat
-                                      {extra.length > 0 && <span className="ta-load-role">{extra.join(", ")}</span>}
-                                      <button type="button" className="ta-load-x" title="Ustozdan olib tashlash"
-                                        onClick={() => removeTeacherLesson(aTeacher.id, r.classId, r.subjectId)}>✕</button>
-                                    </span>
-                                  );
-                                })}
-                              </div>
-                              <div className="ta-load-sum">{c.rows.reduce((s, r) => s + r.need, 0)} soat</div>
-                            </div>
-                          ))}
+                        <AssignSection icon="📋" title="Ustozning darslari" count={tRows.length} hint="bosilsa olib tashlanadi · yana bosilsa qaytadi">
+                          <div className="ta-grid ta-load-grid">
+                            {tRows.map((r, i) => {
+                              const key = `${r.classId}__${r.subjectId}`;
+                              const keep = !removeKeys.includes(key);
+                              const extra = r.roles.filter((x) => x !== "asosiy");
+                              return (
+                                <button key={`${key}_${i}`} type="button"
+                                  className={`ta-card ${keep ? "on" : "ta-card-off"} ${r.subjectId === assignForm.subjectId ? "ta-card-cur" : ""}`}
+                                  title={keep ? "Bosing — dars ustozdan olinadi" : "Bosing — dars ustozda qoladi"}
+                                  onClick={() => toggleRemoveLesson(aTeacher.id, r.classId, r.subjectId)}>
+                                  <span className="ta-card-check">{keep ? "✓" : ""}</span>
+                                  <span className="ta-card-name">{r.className}</span>
+                                  <span className="ta-card-meta">{r.subjectName} · {r.need} soat{extra.length ? ` · ${extra.join(", ")}` : ""}</span>
+                                  {keep ? chip("shu ustoz", "ok") : chip("olinadi", "off")}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </AssignSection>
+                      )}
+                      {removeKeys.length > 0 && (
+                        <div className="ta-note ta-note-info">
+                          {removeKeys.length} ta dars olib tashlanadi — «Biriktirish» bosilganda qo'llanadi. Jadvalni keyin qayta tuzing yoki yangi ustoz biriktiring.
                         </div>
                       )}
                     </div>
@@ -3634,7 +3653,7 @@ Fan bilan birga ular ham o'chsinmi?`;
                 ) : <div />}
                 <div className="ta-actions">
                   <button className="btn btn-secondary" type="button" onClick={() => setAssignOpen(false)}>Bekor qilish</button>
-                  <button className="btn btn-primary" type="button" onClick={applyTeacherAssign} disabled={!aTeacher || !aSubject || !preview || (!preview.added && !preview.removed)}>👨‍🏫 Biriktirish</button>
+                  <button className="btn btn-primary" type="button" onClick={applyTeacherAssign} disabled={!aTeacher || (!removeKeys.length && (!aSubject || !preview || (!preview.added && !preview.removed)))}>👨‍🏫 Biriktirish</button>
                 </div>
               </div>
             </div>
