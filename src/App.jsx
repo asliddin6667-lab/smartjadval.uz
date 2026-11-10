@@ -45,6 +45,7 @@ import {
 import SyncBadge from "./components/SyncBadge";
 import { buildDemoSchoolData } from "./utils/demoData";
 import { runDueSubstitutions, hasDueSubstitutions, fmtDate } from "./utils/teacherSubstitutions";
+import { migrateAlifbeToReading } from "./utils/readingMigration";
 import { isLocalOnly, announceMode } from "./services/devMode";
 
 const emptySettings = { schoolName: "", academicYear: "2024-2025" };
@@ -847,6 +848,35 @@ export default function App() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, isDistrictAdmin, dataReady, syncPending, cloudBlocked, subBlocked, contentLocked, substitutions, subsTick]);
+
+  // =====================================================================
+  //  BIR MARTALIK KO'CHIRISH: 2–4 sinflarda «Alifbe» → «O'qish» / «Чтение»
+  //  [readingMigration.js](./utils/readingMigration.js). Bayroq
+  //  settings.migrations.alifbeReading bulutga ham ketadi — boshqa
+  //  qurilmada qayta ishlamaydi va foydalanuvchi keyin Alifbeni ONGLI
+  //  yoqsa, unga qarshi kurashmaydi. Faqat yozish mumkin bo'lganda.
+  // =====================================================================
+  useEffect(() => {
+    if (!userId || isDistrictAdmin || !dataReady) return;
+    if (syncPending || cloudBlocked || subBlocked || contentLocked) return;
+    if (settings?.migrations?.alifbeReading) return;
+    const res = migrateAlifbeToReading({ classes, subjects, teachers, classSubjects, schedule, uid: userId });
+    if (res.changed) {
+      setSubjects(res.subjects);
+      setTeachers(res.teachers);
+      setClassSubjects(res.classSubjects);
+      if (res.schedule !== schedule) setSchedule(res.schedule);
+      const st = res.stats;
+      addToast(
+        `2–4 sinflarda «Alifbe» o'rniga «O'qish» / «Чтение» qo'yildi: ${st.classes} ta sinf` +
+          (st.lessons ? `, jadvalda ${st.lessons} ta dars` : "") +
+          (st.created.length ? ` (yangi fan: ${st.created.join(", ")})` : ""),
+        "info"
+      );
+    }
+    setSettings((p) => ({ ...p, migrations: { ...(p?.migrations || {}), alifbeReading: Date.now() } }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, isDistrictAdmin, dataReady, syncPending, cloudBlocked, subBlocked, contentLocked, settings?.migrations?.alifbeReading]);
 
   // ——— PAROL TIKLASH EKRANI (hamma narsadan ustun) ———
   if (recoveryMode) {

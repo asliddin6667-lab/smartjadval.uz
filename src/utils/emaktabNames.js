@@ -93,7 +93,9 @@ export function sameTeacher(a, b) {
 const SUBJECT_SYNONYMS = [
   ["Ona tili", "Родной язык"],
   ["Ona tili va o'qish savodxonligi", "Русский язык и грамотность чтения"],
-  ["O'qish savodxonligi", "Грамотность чтения", "Чтение"],
+  // 2–4 sinf: «O'qish» (uz) ↔ «Чтение» (ru) — Alifbe o'rnidagi fan
+  ["O'qish", "Чтение", "Литературное чтение"],
+  ["O'qish savodxonligi", "Грамотность чтения"],
   ["Adabiyot", "Литература"],
   ["Badiiy adabiyot", "Художественная литература"],
   ["Ifodali o'qish", "Выразительное чтение"],
@@ -154,6 +156,26 @@ const SYN_GROUP = (() => {
 export function subjectGroup(raw) {
   const k = normKey(raw);
   return SYN_GROUP.has(k) ? SYN_GROUP.get(k) : -1;
+}
+
+// ——— QARINDOSH GURUHLAR (ikkinchi navbat) ———
+// Aniq sinonim topilmasa shu oilaning boshqa a'zosi olinadi: maktabning
+// eMaktab ro'yxatida faqat «Грамотность чтения» bo'lsa ham «O'qish»
+// darsi joylashsin. ⚠️ Ko'prikdagi `KIN` bilan BIR XIL.
+const SUBJECT_KIN = [
+  ["O'qish", "Чтение", "Литературное чтение", "O'qish savodxonligi", "Грамотность чтения"],
+];
+const KIN_GROUP = (() => {
+  const map = new Map();
+  SUBJECT_KIN.forEach((row, i) => row.forEach((name) => {
+    const k = normKey(name);
+    if (k && !map.has(k)) map.set(k, i);
+  }));
+  return map;
+})();
+function kinGroup(raw) {
+  const k = normKey(raw);
+  return KIN_GROUP.has(k) ? KIN_GROUP.get(k) : -1;
 }
 
 // ⚠️ YOZUV TURI — "cyr" yoki "lat".
@@ -220,6 +242,14 @@ export function bestMatch(target, list, kind = "fan") {
     if (syn.length) {
       const bir = sc ? syn.find((x) => scriptOf(labelOf(x)) === sc) : null;
       return { qiymat: bir || syn[0], ishonch: "sinonim" };
+    }
+  }
+  const kg = kinGroup(target);
+  if (kg >= 0) {
+    const kin = list.filter((x) => kinGroup(labelOf(x)) === kg);
+    if (kin.length) {
+      const bir = sc ? kin.find((x) => scriptOf(labelOf(x)) === sc) : null;
+      return { qiymat: bir || kin[0], ishonch: "sinonim" };
     }
   }
 

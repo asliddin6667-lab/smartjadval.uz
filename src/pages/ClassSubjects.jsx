@@ -6,6 +6,7 @@ import {
 } from "../utils/constants";
 import { sortByName, cmpName } from "../utils/sortHelpers";
 import { normName, buildCurriculumIndex, hoursFromRow, isFirstGradeOnlyName, isCanonicalName } from "../utils/curriculum";
+import { isReadingName, READING_GRADES } from "../utils/readingMigration";
 import { getCachedCurriculum, fetchStandardHours } from "../services/standardHoursService";
 import { removeSubjectLessons, removeClassesLessons, removeAssignmentsLessons } from "../utils/scheduleCleanup";
 import { LANG_BOTH, classLangOf, subjectLangOf, subjectFitsLang, langIcon, langLabel } from "../utils/eduLang";
@@ -1566,13 +1567,19 @@ Fan bilan birga ular ham o'chsinmi?`;
       // deb ko'rsatiladi.
       const oz = new Map();      // sinf tiliga mos (yoki umumiy) fanlar
       const begona = new Map();  // boshqa til deb belgilangan fanlar — zaxira
+      // Ustunlik: 2–4 sinfda aynan «O'qish» / «Чтение» (Alifbe o'rnidagi fan,
+      // readingMigration.js) → qatorning rasmiy nomi → alifbo tartibi.
+      const rank = (s, row) => {
+        if (READING_GRADES.includes(grade) && isReadingName(s.name)) return 2;
+        return isCanonicalName(s.name, row) ? 1 : 0;
+      };
       sortByName(subjects).forEach((s) => {
         if (grade >= 2 && isFirstGradeOnlyName(s.name)) return;
         const row = curriculumRowFor(s.name, lang);
         if (!row) return;
         const m = subjectFitsLang(s, lang) ? oz : begona;
         const cur = m.get(row.name);
-        if (!cur || (isCanonicalName(s.name, row) && !isCanonicalName(cur.name, row))) m.set(row.name, s);
+        if (!cur || rank(s, row) > rank(cur, row)) m.set(row.name, s);
       });
 
       const rows = [];

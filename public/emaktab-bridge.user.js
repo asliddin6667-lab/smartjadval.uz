@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Smartjadval → eMaktab ko'prigi
 // @namespace    https://smartjadval.uz/
-// @version      1.16.1
+// @version      1.16.2
 // @description  Smartjadval.uz da tuzilgan dars jadvalini eMaktab (kundalik.com) «Darslar jadvali sxemasi» setkasiga joylashtiradi
 // @author       smartjadval.uz
 // @match        https://schools.emaktab.uz/*
@@ -184,7 +184,8 @@
   const SYN = [
     ["Ona tili","Родной язык"],
     ["Ona tili va o'qish savodxonligi","Русский язык и грамотность чтения"],
-    ["O'qish savodxonligi","Грамотность чтения","Чтение"],
+    ["O'qish","Чтение","Литературное чтение"],
+    ["O'qish savodxonligi","Грамотность чтения"],
     ["Adabiyot","Литература"],
     ["Badiiy adabiyot","Художественная литература"],
     ["Ifodali o'qish","Выразительное чтение"],
@@ -234,6 +235,14 @@
   const SYN_MAP = new Map();
   SYN.forEach((row, i) => row.forEach((n) => { const k = normKey(n); if (k && !SYN_MAP.has(k)) SYN_MAP.set(k, i); }));
   const synGroup = (s) => (SYN_MAP.has(normKey(s)) ? SYN_MAP.get(normKey(s)) : -1);
+  // Qarindosh guruhlar — aniq sinonim topilmasa ikkinchi navbat.
+  // ⚠️ src/utils/emaktabNames.js dagi SUBJECT_KIN bilan BIR XIL.
+  const KIN = [
+    ["O'qish","Чтение","Литературное чтение","O'qish savodxonligi","Грамотность чтения"],
+  ];
+  const KIN_MAP = new Map();
+  KIN.forEach((row, i) => row.forEach((n) => { const k = normKey(n); if (k && !KIN_MAP.has(k)) KIN_MAP.set(k, i); }));
+  const kinGroup = (s) => (KIN_MAP.has(normKey(s)) ? KIN_MAP.get(normKey(s)) : -1);
 
   // ⚠️ YOZUV TURI — "cyr" yoki "lat".
   //
@@ -293,6 +302,14 @@
       if (syn.length) {
         const bir = sc ? syn.find((x) => scriptOf(lab(x)) === sc) : null;
         return { qiymat: bir || syn[0], ishonch: "sinonim" };
+      }
+    }
+    const kg = kinGroup(target);
+    if (kg >= 0) {
+      const kin = list.filter((x) => kinGroup(lab(x)) === kg);
+      if (kin.length) {
+        const bir = sc ? kin.find((x) => scriptOf(lab(x)) === sc) : null;
+        return { qiymat: bir || kin[0], ishonch: "sinonim" };
       }
     }
     // ⚠️ eMAKTAB FAN NOMINI ~20 BELGIGA KESADI VA SO'ZLARNI QISQARTIRADI:

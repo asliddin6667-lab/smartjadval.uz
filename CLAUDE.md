@@ -1073,6 +1073,18 @@ Repoda yana ikkita SQL bor: [standard_hours_setup.sql](standard_hours_setup.sql)
 YO'Q — ular faqat Supabase loyihasida yashaydi. Shu jadvallarga ustun qo'shish kerak
 bo'lsa, SQL Dashboard'da qo'lda bajariladi.
 
+**2–4 SINFDA «ALIFBE» EMAS — «O'QISH» / «ЧТЕНИЕ»** (10.11.2026).
+[readingMigration.js](src/utils/readingMigration.js) `migrateAlifbeToReading()`
+— bir martalik ko'chirish: 2–4 sinflardagi Alifbe (Азбука/Букварь) yozuvi
+fan id'si bilan almashadi (o'zbek sinfi → «O'qish», rus → «Чтение»; fan
+bo'lmasa yaratiladi), joriy jadval darslari ham, ustoz kartochkasi ham.
+App.jsx effekti `settings.migrations.alifbeReading` bayrog'i bilan BIR
+MARTA ishlaydi (bayroq bulutga ketadi). «⚡ Standart soatlar» `planForClass`
+2–4 sinfda aynan shu nomli fanni ustun qo'yadi (`isReadingName`).
+eMaktab: «O'qish» ↔ «Чтение» alohida sinonim; topilmasa qarindosh
+`SUBJECT_KIN` («O'qish savodxonligi»/«Грамотность чтения») — ko'prikdagi
+`KIN` bilan bir xil.
+
 ### Auth va obuna
 
 [authService.js](src/services/authService.js): profil localStorage'da keshlanadi
